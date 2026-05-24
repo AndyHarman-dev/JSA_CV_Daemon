@@ -21,6 +21,10 @@ dependencies = [
     "anthropic>=0.26",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jsa*"]
+
 [project.scripts]
 jsa = "jsa.cli:app"
 
