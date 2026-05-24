@@ -37,7 +37,9 @@ def transition(job, new_state: JobState, new_stage: Stage | None = None) -> None
         raise InvalidTransition(f"{job.state} → {new_state} is not allowed")
     # Stage compatibility check
     if new_state in STAGE_FOR_STATE:
-        if new_stage is not None and new_stage not in STAGE_FOR_STATE[new_state]:
+        if new_stage is None:
+            raise InvalidTransition(f"State {new_state} requires a current_stage")
+        if new_stage not in STAGE_FOR_STATE[new_state]:
             raise InvalidTransition(f"Stage {new_stage} incompatible with state {new_state}")
     else:
         if new_stage is not None:

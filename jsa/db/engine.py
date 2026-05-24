@@ -2,7 +2,6 @@
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from jsa.db.models import Base
-from pathlib import Path
 
 
 def make_engine(db_path: str):

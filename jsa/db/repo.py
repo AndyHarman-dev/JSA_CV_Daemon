@@ -121,6 +121,8 @@ async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
     job = await get_job(session, job_id)
     if job is None:
         return
+    if job.state == JobState.approved:
+        return  # terminal state — do not mark failed
     transition(job, JobState.failed, None)  # validates transition and clears current_stage
     job.error = error
     job.updated_at = datetime.utcnow()
@@ -140,12 +142,11 @@ async def checkpoint(
     """Write all state changes in a single atomic transaction.
 
     Steps:
-    1. Insert Message rows (if any)
-    2. Insert Document row (if provided) — append-only, new version
-    3. Insert or update FollowUp row (if provided)
-    4. Call transition(job, new_state, new_stage) — raises InvalidTransition on bad transition
-    5. Update Job.state, Job.current_stage, Job.updated_at
-    Then commit.
+    1. Call transition(job, new_state, new_stage) — raises InvalidTransition with nothing staged
+    2. Insert Message rows (if any)
+    3. Insert Document row (if provided) — append-only, new version
+    4. Insert or update FollowUp row (if provided)
+    5. Update Job.state, Job.current_stage, Job.updated_at, then commit.
 
     messages: list of {role, content} dicts — stage inferred from job.current_stage
     document: {stage, version, markdown} — inserts a new Document row
@@ -158,17 +159,25 @@ async def checkpoint(
     if messages is None:
         messages = []
 
-    # 1. Insert Message rows
+    # Capture the current stage before transition mutates it; Messages are
+    # stamped with the stage that was active when they were produced.
+    message_stage = job.current_stage
+
+    # 1. Validate and apply the state transition (mutates job in-place).
+    # This is a pure in-memory guard; if it raises, no rows are ever staged.
+    transition(job, new_state, new_stage)
+
+    # 2. Insert Message rows
     for msg in messages:
         m = Message(
             job_id=job.id,
-            stage=job.current_stage,
+            stage=message_stage,
             role=msg["role"],
             content=msg["content"],
         )
         session.add(m)
 
-    # 2. Insert Document row (append-only)
+    # 3. Insert Document row (append-only)
     if document is not None:
         doc = Document(
             job_id=job.id,
@@ -178,7 +187,7 @@ async def checkpoint(
         )
         session.add(doc)
 
-    # 3. Insert or update FollowUp row
+    # 4. Insert or update FollowUp row
     if follow_up is not None:
         if "follow_up_id" in follow_up:
             # Mark existing FollowUp as answered
@@ -198,9 +207,6 @@ async def checkpoint(
                 question=follow_up["question"],
             )
             session.add(fu)
-
-    # 4. Validate and apply the state transition (mutates job in-place)
-    transition(job, new_state, new_stage)
 
     # 5. Update Job row with new state, stage, and timestamp
     job.updated_at = datetime.utcnow()
