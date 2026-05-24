@@ -4,22 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import signal
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents._pty_common import _UUID_RE, _extract_session_id, _read_until_sentinel
+from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
 from jsa.agents.protocol import parse_reply
 
 logger = logging.getLogger(__name__)
-
-# UUID pattern used to detect a gemini session id in its output (if ever supported)
-_UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-    re.IGNORECASE,
-)
 
 
 @dataclass(kw_only=True)
@@ -28,39 +22,6 @@ class GeminiSessionHandle(SessionHandle):
     id: str
     external_id: str | None  # gemini session_id, if supported and detected
     pty: Any                 # ptyprocess.PtyProcess instance
-
-
-async def _read_until_sentinel(pty: Any, timeout: float) -> str:
-    """Read from pty file descriptor until <<<END>>> appears or timeout expires.
-
-    Returns accumulated text decoded from pty bytes.
-    Raises AgentTimeout if the deadline is reached without a sentinel.
-    """
-    buf = ""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while True:
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            raise AgentTimeout("timed out waiting for sentinel")
-        try:
-            chunk = await asyncio.wait_for(
-                loop.run_in_executor(None, pty.read, 4096),
-                timeout=remaining,
-            )
-            buf += chunk.decode("utf-8", errors="replace")
-        except (EOFError, OSError):
-            # pty closed or process exited
-            break
-        if "<<<END>>>" in buf:
-            break
-    return buf
-
-
-def _extract_session_id(text: str) -> str | None:
-    """Attempt to extract a UUID-like session ID from gemini CLI output."""
-    match = _UUID_RE.search(text)
-    return match.group(0) if match else None
 
 
 class GeminiCliBackend(AgentBackend):
@@ -117,6 +78,9 @@ class GeminiCliBackend(AgentBackend):
 
         The returned handle is ready for send_message; no AgentReply is returned.
         """
+        # external_id is intentionally ignored: Gemini CLI does not support native
+        # resume in v1. If Gemini CLI adds a --resume flag in a future version,
+        # update this method to use it (see ARCH.md § Agent-session lifecycle).
         import ptyprocess  # type: ignore[import]
 
         logger.warning(
@@ -151,14 +115,20 @@ class GeminiCliBackend(AgentBackend):
 
     async def send_message(self, handle: SessionHandle, text: str) -> AgentReply:
         """Send a message to the running gemini pty and return the parsed reply."""
-        assert isinstance(handle, GeminiSessionHandle)
+        if not isinstance(handle, GeminiSessionHandle):
+            raise TypeError(
+                f"expected GeminiSessionHandle, got {type(handle).__name__}"
+            )
         await asyncio.to_thread(handle.pty.write, (text + "\n").encode("utf-8"))
         raw = await _read_until_sentinel(handle.pty, self._timeout)
         return parse_reply(raw)
 
     async def end_session(self, handle: SessionHandle) -> None:
         """Terminate the gemini pty subprocess and reap the child process."""
-        assert isinstance(handle, GeminiSessionHandle)
+        if not isinstance(handle, GeminiSessionHandle):
+            raise TypeError(
+                f"expected GeminiSessionHandle, got {type(handle).__name__}"
+            )
         try:
             handle.pty.kill(signal.SIGTERM)
         except Exception:
