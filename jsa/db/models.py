@@ -1,1 +1,124 @@
 """ORM models: Job, Message, Document, FollowUp, RevisionRequest."""
+
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Enum as SAEnum, Index
+from sqlalchemy import text
+from datetime import datetime
+import enum
+
+
+class Base(DeclarativeBase): ...
+
+
+class JobState(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    awaiting_input = "awaiting_input"
+    cv_done = "cv_done"
+    cl_done = "cl_done"
+    review = "review"
+    approved = "approved"
+    failed = "failed"
+
+
+class Stage(str, enum.Enum):
+    cv_adjust = "cv_adjust"
+    cover_letter = "cover_letter"
+    revising_cv = "revising_cv"
+    revising_cl = "revising_cl"
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_job_state", "state"),
+    )
+    id: Mapped[str] = mapped_column(String(16), primary_key=True)  # sha1[:16]
+    company: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(255))
+    link: Mapped[str] = mapped_column(Text)
+    tier: Mapped[str] = mapped_column(String(1))                   # A | B | C
+    jd: Mapped[str] = mapped_column(Text)
+    jd_hash: Mapped[str] = mapped_column(String(16))
+    cv_text: Mapped[str] = mapped_column(Text)                     # extracted CV text snapshot
+    state: Mapped[JobState] = mapped_column(SAEnum(JobState))
+    current_stage: Mapped[Stage | None] = mapped_column(SAEnum(Stage), nullable=True)
+    session_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # backend resume token
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    messages: Mapped[list["Message"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    documents: Mapped[list["Document"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    follow_ups: Mapped[list["FollowUp"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+    revision_requests: Mapped[list["RevisionRequest"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+
+
+class Message(Base):
+    """Full transcript for replay. role in {system, user, assistant}."""
+    __tablename__ = "messages"
+    __table_args__ = (
+        Index("ix_msg_job_stage", "job_id", "stage", "id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"))
+    stage: Mapped[Stage] = mapped_column(SAEnum(Stage))
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    job: Mapped[Job] = relationship(back_populates="messages")
+
+
+class Document(Base):
+    """Markdown output per stage. Latest version is the highest `version` per (job, stage)."""
+    __tablename__ = "documents"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"))
+    stage: Mapped[Stage] = mapped_column(SAEnum(Stage))
+    version: Mapped[int] = mapped_column(Integer)
+    markdown: Mapped[str] = mapped_column(Text)
+    pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on approval
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    job: Mapped[Job] = relationship(back_populates="documents")
+
+
+class FollowUp(Base):
+    __tablename__ = "follow_ups"
+    __table_args__ = (
+        Index("ix_followup_job_answered", "job_id", "answered_at"),
+        Index(
+            "uq_followup_open",
+            "job_id",
+            "stage",
+            unique=True,
+            sqlite_where=text("answered_at IS NULL"),
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"))
+    stage: Mapped[Stage] = mapped_column(SAEnum(Stage))
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    asked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    job: Mapped[Job] = relationship(back_populates="follow_ups")
+
+
+class RevisionRequest(Base):
+    """User-requested revision against a Document. Consumed by the orchestrator."""
+    __tablename__ = "revision_requests"
+    __table_args__ = (
+        Index(
+            "uq_revision_open",
+            "job_id",
+            unique=True,
+            sqlite_where=text("consumed_at IS NULL"),
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"))
+    target: Mapped[Stage] = mapped_column(SAEnum(Stage))           # cv_adjust | cover_letter (the doc being revised)
+    instruction: Mapped[str] = mapped_column(Text)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    job: Mapped[Job] = relationship(back_populates="revision_requests")
