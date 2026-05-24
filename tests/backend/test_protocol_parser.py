@@ -11,6 +11,8 @@ Covers all six resolution rules documented in ARCH.md / CLAUDE.md:
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -147,6 +149,42 @@ class TestMultipleBlocks:
         )
         reply = parse_reply(raw)
         assert reply.raw == raw
+
+    def test_warning_logged_for_mixed_kind_multiple_blocks(self, caplog):
+        """ARCH.md rule 4: multiple blocks must trigger a WARNING from jsa.agents.protocol."""
+        raw = (
+            "<<<FINAL>>>\nfirst\n<<<END>>>\n"
+            "<<<NEED_INPUT>>>\nsecond\n<<<END>>>"
+        )
+        with caplog.at_level(logging.WARNING, logger="jsa.agents.protocol"):
+            parse_reply(raw)
+        warning_records = [
+            r for r in caplog.records
+            if r.name == "jsa.agents.protocol" and r.levelno == logging.WARNING
+        ]
+        assert warning_records, "expected a WARNING from jsa.agents.protocol"
+        assert any(
+            "multiple" in r.getMessage().lower() or "sentinel" in r.getMessage().lower()
+            for r in warning_records
+        )
+
+    def test_warning_logged_for_same_kind_multiple_blocks(self, caplog):
+        """ARCH.md rule 4: warning fires even when both blocks are the same kind."""
+        raw = (
+            "<<<FINAL>>>\nFirst content.\n<<<END>>>\n"
+            "<<<FINAL>>>\nSecond content.\n<<<END>>>"
+        )
+        with caplog.at_level(logging.WARNING, logger="jsa.agents.protocol"):
+            parse_reply(raw)
+        warning_records = [
+            r for r in caplog.records
+            if r.name == "jsa.agents.protocol" and r.levelno == logging.WARNING
+        ]
+        assert warning_records, "expected a WARNING from jsa.agents.protocol"
+        assert any(
+            "multiple" in r.getMessage().lower() or "sentinel" in r.getMessage().lower()
+            for r in warning_records
+        )
 
 
 # ---------------------------------------------------------------------------
