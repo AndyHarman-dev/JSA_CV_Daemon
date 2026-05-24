@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 
+class AgentTimeout(Exception):
+    """Raised when a backend times out waiting for the sentinel from the agent."""
+
+
 @dataclass(frozen=True)
 class AgentReply:
     raw: str                                    # full text returned by the model

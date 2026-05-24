@@ -24,3 +24,11 @@ def backend_for(name: str) -> "AgentBackend":
             f"Unknown backend {name!r}. Available backends: {available}"
         )
     return _REGISTRY[name]()
+
+
+# Register CLI backends
+from jsa.agents.claude_cli import ClaudeCliBackend  # noqa: E402
+from jsa.agents.gemini_cli import GeminiCliBackend  # noqa: E402
+
+register("claude-cli", ClaudeCliBackend)
+register("gemini-cli", GeminiCliBackend)
