@@ -103,5 +103,74 @@ This applies to: WeasyPrint, python-docx parsing, pypdf parsing, and any future 
 
 ---
 
+## How to test a phase
+
+After each phase is implemented, verify it with the following steps in order.
+
+### 1. Install / sync the Python package
+
+```bash
+pip install -e .
+```
+
+Re-run this whenever `pyproject.toml` dependencies change (i.e., after Phase 1 and any phase that adds a new dep).
+
+### 2. Run the backend test suite
+
+```bash
+pytest -v
+```
+
+Or, to run only the tests added in the current phase:
+```bash
+pytest tests/backend/test_<phase_module>.py -v
+```
+
+All tests must pass. `asyncio_mode = "auto"` is set in `pyproject.toml` — no extra flags needed for async tests.
+
+To skip slow integration tests (default):
+```bash
+pytest -v -m "not integration"
+```
+
+### 3. Run the frontend test suite (phases 9–10 onward)
+
+```bash
+cd frontend
+npm install        # first time or after package.json changes
+npm test           # runs: vitest run
+```
+
+### 4. Manual smoke-test the CLI (Phase 1+)
+
+```bash
+# Verify basic invocation prints the scaffold message
+jsa --csv /path/to/jobs.csv --cv /path/to/resume.pdf
+
+# Verify validation rejects bad inputs
+jsa --csv jobs.txt --cv resume.pdf         # should error: bad csv extension
+jsa --csv jobs.csv --cv resume.txt         # should error: bad cv extension
+jsa --csv jobs.csv --cv resume.pdf --backend bad  # should error: bad backend
+```
+
+### 5. Manual smoke-test the server (Phase 8+)
+
+```bash
+jsa --csv jobs.csv --cv resume.pdf --no-browser
+# Open http://localhost:8765/api/health in a browser or curl:
+curl http://localhost:8765/api/health      # should return {"ok": true}
+curl http://localhost:8765/api/jobs        # should return []
+```
+
+### 6. Manual smoke-test the frontend dev server (Phase 9+)
+
+```bash
+cd frontend && npm run dev
+# Open http://localhost:5173 in a browser
+```
+
+---
+
 ## Change log
 2026-05-23 — Initial conventions document. Covers sentinel protocol, state transitions, checkpoint rule, backend registration, prompt files, testing conventions, renderer invocation, async discipline, job identity, and port config.
+2026-05-23 — Added "How to test a phase" section with step-by-step commands for backend tests, frontend tests, CLI smoke tests, and server smoke tests.

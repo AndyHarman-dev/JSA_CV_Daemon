@@ -32,6 +32,19 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; SQLite persistence
 
 - [ ] Phase 12: Integration & hardening — Write end-to-end integration tests in `tests/backend/` using in-memory SQLite + `FakeAgentBackend` covering: (1) happy path — 2 jobs go pending → cv_done → cl_done → review → approved, PDFs written; (2) park/resume — job parks at `awaiting_input`, user answers, job resumes and completes; (3) crash recovery — simulate mid-run state, verify recovery sweep corrects `running` → last checkpoint; (4) revision flow — job in `review`, user revises CV, new Document version written, state stays `review`. Also: complete `README.md` (install, usage, prompt file format, backend config), and verify the full CLI startup sequence works end-to-end with a real CSV + CV file.
 
+## Test commands
+
+| Scope | Command |
+|-------|---------|
+| All backend tests | `pytest -v` |
+| Single phase | `pytest tests/backend/test_<module>.py -v` |
+| Skip integration | `pytest -v -m "not integration"` |
+| Frontend tests | `cd frontend && npm test` |
+| CLI smoke | `jsa --csv jobs.csv --cv resume.pdf` |
+| Server health | `curl http://localhost:8765/api/health` |
+
+Full step-by-step instructions in **CLAUDE.md § "How to test a phase"**.
+
 ## Constraints
 - Python 3.11+. Use `async/await` throughout the backend; no blocking calls on the event loop (use `asyncio.to_thread` for sync libs).
 - SQLAlchemy 2.0 style (mapped_column, Mapped[T], async engine). No raw SQL except for the two partial unique indexes (DDL-level).
