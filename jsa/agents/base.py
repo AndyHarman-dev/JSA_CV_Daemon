@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -10,7 +10,7 @@ class AgentReply:
     raw: str                                    # full text returned by the model
     content: str                                # text inside the sentinel block
     kind: Literal["final", "needs_input"]
-    question: Optional[str] = None              # populated iff kind == "needs_input"
+    question: str | None = None                 # populated iff kind == "needs_input"
 
 
 @dataclass

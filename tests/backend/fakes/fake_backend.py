@@ -1,6 +1,6 @@
 """FakeAgentBackend — scripted, deterministic AgentBackend for testing."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from uuid import uuid4
 
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
