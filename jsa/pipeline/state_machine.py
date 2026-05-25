@@ -8,7 +8,7 @@ class InvalidTransition(Exception): ...
 
 ALLOWED = {
     JobState.pending:        {JobState.running, JobState.failed},
-    JobState.running:        {JobState.awaiting_input, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed},
+    JobState.running:        {JobState.awaiting_input, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed, JobState.pending},
     JobState.awaiting_input: {JobState.running, JobState.review, JobState.failed},
     JobState.cv_done:        {JobState.running, JobState.failed},
     JobState.cl_done:        {JobState.review, JobState.failed},
@@ -58,3 +58,15 @@ def transition(job, new_state: JobState, new_stage: Stage | None = None) -> None
             )
     job.state = new_state
     job.current_stage = new_stage
+
+
+def set_current_stage(job: "Job", stage: "Stage | None") -> None:
+    """Set job.current_stage for revision setup; only valid when state==review."""
+    from jsa.db.models import JobState as _JobState, Stage as StageEnum
+    if job.state != _JobState.review:
+        raise InvalidTransition(
+            f"set_current_stage only valid on review jobs, got {job.state!r}"
+        )
+    if stage is not None and stage not in (StageEnum.revising_cv, StageEnum.revising_cl):
+        raise InvalidTransition(f"set_current_stage on review only accepts revising_cv/revising_cl, got {stage!r}")
+    job.current_stage = stage

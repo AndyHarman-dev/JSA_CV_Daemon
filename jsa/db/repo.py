@@ -245,7 +245,7 @@ async def recovery_sweep(session: AsyncSession) -> None:
 
     - Has cover_letter Document → set cl_done
     - Has cv_adjust Document → set cv_done
-    - Neither → set pending (via failed intermediate since running→pending is not a direct transition)
+    - Neither → set pending (running→pending is now a direct transition via crash-recovery)
     Jobs in awaiting_input are untouched. Jobs in review/approved/failed are untouched.
     """
     from jsa.pipeline.state_machine import transition
@@ -267,14 +267,8 @@ async def recovery_sweep(session: AsyncSession) -> None:
             job.current_stage = Stage.cv_adjust
             transition(job, JobState.cv_done, new_stage=None)
         else:
-            # running → pending is not a direct transition; go via failed
-            # Use a minimal stage so the running→failed guard is satisfied
-            if job.current_stage is None:
-                job.current_stage = Stage.cv_adjust
-            transition(job, JobState.failed, new_stage=None)
             transition(job, JobState.pending, new_stage=None)
 
-        job.current_stage = None
         job.updated_at = datetime.utcnow()
         session.add(job)
 

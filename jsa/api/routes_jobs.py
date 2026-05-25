@@ -14,8 +14,8 @@ from sqlalchemy.orm import selectinload
 from jsa.db import repo
 from jsa.db.models import Document, FollowUp, Job, JobState, RevisionRequest, Stage
 from jsa.events.bus import bus
-from jsa.events.schema import ApprovedEvent, StatusChangedEvent, event_to_dict
-from jsa.pipeline.state_machine import transition
+from jsa.events.schema import ApprovedEvent, event_to_dict
+from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
 
 router = APIRouter()
@@ -184,16 +184,6 @@ async def answer_follow_up(request: Request, job_id: str, body: AnswerBody):
     # Kick the orchestrator after releasing the session
     request.app.state.orchestrator.kick()
 
-    await bus.publish(
-        event_to_dict(
-            StatusChangedEvent(
-                job_id=job_id,
-                from_state=job_dict["state"],
-                to_state=job_dict["state"],
-            )
-        )
-    )
-
     return job_dict
 
 
@@ -321,9 +311,7 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
         session.add(rev_req)
 
         # Set current_stage (state stays review per spec) and updated_at
-        # Note: STAGE_FOR_STATE only validates stage when transitioning state;
-        # here we mutate current_stage without changing state, as spec requires.
-        job.current_stage = new_current_stage
+        set_current_stage(job, new_current_stage)
         job.updated_at = datetime.utcnow()
         session.add(job)
         await session.commit()
