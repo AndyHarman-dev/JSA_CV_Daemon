@@ -8,6 +8,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from jsa.db import repo
 from jsa.db.models import Document, FollowUp, Job, JobState, RevisionRequest, Stage
@@ -75,6 +77,16 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
     return d
 
 
+async def _fetch_job_with_relations(session, job_id: str) -> Job | None:
+    """Fetch a Job with documents and follow_ups eagerly loaded (no lazy-load errors)."""
+    result = await session.execute(
+        select(Job)
+        .options(selectinload(Job.documents), selectinload(Job.follow_ups))
+        .where(Job.id == job_id)
+    )
+    return result.scalar_one_or_none()
+
+
 # ---------------------------------------------------------------------------
 # Request body models
 # ---------------------------------------------------------------------------
@@ -107,15 +119,13 @@ async def list_jobs(request: Request, state: str | None = None):
             raise HTTPException(status_code=400, detail=f"Invalid state: {state!r}")
 
     async with sf() as session:
-        jobs = await repo.list_jobs(session, state=state_enum)
-        # Load relationships within the session context
-        result = []
-        for job in jobs:
-            # Eagerly access relationships to avoid lazy-load after session close
-            _ = job.documents  # noqa: triggers load
-            _ = job.follow_ups  # noqa: triggers load
-            result.append(_job_to_dict(job, full=False))
-    return result
+        stmt = select(Job)
+        if state_enum is not None:
+            stmt = stmt.where(Job.state == state_enum)
+        result = await session.execute(stmt)
+        jobs = list(result.scalars().all())
+        # Summary endpoint: no need to load relationships
+        return [_job_to_dict(job, full=False) for job in jobs]
 
 
 @router.get("/api/jobs/{job_id}")
@@ -123,12 +133,9 @@ async def get_job(request: Request, job_id: str):
     """Return full job with documents and follow_ups. 404 if not found."""
     sf = _session_factory(request)
     async with sf() as session:
-        job = await repo.get_job(session, job_id)
+        job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        # Access relationships within session context
-        _ = job.documents
-        _ = job.follow_ups
         return _job_to_dict(job, full=True)
 
 
@@ -142,11 +149,10 @@ async def answer_follow_up(request: Request, job_id: str, body: AnswerBody):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
         # Load the FollowUp
-        from sqlalchemy import select
-        result = await session.execute(
+        fu_result = await session.execute(
             select(FollowUp).where(FollowUp.id == body.follow_up_id)
         )
-        fu = result.scalar_one_or_none()
+        fu = fu_result.scalar_one_or_none()
         if fu is None:
             raise HTTPException(
                 status_code=404,
@@ -168,10 +174,11 @@ async def answer_follow_up(request: Request, job_id: str, body: AnswerBody):
         session.add(fu)
         await session.commit()
 
-        # Refresh job for the response
-        await session.refresh(job)
-        _ = job.documents
-        _ = job.follow_ups
+    # Re-fetch with relationships after commit (fresh session to avoid stale state)
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         job_dict = _job_to_dict(job, full=True)
 
     # Kick the orchestrator after releasing the session
@@ -229,16 +236,14 @@ async def approve_job(request: Request, job_id: str):
         cv_pdf = settings.output_dir / slug / "cv.pdf"
         cl_pdf = settings.output_dir / slug / "cover_letter.pdf"
 
-        # Capture markdown before committing
+        # Capture IDs and markdown before closing session
         cv_markdown = cv_doc.markdown
         cl_markdown = cl_doc.markdown
         cv_doc_id = cv_doc.id
         cl_doc_id = cl_doc.id
 
-        # Render PDFs (outside session lock to avoid holding connection)
-        renderer = renderer_for("weasyprint")
-
-    # Render outside the session (async-safe, uses asyncio.to_thread internally)
+    # Render PDFs outside the session (async-safe, uses asyncio.to_thread internally)
+    renderer = renderer_for("weasyprint")
     await renderer.render(cv_markdown, cv_pdf)
     await renderer.render(cl_markdown, cl_pdf)
 
@@ -249,7 +254,6 @@ async def approve_job(request: Request, job_id: str):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
         # Re-fetch documents to update pdf_path
-        from sqlalchemy import select
         cv_result = await session.execute(
             select(Document).where(Document.id == cv_doc_id)
         )
@@ -264,9 +268,8 @@ async def approve_job(request: Request, job_id: str):
         session.add(cv_doc)
         session.add(cl_doc)
 
-        # Use repo.checkpoint to transition state atomically
+        # Use repo.checkpoint to transition state atomically — includes commit
         await repo.checkpoint(session, job, JobState.approved, new_stage=None)
-        # checkpoint already calls session.commit()
 
     await bus.publish(
         event_to_dict(
@@ -317,15 +320,19 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
         )
         session.add(rev_req)
 
-        # Update current_stage and updated_at (state stays review)
+        # Set current_stage (state stays review per spec) and updated_at
+        # Note: STAGE_FOR_STATE only validates stage when transitioning state;
+        # here we mutate current_stage without changing state, as spec requires.
         job.current_stage = new_current_stage
         job.updated_at = datetime.utcnow()
         session.add(job)
         await session.commit()
 
-        await session.refresh(job)
-        _ = job.documents
-        _ = job.follow_ups
+    # Re-fetch with relationships
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         job_dict = _job_to_dict(job, full=True)
 
     request.app.state.orchestrator.kick()
@@ -347,14 +354,14 @@ async def reset_job(request: Request, job_id: str):
                 detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'failed'",
             )
 
-        transition(job, JobState.pending, new_stage=None)
-        job.updated_at = datetime.utcnow()
-        session.add(job)
-        await session.commit()
+        # Use repo.checkpoint per CLAUDE.md checkpoint rule
+        await repo.checkpoint(session, job, JobState.pending, new_stage=None)
 
-        await session.refresh(job)
-        _ = job.documents
-        _ = job.follow_ups
+    # Re-fetch with relationships after checkpoint
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         return _job_to_dict(job, full=True)
 
 
