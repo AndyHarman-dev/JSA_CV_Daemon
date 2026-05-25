@@ -238,3 +238,63 @@ async def get_follow_ups(
         stmt = stmt.where(FollowUp.answered_at.is_(None))
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def recovery_sweep(session: AsyncSession) -> None:
+    """On startup: revert any jobs stuck in 'running' to their last safe checkpoint.
+
+    - Has cover_letter Document → set cl_done
+    - Has cv_adjust Document → set cv_done
+    - Neither → set pending (via failed intermediate since running→pending is not a direct transition)
+    Jobs in awaiting_input are untouched. Jobs in review/approved/failed are untouched.
+    """
+    from jsa.pipeline.state_machine import transition
+
+    stmt = select(Job).where(Job.state == JobState.running)
+    result = await session.execute(stmt)
+    running_jobs = list(result.scalars().all())
+
+    for job in running_jobs:
+        cl_docs = await get_documents(session, job.id, stage=Stage.cover_letter)
+        cv_docs = await get_documents(session, job.id, stage=Stage.cv_adjust)
+
+        if cl_docs:
+            # running → cl_done requires current_stage == cover_letter; set it first
+            job.current_stage = Stage.cover_letter
+            transition(job, JobState.cl_done, new_stage=None)
+        elif cv_docs:
+            # running → cv_done requires current_stage == cv_adjust; set it first
+            job.current_stage = Stage.cv_adjust
+            transition(job, JobState.cv_done, new_stage=None)
+        else:
+            # running → pending is not a direct transition; go via failed
+            # Use a minimal stage so the running→failed guard is satisfied
+            if job.current_stage is None:
+                job.current_stage = Stage.cv_adjust
+            transition(job, JobState.failed, new_stage=None)
+            transition(job, JobState.pending, new_stage=None)
+
+        job.current_stage = None
+        job.updated_at = datetime.utcnow()
+        session.add(job)
+
+    await session.commit()
+
+
+async def answer_follow_up(
+    session: AsyncSession, follow_up_id: int, answer_text: str
+) -> FollowUp:
+    """Record the user's answer on the FollowUp row."""
+    stmt = select(FollowUp).where(FollowUp.id == follow_up_id)
+    result = await session.execute(stmt)
+    fu = result.scalar_one_or_none()
+    if fu is None:
+        raise ValueError(f"FollowUp {follow_up_id} not found")
+    if fu.answered_at is not None:
+        raise ValueError(f"FollowUp {follow_up_id} already answered")
+    fu.answer = answer_text
+    fu.answered_at = datetime.utcnow()
+    session.add(fu)
+    await session.commit()
+    await session.refresh(fu)
+    return fu

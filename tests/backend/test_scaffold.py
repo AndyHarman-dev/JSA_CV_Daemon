@@ -84,6 +84,10 @@ def test_cli_invalid_backend(tmp_path):
     assert result.exit_code != 0
 
 
+@pytest.mark.skip(
+    reason="Phase 1 scaffold test superseded by Phase 8: CLI now runs full pre-flight "
+    "and starts a server (uvicorn). The stub 'not yet implemented' message no longer exists."
+)
 def test_cli_valid_invocation(tmp_path):
     """Valid --csv, --cv (.pdf), --backend claude-cli must exit 0 and print scaffold message."""
     csv_file = tmp_path / "jobs.csv"
@@ -99,6 +103,10 @@ def test_cli_valid_invocation(tmp_path):
     assert "not yet implemented" in result.output
 
 
+@pytest.mark.skip(
+    reason="Phase 1 scaffold test superseded by Phase 8: CLI now runs full pre-flight "
+    "and starts a server (uvicorn). The stub 'not yet implemented' message no longer exists."
+)
 def test_cli_valid_cv_docx(tmp_path):
     """Valid --csv and --cv (.docx) must also exit 0 and print scaffold message."""
     csv_file = tmp_path / "jobs.csv"
