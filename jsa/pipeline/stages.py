@@ -6,10 +6,8 @@ Handles both fresh sessions (pending/cv_done) and resumed sessions
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
 from jsa.db import repo
 from jsa.db.models import (
-    Document,
     FollowUp,
     Job,
     JobState,
@@ -27,9 +24,6 @@ from jsa.db.models import (
 )
 from jsa.pipeline.checkpoints import checkpoint
 from jsa.prompts import loader
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -60,17 +54,7 @@ async def run_stage(
     """
     system_prompt = _get_system_prompt(stage)
 
-    if stage in (Stage.cv_adjust, Stage.cover_letter):
-        # Fresh session path
-        initial_user_msg = _build_initial_user_msg(job)
-        handle, reply = await backend.start_session(system_prompt, initial_user_msg)
-        # Accumulate messages for this session (system, user, then assistant reply)
-        accumulated_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": initial_user_msg},
-            {"role": "assistant", "content": reply.raw},
-        ]
-    elif stage in (Stage.revising_cv, Stage.revising_cl):
+    if stage in (Stage.revising_cv, Stage.revising_cl):
         # Revision path: restore session with history from the original stage
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
         history = await _load_history(session, job.id, original_stage)
@@ -82,19 +66,33 @@ async def run_stage(
             {"role": "user", "content": instruction},
             {"role": "assistant", "content": reply.raw},
         ]
-    elif job.state == JobState.awaiting_input:
-        # Resume after user answered a follow-up question
-        history = await _load_history(session, job.id, job.current_stage)
-        answer_text = await _get_latest_answer(session, job.id, job.current_stage)
-        handle = await backend.restore_session(system_prompt, history, job.session_external_id)
-        reply = await backend.send_message(handle, answer_text)
-        # Only the new turns are new
-        accumulated_messages = [
-            {"role": "user", "content": answer_text},
-            {"role": "assistant", "content": reply.raw},
-        ]
+    elif stage in (Stage.cv_adjust, Stage.cover_letter):
+        # Determine fresh vs resume by checking whether Message rows exist for
+        # this job+stage.  The orchestrator already transitioned the job to
+        # `running` before calling us, so we cannot discriminate on job.state.
+        history = await _load_history(session, job.id, stage)
+        if history:
+            # Resume after awaiting_input — send the user's answer as the next turn.
+            answer_text = await _get_latest_answer(session, job.id, stage)
+            handle = await backend.restore_session(system_prompt, history, job.session_external_id)
+            reply = await backend.send_message(handle, answer_text)
+            # Only the new turns are new; prior messages already persisted.
+            accumulated_messages = [
+                {"role": "user", "content": answer_text},
+                {"role": "assistant", "content": reply.raw},
+            ]
+        else:
+            # Fresh session
+            initial_user_msg = _build_initial_user_msg(job)
+            handle, reply = await backend.start_session(system_prompt, initial_user_msg)
+            # Accumulate all messages for this session (system, user, assistant reply)
+            accumulated_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": initial_user_msg},
+                {"role": "assistant", "content": reply.raw},
+            ]
     else:
-        raise ValueError(f"Unexpected stage/state combination: stage={stage}, state={job.state}")
+        raise ValueError(f"Unexpected stage: {stage}")
 
     # Persist session_external_id while we have the handle in case we need to park
     job.session_external_id = handle.external_id
