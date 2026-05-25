@@ -63,6 +63,7 @@ class Orchestrator:
         self._db_session_factory = db_session_factory
         self._backend_factory = backend_factory
         self._stopping = False
+        self._tasks: set[asyncio.Task] = set()
 
     def kick(self) -> None:
         """Wake the run() loop. Called by API routes after answer/revise."""
@@ -117,8 +118,11 @@ class Orchestrator:
                     self.sem.release()
                     continue
 
-                # Spawn the worker task; sem is released in the task's finally block
-                asyncio.create_task(self._run_one(job.id))
+                # Spawn the worker task; sem is released in the task's finally block.
+                # Retain a strong reference to prevent premature GC.
+                task = asyncio.create_task(self._run_one(job.id))
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
 
             await self.wakeup.wait()
 

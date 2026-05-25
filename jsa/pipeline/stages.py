@@ -185,21 +185,17 @@ async def _handle_final(
             document=document_data,
         )
     elif stage == Stage.cover_letter:
-        # cover_letter → cl_done (with document+messages), then cl_done → review (bare)
-        await checkpoint(
-            session,
-            job,
-            JobState.cl_done,
-            None,
-            messages=accumulated_messages,
-            document=document_data,
-        )
-        # Immediately advance to review — cl_done is not a resting state
+        # cover_letter → review directly: write messages + document in a single transaction.
+        # cl_done is not an observable intermediate state in normal flow; it exists only
+        # as a crash-recovery landing state (the startup sweep uses it when it finds a
+        # cover_letter Document on a job that crashed mid-run).
         await checkpoint(
             session,
             job,
             JobState.review,
             None,
+            messages=accumulated_messages,
+            document=document_data,
         )
     elif stage in (Stage.revising_cv, Stage.revising_cl):
         # Mark the RevisionRequest consumed (within same transaction as the checkpoint commit)
