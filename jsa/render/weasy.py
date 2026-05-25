@@ -22,21 +22,25 @@ class WeasyPrintRenderer(Renderer):
     name = "weasyprint"
 
     async def render(self, markdown: str, output_path: Path) -> None:
-        # Read CSS at render time so user edits take effect without restart.
-        css = _STYLES_PATH.read_text(encoding="utf-8")
-
-        # Convert Markdown -> HTML with table and strikethrough extensions.
-        md = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
-        body_html = md.render(markdown)
-
-        html_string = _HTML_TEMPLATE.format(css=css, body=body_html)
-
-        # Ensure destination directory exists (sync — fast, no I/O worth threading).
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # WeasyPrint is sync and CPU-bound; run in a thread to avoid blocking the loop.
         def _write_pdf() -> None:
             import weasyprint  # local import keeps the module load-time cost zero
+
+            # Read CSS fresh each call — user edits take effect without restart.
+            css = _STYLES_PATH.read_text(encoding="utf-8")
+
+            # Convert Markdown → HTML with table and strikethrough extensions.
+            md = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
+            body_html = md.render(markdown)
+
+            # Build HTML shell using str.replace to avoid .format() KeyError on CSS with {}.
+            html_string = (
+                _HTML_TEMPLATE
+                .replace("{css}", css)
+                .replace("{body}", body_html)
+            )
+
+            # Create output directory and write PDF.
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             weasyprint.HTML(string=html_string).write_pdf(str(output_path))
 
         await asyncio.to_thread(_write_pdf)
