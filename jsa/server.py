@@ -44,8 +44,8 @@ def create_app(settings: Settings) -> FastAPI:
 
         def _backend_factory():
             if settings.backend == "anthropic":
-                from jsa.agents.anthropic_api import AnthropicAPIBackend
-                return AnthropicAPIBackend(
+                return backend_for(
+                    "anthropic",
                     model=settings.model,
                     timeout=settings.anthropic_timeout,
                 )

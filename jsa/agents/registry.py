@@ -13,8 +13,11 @@ def register(name: str, cls: type["AgentBackend"]) -> None:
     _REGISTRY[name] = cls
 
 
-def backend_for(name: str) -> "AgentBackend":
+def backend_for(name: str, **kwargs: object) -> "AgentBackend":
     """Return an instantiated AgentBackend for the given backend name.
+
+    Optional kwargs are forwarded to the backend constructor, allowing callers
+    to pass model/timeout settings without bypassing the registry.
 
     Raises KeyError with a helpful message if the name is not registered.
     """
@@ -23,7 +26,7 @@ def backend_for(name: str) -> "AgentBackend":
         raise KeyError(
             f"Unknown backend {name!r}. Available backends: {available}"
         )
-    return _REGISTRY[name]()
+    return _REGISTRY[name](**kwargs)
 
 
 # Register CLI backends

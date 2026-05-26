@@ -66,14 +66,20 @@ class AnthropicAPIBackend(AgentBackend):
         return handle
 
     async def send_message(self, handle: SessionHandle, text: str) -> AgentReply:
-        """Append a user turn, call the API, parse and store the assistant reply."""
+        """Append a user turn, call the API, parse and store the assistant reply.
+
+        Both turns are appended to handle.messages only after a successful API
+        call, keeping the list coherent if the call times out or raises.
+        """
         if not isinstance(handle, AnthropicSessionHandle):
             raise TypeError(
                 f"expected AnthropicSessionHandle, got {type(handle).__name__}"
             )
-        handle.messages.append({"role": "user", "content": text})
-        raw = await self._call_api(handle.system_prompt, handle.messages)
+        pending_messages = handle.messages + [{"role": "user", "content": text}]
+        raw = await self._call_api(handle.system_prompt, pending_messages)
         reply = parse_reply(raw)
+        # Mutate only after success so handle stays consistent on error
+        handle.messages.append({"role": "user", "content": text})
         handle.messages.append({"role": "assistant", "content": raw})
         return reply
 
@@ -86,7 +92,12 @@ class AnthropicAPIBackend(AgentBackend):
         handle.messages.clear()
 
     async def _call_api(self, system_prompt: str, messages: list[dict]) -> str:
-        """Call the Anthropic messages API and return the raw text response."""
+        """Call the Anthropic messages API and return the raw text response.
+
+        The client is created per-call and explicitly closed in a finally block
+        so the httpx connection pool is released on both normal exit and
+        timeout cancellation.
+        """
         import anthropic
 
         client = anthropic.AsyncAnthropic()
@@ -94,12 +105,16 @@ class AnthropicAPIBackend(AgentBackend):
             response = await asyncio.wait_for(
                 client.messages.create(
                     model=self._model,
-                    max_tokens=8096,
+                    max_tokens=8192,
                     system=system_prompt,
                     messages=messages,
                 ),
                 timeout=self._timeout,
             )
         except asyncio.TimeoutError:
-            raise AgentTimeout(f"Anthropic API timed out after {self._timeout}s")
+            raise AgentTimeout(
+                f"Anthropic API timed out after {self._timeout}s"
+            ) from None
+        finally:
+            await client.close()
         return response.content[0].text
