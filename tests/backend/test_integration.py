@@ -1,7 +1,7 @@
 """End-to-end integration tests using in-memory SQLite + FakeAgentBackend.
 
-All tests are marked @pytest.mark.integration and are skipped in CI by default
-(run with: pytest -m integration).
+These tests use FakeAgentBackend and FakeRenderer — no real API calls are made.
+They run as part of the default test suite (pytest -v) since they are deterministic.
 
 Scenarios:
 1. Happy path: 2 jobs go pending → cv_done → cl_done → review → approved
@@ -37,7 +37,7 @@ from jsa.db.models import (
     Stage,
 )
 from jsa.pipeline.orchestrator import Orchestrator
-from jsa.pipeline.state_machine import set_current_stage, transition
+from jsa.pipeline.state_machine import set_current_stage
 from jsa.server import create_app
 from tests.backend.fakes.fake_backend import FakeAgentBackend
 from tests.backend.fakes.fake_renderer import FakeRenderer
@@ -132,14 +132,14 @@ async def _poll_job_state(
     If require_stage_cleared=True, also wait for current_stage to be None
     (useful for revision flow where job starts AND ends in 'review').
     """
-    deadline = asyncio.get_event_loop().time() + timeout
+    deadline = asyncio.get_running_loop().time() + timeout
     while True:
         async with factory() as s:
             job = await repo.get_job(s, job_id)
         if job is not None and job.state == target_state:
             if not require_stage_cleared or job.current_stage is None:
                 return job
-        if asyncio.get_event_loop().time() >= deadline:
+        if asyncio.get_running_loop().time() >= deadline:
             state_str = job.state if job else "None"
             stage_str = job.current_stage if job else "None"
             raise TimeoutError(
@@ -189,7 +189,6 @@ async def _run_orchestrator_until(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestHappyPath:
     """Two jobs go pending → running → cv_done → running → review → approved."""
 
@@ -244,8 +243,6 @@ class TestHappyPath:
 
     async def test_both_jobs_approved_with_pdfs(self, session_factory, tmp_path, monkeypatch):
         """Approve both jobs via the HTTP route; PDFs must be written to output dir."""
-        from tests.backend.fakes.fake_backend import FakeAgentBackend
-
         fake_renderer = FakeRenderer()
         monkeypatch.setattr("jsa.api.routes_jobs.renderer_for", lambda name: fake_renderer)
 
@@ -312,7 +309,6 @@ class TestHappyPath:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestParkAndResume:
     """Job parks at awaiting_input, user answers, job resumes and completes."""
 
@@ -447,7 +443,6 @@ class TestParkAndResume:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestCrashRecovery:
     """Simulate mid-run crash; verify recovery_sweep corrects state."""
 
@@ -598,7 +593,6 @@ class TestCrashRecovery:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 class TestRevisionFlow:
     """Job in review gets a revision request; new document version is written; state stays review."""
 

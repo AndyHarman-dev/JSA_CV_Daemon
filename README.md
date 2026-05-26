@@ -144,8 +144,8 @@ Optional environment variables for this backend:
 5. **Request revisions (optional).** In the Review pane, use the revision chat box to send targeted instructions (e.g., "Make the skills section shorter"). The AI revises the specific document without re-running the whole pipeline. A new document version is written.
 
 6. **Approve and export PDFs.** When satisfied, click **Approve & Export**. Two PDFs are written to the output directory:
-   - `{output_dir}/{company}_{role}_{job_id}/cv.pdf`
-   - `{output_dir}/{company}_{role}_{job_id}/cover_letter.pdf`
+   - `{output_dir}/{company}_{role}_{job_id[:8]}/cv.pdf`
+   - `{output_dir}/{company}_{role}_{job_id[:8]}/cover_letter.pdf`
 
 7. **PDFs are in `output/`** (or the path you set with `--out`). The job moves to **Done**.
 
