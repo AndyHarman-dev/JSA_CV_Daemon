@@ -17,24 +17,36 @@ def _jd_hash(jd: str) -> str:
     return hashlib.sha1(jd.encode()).hexdigest()[:16]
 
 
+def _detect_delimiter(header_line: str) -> str:
+    """Return the delimiter that splits the header into exactly the required columns.
+
+    Tries comma, semicolon, tab, and pipe in order.  Falls back to comma if none
+    produce an exact match (the header-validation step will then raise a clear error).
+    Opening with 'utf-8-sig' strips a leading BOM before this function sees the line.
+    """
+    for candidate in (",", ";", "\t", "|"):
+        cols = {c.strip().strip('"').strip("'") for c in header_line.strip().split(candidate)}
+        if cols == _REQUIRED_HEADERS:
+            return candidate
+    return ","  # fallback — header validation will raise a descriptive error
+
+
 def load_csv(path: Path) -> tuple[list[dict], list[str]]:
     """Parse a job CSV file and return (job_dicts, errors).
 
     Raises ValueError if required headers are missing or unexpected.
     Soft-skips rows with invalid tier or completely blank rows (appends to errors).
 
-    Auto-detects the delimiter (comma, semicolon, tab, pipe) using csv.Sniffer
-    so that semicolon-separated exports (common from European-locale spreadsheets)
-    are accepted without any manual conversion.
+    Auto-detects the column delimiter by inspecting the header line, so
+    semicolon-separated exports (common from European-locale spreadsheets)
+    are accepted without manual conversion.  Also handles UTF-8 BOM.
     """
-    with open(path, newline="", encoding="utf-8") as fh:
-        sample = fh.read(8192)
+    # utf-8-sig strips an optional BOM that Excel/LibreOffice sometimes adds
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        header_line = fh.readline()
         fh.seek(0)
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
-        except csv.Error:
-            dialect = csv.excel  # fallback: standard comma-separated
-        reader = csv.DictReader(fh, dialect=dialect)
+        delimiter = _detect_delimiter(header_line)
+        reader = csv.DictReader(fh, delimiter=delimiter)
 
         # Validate headers
         if reader.fieldnames is None:
