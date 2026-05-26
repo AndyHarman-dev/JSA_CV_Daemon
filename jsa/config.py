@@ -13,3 +13,5 @@ class Settings(BaseSettings):
     db_path: Path = Path.home() / ".jsa" / "jsa.sqlite"
     port: int = 8765
     no_browser: bool = False
+    model: str = "claude-opus-4-7"       # Anthropic model ID, overridable via JSA_MODEL
+    anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT

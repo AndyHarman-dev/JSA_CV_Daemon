@@ -43,6 +43,12 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.session_factory = session_factory
 
         def _backend_factory():
+            if settings.backend == "anthropic":
+                from jsa.agents.anthropic_api import AnthropicAPIBackend
+                return AnthropicAPIBackend(
+                    model=settings.model,
+                    timeout=settings.anthropic_timeout,
+                )
             return backend_for(settings.backend)
 
         orchestrator = Orchestrator(session_factory, _backend_factory)

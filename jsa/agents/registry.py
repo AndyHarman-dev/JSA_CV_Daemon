@@ -32,3 +32,7 @@ from jsa.agents.gemini_cli import GeminiCliBackend  # noqa: E402
 
 register("claude-cli", ClaudeCliBackend)
 register("gemini-cli", GeminiCliBackend)
+
+from jsa.agents.anthropic_api import AnthropicAPIBackend  # noqa: E402
+
+register("anthropic", AnthropicAPIBackend)
