@@ -2,6 +2,8 @@ import { useStore } from "../store";
 import { StatusBadge } from "./StatusBadge";
 import { StageTimeline } from "./StageTimeline";
 import { LogTail } from "./LogTail";
+import { FollowUpPane } from "./FollowUpPane";
+import { ReviewPane } from "./ReviewPane";
 
 const TIER_CLASSES: Record<string, string> = {
   A: "bg-green-100 text-green-700",
@@ -56,17 +58,8 @@ export function JobDetail() {
         </div>
       )}
 
-      {/* Phase 10 placeholders */}
-      {job.state === "awaiting_input" && (
-        <div className="rounded border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-700">
-          Follow-up pane coming in Phase 10.
-        </div>
-      )}
-      {(job.state === "review" || job.state === "approved") && (
-        <div className="rounded border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-700">
-          Review pane coming in Phase 10.
-        </div>
-      )}
+      {job.state === "awaiting_input" && <FollowUpPane jobId={job.id} />}
+      {(job.state === "review" || job.state === "approved") && <ReviewPane jobId={job.id} />}
 
       {/* Log tail */}
       <div>

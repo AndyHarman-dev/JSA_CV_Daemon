@@ -53,3 +53,8 @@ export interface LogEntry {
   text: string;
   ts: number; // Date.now() when received
 }
+
+export interface FullJobDTO extends JobDTO {
+  follow_ups: FollowUpDTO[];
+  documents: DocumentDTO[];
+}

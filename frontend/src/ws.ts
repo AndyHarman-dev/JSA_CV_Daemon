@@ -3,6 +3,7 @@ import type { WSEvent } from "./types";
 
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let intentionalClose = false;
 
 function clearReconnectTimer() {
   if (reconnectTimer !== null) {
@@ -21,6 +22,7 @@ export function connectWS(): void {
     return;
   }
 
+  intentionalClose = false;
   clearReconnectTimer();
 
   const store = useStore.getState();
@@ -53,12 +55,14 @@ export function connectWS(): void {
       .catch((err: unknown) => {
         console.error("refetchAll on ws close failed:", err);
       });
-    // Schedule reconnect after 3 seconds
+    // Schedule reconnect after 3 seconds, but only if not intentionally closed
     clearReconnectTimer();
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connectWS();
-    }, 3000);
+    if (!intentionalClose) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWS();
+      }, 3000);
+    }
   };
 
   ws.onerror = (event: Event) => {
@@ -67,6 +71,7 @@ export function connectWS(): void {
 }
 
 export function disconnectWS(): void {
+  intentionalClose = true;
   clearReconnectTimer();
   if (socket !== null) {
     socket.close();

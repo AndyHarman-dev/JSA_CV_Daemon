@@ -1,4 +1,4 @@
-import type { JobDTO, Stage } from "./types";
+import type { JobDTO, FullJobDTO, Stage } from "./types";
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -15,8 +15,8 @@ export const api = {
     return apiFetch<JobDTO[]>(url);
   },
 
-  getJob(id: string): Promise<JobDTO> {
-    return apiFetch<JobDTO>(`/api/jobs/${encodeURIComponent(id)}`);
+  getJob(id: string): Promise<FullJobDTO> {
+    return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}`);
   },
 
   answerFollowUp(id: string, follow_up_id: number, text: string): Promise<JobDTO> {
@@ -56,5 +56,13 @@ export const api = {
     const base = `/api/jobs/${encodeURIComponent(id)}/document/${encodeURIComponent(stage)}`;
     const url = version !== undefined ? `${base}?version=${version}` : base;
     return apiFetch<{ markdown: string; version: number }>(url);
+  },
+
+  health(): Promise<{ ok: boolean }> {
+    return apiFetch<{ ok: boolean }>("/api/health");
+  },
+
+  config(): Promise<Record<string, unknown>> {
+    return apiFetch<Record<string, unknown>>("/api/config");
   },
 };
