@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 import webbrowser
@@ -79,6 +80,18 @@ def main(
         overrides["no_browser"] = True
 
     settings = Settings(**overrides)
+
+    # Configure application logging so pipeline errors appear in the console.
+    # uvicorn's own log_level="info" only covers uvicorn-internal loggers; JSA
+    # loggers (jsa.pipeline.orchestrator, jsa.agents.*) are independent.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Quiet down noisy third-party loggers
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
     # Ensure output dir and DB dir exist
     settings.output_dir.mkdir(parents=True, exist_ok=True)

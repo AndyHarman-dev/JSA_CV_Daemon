@@ -1,8 +1,10 @@
 """Unit tests for Phase 5 CLI backends: ClaudeCliBackend and GeminiCliBackend.
 
-Real pty processes are never spawned. The only mock is ptyprocess.PtyProcess.spawn
-(the external OS/subprocess boundary). All JSA-internal logic is exercised without
-patching.
+ClaudeCliBackend: now uses subprocess -p mode (no ptyprocess).
+  - subprocess.run is patched at jsa.agents.claude_cli.subprocess.run.
+
+GeminiCliBackend: still uses ptyprocess (not the default backend; unchanged).
+  - ptyprocess.PtyProcess.spawn is patched as before.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,15 +27,15 @@ from jsa.agents.registry import backend_for
 # Helpers
 # ---------------------------------------------------------------------------
 
-_FINAL_BYTES = b"<<<FINAL>>>\nmy cv\n<<<END>>>\n"
+_FINAL_TEXT = "<<<FINAL>>>\nmy cv\n<<<END>>>\n"
+_FINAL_BYTES = _FINAL_TEXT.encode()
 _NEED_INPUT_BYTES = b"<<<NEED_INPUT>>>\nWhat is your target role?\n<<<END>>>\n"
 
 
 def _make_mock_pty(read_return: bytes = _FINAL_BYTES) -> MagicMock:
     """Return a MagicMock that looks like a ptyprocess.PtyProcess instance.
 
-    `.read()` returns the given bytes synchronously (called in an executor thread
-    by _read_until_sentinel — must NOT be an AsyncMock).
+    Used only by Gemini tests.
     """
     pty = MagicMock()
     pty.read = MagicMock(return_value=read_return)
@@ -40,6 +43,15 @@ def _make_mock_pty(read_return: bytes = _FINAL_BYTES) -> MagicMock:
     pty.kill = MagicMock()
     pty.close = MagicMock()
     return pty
+
+
+def _make_mock_subprocess(stdout: bytes = _FINAL_BYTES, returncode: int = 0) -> MagicMock:
+    """Return a MagicMock that looks like subprocess.CompletedProcess."""
+    proc = MagicMock()
+    proc.stdout = stdout
+    proc.stderr = b""
+    proc.returncode = returncode
+    return proc
 
 
 # ---------------------------------------------------------------------------
@@ -75,32 +87,28 @@ class TestClaudeCliBackendImport:
 
 
 class TestClaudeSessionHandle:
-    """Test 2 — ClaudeSessionHandle fields."""
+    """Test 2 — ClaudeSessionHandle fields (subprocess era: no pty field)."""
 
-    def test_fields_id_external_id_pty_exist(self):
-        mock_pty = _make_mock_pty()
-        handle = ClaudeSessionHandle(id="handle-id", external_id="ext-id", pty=mock_pty)
+    def test_fields_id_and_external_id_exist(self):
+        handle = ClaudeSessionHandle(id="handle-id", external_id="ext-id")
         assert handle.id == "handle-id"
         assert handle.external_id == "ext-id"
-        assert handle.pty is mock_pty
 
     def test_is_subclass_of_session_handle(self):
-        mock_pty = _make_mock_pty()
-        handle = ClaudeSessionHandle(id="x", external_id=None, pty=mock_pty)
+        handle = ClaudeSessionHandle(id="x", external_id=None)
         assert isinstance(handle, SessionHandle)
 
     def test_external_id_can_be_none(self):
-        mock_pty = _make_mock_pty()
-        handle = ClaudeSessionHandle(id="x", external_id=None, pty=mock_pty)
+        handle = ClaudeSessionHandle(id="x", external_id=None)
         assert handle.external_id is None
 
 
 class TestClaudeStartSession:
-    """Test 3 — start_session spawns pty and returns (ClaudeSessionHandle, AgentReply)."""
+    """Test 3 — start_session uses subprocess -p mode."""
 
     async def test_returns_tuple_of_handle_and_reply(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty) as mock_spawn:
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
             backend = ClaudeCliBackend(timeout=5.0)
             result = await backend.start_session("system prompt", "user message")
 
@@ -108,179 +116,195 @@ class TestClaudeStartSession:
         assert len(result) == 2
 
     async def test_handle_is_claude_session_handle(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
             backend = ClaudeCliBackend(timeout=5.0)
             handle, _reply = await backend.start_session("sys", "user")
 
         assert isinstance(handle, ClaudeSessionHandle)
 
     async def test_reply_kind_is_final(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
             backend = ClaudeCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
 
         assert reply.kind == "final"
 
     async def test_reply_content_contains_expected_text(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
             backend = ClaudeCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
 
         assert "my cv" in reply.content
 
-    async def test_pty_write_was_called(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
+    async def test_subprocess_called_with_p_flag(self):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
             backend = ClaudeCliBackend(timeout=5.0)
-            await backend.start_session("sys", "user")
+            await backend.start_session("sys", "user message")
 
-        mock_pty.write.assert_called()
+        cmd = mock_run.call_args.args[0]
+        assert "-p" in cmd
+        assert "user message" in cmd
 
-    async def test_pty_spawn_was_called(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty) as mock_spawn:
+    async def test_subprocess_called_with_session_id_flag(self):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
             backend = ClaudeCliBackend(timeout=5.0)
-            await backend.start_session("sys", "user")
+            await backend.start_session("sys", "user message")
 
-        mock_spawn.assert_called_once()
+        cmd = mock_run.call_args.args[0]
+        assert "--session-id" in cmd
+
+    async def test_subprocess_called_with_system_prompt_flag(self):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = ClaudeCliBackend(timeout=5.0)
+            await backend.start_session("my sys prompt", "user message")
+
+        cmd = mock_run.call_args.args[0]
+        assert "--system-prompt" in cmd
+        assert "my sys prompt" in cmd
+
+    async def test_handle_external_id_is_set_after_start(self):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+            backend = ClaudeCliBackend(timeout=5.0)
+            handle, _ = await backend.start_session("sys", "user")
+
+        assert handle.external_id is not None
+        # Should be a valid UUID string
+        import uuid
+        uuid.UUID(handle.external_id)  # raises ValueError if invalid
 
 
 class TestClaudeRestoreSessionWithExternalId:
-    """Test 4 — restore_session with external_id uses --resume flag."""
+    """Test 4 — restore_session with external_id: no subprocess call, just returns handle."""
 
-    async def test_spawn_called_with_resume_flag(self):
-        mock_pty = _make_mock_pty()  # no read needed for native resume path
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty) as mock_spawn:
+    async def test_no_subprocess_called(self):
+        with patch("jsa.agents.claude_cli.subprocess.run") as mock_run:
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.restore_session("sys", [], "abc123")
 
-        call_args = mock_spawn.call_args.args[0]
-        assert "--resume" in call_args
-        assert "abc123" in call_args
+        mock_run.assert_not_called()
 
     async def test_returns_claude_session_handle(self):
-        mock_pty = _make_mock_pty()
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
-            backend = ClaudeCliBackend(timeout=5.0)
-            handle = await backend.restore_session("sys", [], "abc123")
+        backend = ClaudeCliBackend(timeout=5.0)
+        handle = await backend.restore_session("sys", [], "abc123")
 
         assert isinstance(handle, ClaudeSessionHandle)
 
     async def test_external_id_preserved_in_handle(self):
-        mock_pty = _make_mock_pty()
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
-            backend = ClaudeCliBackend(timeout=5.0)
-            handle = await backend.restore_session("sys", [], "abc123")
+        backend = ClaudeCliBackend(timeout=5.0)
+        handle = await backend.restore_session("sys", [], "abc123")
 
         assert handle.external_id == "abc123"
 
 
 class TestClaudeRestoreSessionWithoutExternalId:
-    """Test 5 — restore_session without external_id falls back (no --resume)."""
+    """Test 5 — restore_session without external_id raises RuntimeError."""
 
-    async def test_resume_flag_not_in_spawn_args(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)  # fallback path reads from pty
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty) as mock_spawn:
-            backend = ClaudeCliBackend(timeout=5.0)
+    async def test_raises_runtime_error_when_no_external_id(self):
+        backend = ClaudeCliBackend(timeout=5.0)
+        with pytest.raises(RuntimeError, match="external_id is None"):
             await backend.restore_session("sys", [], None)
 
-        call_args = mock_spawn.call_args.args[0]
-        assert "--resume" not in call_args
-
-    async def test_returns_claude_session_handle(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
+    async def test_no_subprocess_called_before_raise(self):
+        with patch("jsa.agents.claude_cli.subprocess.run") as mock_run:
             backend = ClaudeCliBackend(timeout=5.0)
-            handle = await backend.restore_session("sys", [], None)
+            with pytest.raises(RuntimeError):
+                await backend.restore_session("sys", [], None)
 
-        assert isinstance(handle, ClaudeSessionHandle)
-
-    async def test_history_turns_are_written_to_pty(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        history = [
-            HistoryTurn(role="user", content="hello"),
-            HistoryTurn(role="assistant", content="world"),
-        ]
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty):
-            backend = ClaudeCliBackend(timeout=5.0)
-            await backend.restore_session("sys", history, None)
-
-        # write() must have been called to push the combined history message
-        mock_pty.write.assert_called()
+        mock_run.assert_not_called()
 
 
 class TestClaudeSendMessage:
-    """Test 6 — send_message writes to pty and returns AgentReply."""
+    """Test 6 — send_message uses --resume mode, returns AgentReply."""
 
     async def test_needs_input_reply_on_need_input_output(self):
-        mock_pty = _make_mock_pty(_NEED_INPUT_BYTES)
-        handle = ClaudeSessionHandle(id="h1", external_id=None, pty=mock_pty)
+        mock_proc = _make_mock_subprocess(_NEED_INPUT_BYTES)
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
 
-        backend = ClaudeCliBackend(timeout=5.0)
-        reply = await backend.send_message(handle, "my answer")
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+            backend = ClaudeCliBackend(timeout=5.0)
+            reply = await backend.send_message(handle, "my answer")
 
         assert reply.kind == "needs_input"
         assert "target role" in reply.question
 
-    async def test_pty_write_called_with_message(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        handle = ClaudeSessionHandle(id="h1", external_id=None, pty=mock_pty)
+    async def test_subprocess_called_with_resume_flag(self):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
 
-        backend = ClaudeCliBackend(timeout=5.0)
-        await backend.send_message(handle, "my message")
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = ClaudeCliBackend(timeout=5.0)
+            await backend.send_message(handle, "my message")
 
-        mock_pty.write.assert_called_once()
-        # The written bytes should contain the message text
-        written = mock_pty.write.call_args.args[0]
-        assert b"my message" in written
+        cmd = mock_run.call_args.args[0]
+        assert "--resume" in cmd
+        assert "sess-uuid" in cmd
+
+    async def test_subprocess_called_with_p_flag_and_message(self):
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = ClaudeCliBackend(timeout=5.0)
+            await backend.send_message(handle, "my message")
+
+        cmd = mock_run.call_args.args[0]
+        assert "-p" in cmd
+        assert "my message" in cmd
+
+    async def test_no_system_prompt_on_resume(self):
+        """send_message must NOT pass --system-prompt (Claude CLI preserves it via session)."""
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = ClaudeCliBackend(timeout=5.0)
+            await backend.send_message(handle, "text")
+
+        cmd = mock_run.call_args.args[0]
+        assert "--system-prompt" not in cmd
 
     async def test_final_reply_returned_on_final_output(self):
-        mock_pty = _make_mock_pty(_FINAL_BYTES)
-        handle = ClaudeSessionHandle(id="h1", external_id=None, pty=mock_pty)
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
 
-        backend = ClaudeCliBackend(timeout=5.0)
-        reply = await backend.send_message(handle, "text")
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+            backend = ClaudeCliBackend(timeout=5.0)
+            reply = await backend.send_message(handle, "text")
 
         assert reply.kind == "final"
         assert "my cv" in reply.content
 
+    async def test_raises_when_external_id_is_none(self):
+        handle = ClaudeSessionHandle(id="h1", external_id=None)
+        backend = ClaudeCliBackend(timeout=5.0)
+
+        with pytest.raises(RuntimeError, match="external_id is None"):
+            await backend.send_message(handle, "msg")
+
 
 class TestClaudeEndSession:
-    """Test 7 — end_session terminates pty."""
+    """Test 7 — end_session is a no-op (subprocess already exited)."""
 
-    async def test_pty_close_is_called(self):
-        mock_pty = _make_mock_pty()
-        handle = ClaudeSessionHandle(id="h1", external_id=None, pty=mock_pty)
-
-        backend = ClaudeCliBackend(timeout=5.0)
-        await backend.end_session(handle)
-
-        mock_pty.close.assert_called()
-
-    async def test_pty_kill_is_called_with_sigterm(self):
-        mock_pty = _make_mock_pty()
-        handle = ClaudeSessionHandle(id="h1", external_id=None, pty=mock_pty)
-
-        backend = ClaudeCliBackend(timeout=5.0)
-        await backend.end_session(handle)
-
-        mock_pty.kill.assert_called()
-        call_args = mock_pty.kill.call_args.args
-        assert signal.SIGTERM in call_args
-
-    async def test_end_session_does_not_raise_if_pty_errors(self):
-        """end_session wraps kill/close in try/except — errors must not propagate."""
-        mock_pty = _make_mock_pty()
-        mock_pty.kill.side_effect = OSError("process gone")
-        mock_pty.close.side_effect = OSError("already closed")
-        handle = ClaudeSessionHandle(id="h1", external_id=None, pty=mock_pty)
-
+    async def test_end_session_is_noop(self):
+        handle = ClaudeSessionHandle(id="h1", external_id="uuid")
         backend = ClaudeCliBackend(timeout=5.0)
         # Must not raise
         await backend.end_session(handle)
+
+    async def test_no_subprocess_called(self):
+        handle = ClaudeSessionHandle(id="h1", external_id="uuid")
+        with patch("jsa.agents.claude_cli.subprocess.run") as mock_run:
+            backend = ClaudeCliBackend(timeout=5.0)
+            await backend.end_session(handle)
+
+        mock_run.assert_not_called()
 
 
 class TestBackendForClaudeCli:
@@ -292,7 +316,7 @@ class TestBackendForClaudeCli:
 
 
 # ---------------------------------------------------------------------------
-# GeminiCliBackend
+# GeminiCliBackend (unchanged — still uses ptyprocess)
 # ---------------------------------------------------------------------------
 
 class TestGeminiCliBackendImport:
@@ -505,29 +529,22 @@ class TestGeminiSendMessage:
 
 
 # ---------------------------------------------------------------------------
-# Test 15 — AgentTimeout propagation on asyncio.TimeoutError
+# Test 15 — AgentTimeout propagation on subprocess.TimeoutExpired
 # ---------------------------------------------------------------------------
 
 class TestAgentTimeoutPropagation:
-    """Verify that asyncio.TimeoutError inside _read_until_sentinel is caught before
-    OSError and re-raised as AgentTimeout — not swallowed, not leaked as TimeoutError,
-    and not re-raised as ProtocolError.
+    """Verify that subprocess.TimeoutExpired is caught inside _run and re-raised as AgentTimeout.
 
-    Strategy: patch `jsa.agents._pty_common.asyncio.wait_for` so it raises
-    asyncio.TimeoutError immediately. Both ClaudeCliBackend and GeminiCliBackend
-    call _read_until_sentinel during start_session, so we exercise both.
+    The pty-era _pty_common.asyncio.wait_for path is no longer used by ClaudeCliBackend.
     """
 
     async def test_claude_cli_backend_raises_agent_timeout(self):
-        """ClaudeCliBackend.start_session raises AgentTimeout (not asyncio.TimeoutError,
-        not ProtocolError) when the pty read times out."""
-        mock_pty = _make_mock_pty()  # read bytes are irrelevant — wait_for fires first
-
-        with patch("ptyprocess.PtyProcess.spawn", return_value=mock_pty), \
-             patch(
-                 "jsa.agents._pty_common.asyncio.wait_for",
-                 side_effect=asyncio.TimeoutError,
-             ):
+        """ClaudeCliBackend.start_session raises AgentTimeout (not subprocess.TimeoutExpired,
+        not ProtocolError) when the subprocess times out."""
+        with patch(
+            "jsa.agents.claude_cli.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["claude"], timeout=0.001),
+        ):
             backend = ClaudeCliBackend(timeout=0.001)
             with pytest.raises(AgentTimeout):
                 await backend.start_session("sys", "msg")

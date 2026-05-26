@@ -1,16 +1,22 @@
-"""ClaudeCliBackend: pty subprocess implementation of AgentBackend for the Claude CLI."""
+"""ClaudeCliBackend: subprocess -p implementation of AgentBackend for the Claude CLI.
+
+Drives `claude` via non-interactive print mode (`-p`):
+  - Fresh session:  claude --output-format text --system-prompt <sys> --session-id <uuid> -p <msg>
+  - Subsequent msg: claude --output-format text --resume <uuid> -p <msg>
+
+Session state is stored by the Claude CLI daemon/filesystem; JSA only needs to
+remember the session UUID (stored in job.session_external_id).
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import signal
+import subprocess
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
-from jsa.agents._pty_common import _UUID_RE, _extract_session_id, _read_until_sentinel
-from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.protocol import parse_reply
 
 logger = logging.getLogger(__name__)
@@ -18,48 +24,83 @@ logger = logging.getLogger(__name__)
 
 @dataclass(kw_only=True)
 class ClaudeSessionHandle(SessionHandle):
-    """Session handle for ClaudeCliBackend; carries the pty process reference."""
+    """Session handle for ClaudeCliBackend — carries the claude CLI session UUID."""
     id: str
-    external_id: str | None  # claude session_id (from --resume), if detected
-    pty: Any                 # ptyprocess.PtyProcess instance
+    external_id: str | None  # claude --session-id / --resume token
 
 
 class ClaudeCliBackend(AgentBackend):
-    """AgentBackend implementation that drives the `claude` CLI via a pty subprocess."""
+    """AgentBackend that drives the `claude` CLI via subprocess in -p (print) mode.
+
+    Each call to start_session or send_message spawns a short-lived subprocess.
+    No pty is needed: -p mode is fully non-interactive and streams to stdout.
+    end_session is a no-op because the subprocess has already exited.
+    """
 
     name = "claude-cli"
 
     def __init__(self, timeout: float = 120.0) -> None:
         self._timeout = timeout
 
+    # ------------------------------------------------------------------
+    # Internal subprocess runner (runs in a thread via asyncio.to_thread)
+    # ------------------------------------------------------------------
+
+    def _run(self, cmd: list[str]) -> str:
+        """Run a claude CLI command and return its stdout.
+
+        Raises AgentTimeout if the process exceeds self._timeout seconds.
+        stderr is logged at WARNING but never mixed into the returned string.
+        """
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=self._timeout,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AgentTimeout(
+                f"claude CLI timed out after {self._timeout}s"
+            ) from exc
+
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            if stderr:
+                logger.warning("claude CLI stderr (exit %d): %s", result.returncode, stderr)
+
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        # Log stderr at DEBUG even on success (useful for "no stdin" warnings etc.)
+        stderr_out = result.stderr.decode("utf-8", errors="replace").strip()
+        if stderr_out:
+            logger.debug("claude CLI stderr: %s", stderr_out)
+
+        return stdout
+
+    # ------------------------------------------------------------------
+    # AgentBackend interface
+    # ------------------------------------------------------------------
+
     async def start_session(
         self,
         system_prompt: str,
         initial_user_msg: str,
     ) -> tuple[ClaudeSessionHandle, AgentReply]:
-        """Open a fresh claude CLI session and return the handle + first reply."""
-        import ptyprocess  # type: ignore[import]
+        """Open a fresh claude CLI session and return the handle + first reply.
 
-        pty = await asyncio.to_thread(
-            ptyprocess.PtyProcess.spawn,
-            ["claude"],
-        )
-
-        # Combine system prompt and initial user message as the first input
-        combined_input = f"{system_prompt}\n\n{initial_user_msg}\n"
-        await asyncio.to_thread(pty.write, combined_input.encode("utf-8"))
-
-        raw = await _read_until_sentinel(pty, self._timeout)
-
-        external_id = _extract_session_id(raw)
-        if external_id is None:
-            logger.debug("ClaudeCliBackend: no session ID detected in initial output")
-
-        handle = ClaudeSessionHandle(
-            id=str(uuid.uuid4()),
-            external_id=external_id,
-            pty=pty,
-        )
+        Spawns: claude --output-format text --system-prompt <sys>
+                        --session-id <uuid> -p <initial_user_msg>
+        """
+        session_id = str(uuid.uuid4())
+        cmd = [
+            "claude",
+            "--output-format", "text",
+            "--system-prompt", system_prompt,
+            "--session-id", session_id,
+            "-p", initial_user_msg,
+        ]
+        raw = await asyncio.to_thread(self._run, cmd)
+        handle = ClaudeSessionHandle(id=str(uuid.uuid4()), external_id=session_id)
         reply = parse_reply(raw)
         return handle, reply
 
@@ -69,78 +110,50 @@ class ClaudeCliBackend(AgentBackend):
         history: list[HistoryTurn],
         external_id: str | None,
     ) -> ClaudeSessionHandle:
-        """Reconstruct a previously-ended session without generating new assistant turns.
+        """Return a handle ready for send_message.
 
-        If external_id is available, uses `claude --resume <id>` for native resume.
-        Otherwise falls back to history-replay (sends combined message, drains reply).
-        The returned handle is ready for send_message; no AgentReply is returned.
+        With external_id: the Claude CLI holds the session history; no subprocess
+        call needed — just return a handle wrapping the UUID.
+
+        Without external_id: this is an unrecoverable situation in the subprocess
+        model (unlike the pty era, we have no conversation buffer to replay into).
+        Raise RuntimeError so the orchestrator marks the job failed loudly.
         """
-        import ptyprocess  # type: ignore[import]
-
         if external_id is not None:
-            pty = await asyncio.to_thread(
-                ptyprocess.PtyProcess.spawn,
-                ["claude", "--resume", external_id],
-            )
-            handle = ClaudeSessionHandle(
-                id=str(uuid.uuid4()),
-                external_id=external_id,
-                pty=pty,
-            )
-            # Native resume: session state is restored by the CLI; no reply to consume.
-            return handle
-        else:
-            logger.warning(
-                "ClaudeCliBackend: external_id is None; falling back to history-replay "
-                "session reconstruction. Prompt determinism required."
-            )
-            pty = await asyncio.to_thread(
-                ptyprocess.PtyProcess.spawn,
-                ["claude"],
-            )
+            # Claude session state is persisted by the CLI; nothing to do here.
+            return ClaudeSessionHandle(id=str(uuid.uuid4()), external_id=external_id)
 
-            # Build a combined message: system prompt + alternating history turns
-            parts = [system_prompt]
-            for turn in history:
-                parts.append(f"[{turn.role.upper()}]: {turn.content}")
-            combined_input = "\n\n".join(parts) + "\n"
-
-            await asyncio.to_thread(pty.write, combined_input.encode("utf-8"))
-
-            # Drain the replay reply and discard it — we do not return it.
-            raw = await _read_until_sentinel(pty, self._timeout)
-
-            # Attempt to pick up a session id from the replay output
-            detected_id = _extract_session_id(raw)
-
-            handle = ClaudeSessionHandle(
-                id=str(uuid.uuid4()),
-                external_id=detected_id,
-                pty=pty,
-            )
-            return handle
+        # No external_id → no way to resume; fail loudly rather than silently
+        # generating a spurious extra model turn.
+        raise RuntimeError(
+            "ClaudeCliBackend.restore_session: external_id is None — cannot "
+            "resume without a session UUID. This job's session_external_id was "
+            "never persisted; mark the job failed and restart from pending."
+        )
 
     async def send_message(self, handle: SessionHandle, text: str) -> AgentReply:
-        """Send a message to the running claude pty and return the parsed reply."""
+        """Send a message to an existing session using --resume mode.
+
+        Spawns: claude --output-format text --resume <session_id> -p <text>
+        """
         if not isinstance(handle, ClaudeSessionHandle):
             raise TypeError(
                 f"expected ClaudeSessionHandle, got {type(handle).__name__}"
             )
-        await asyncio.to_thread(handle.pty.write, (text + "\n").encode("utf-8"))
-        raw = await _read_until_sentinel(handle.pty, self._timeout)
+        if handle.external_id is None:
+            raise RuntimeError(
+                "ClaudeSessionHandle.external_id is None — cannot send message "
+                "without a valid session UUID."
+            )
+        cmd = [
+            "claude",
+            "--output-format", "text",
+            "--resume", handle.external_id,
+            "-p", text,
+        ]
+        raw = await asyncio.to_thread(self._run, cmd)
         return parse_reply(raw)
 
     async def end_session(self, handle: SessionHandle) -> None:
-        """Terminate the claude pty subprocess and reap the child process."""
-        if not isinstance(handle, ClaudeSessionHandle):
-            raise TypeError(
-                f"expected ClaudeSessionHandle, got {type(handle).__name__}"
-            )
-        try:
-            handle.pty.kill(signal.SIGTERM)
-        except Exception:
-            logger.debug("ClaudeCliBackend.end_session: SIGTERM failed (process may be gone)")
-        try:
-            handle.pty.close()
-        except Exception:
-            logger.debug("ClaudeCliBackend.end_session: pty.close() failed")
+        """No-op: the subprocess has already exited when start_session/send_message returned."""
+        pass
