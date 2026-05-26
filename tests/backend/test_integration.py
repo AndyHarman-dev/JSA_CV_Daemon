@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -289,8 +291,11 @@ class TestHappyPath:
                     paths = resp.json()
                     assert "cv_pdf_path" in paths
                     assert "cl_pdf_path" in paths
-                    # Verify PDF files were written
-                    assert fake_renderer.calls, "FakeRenderer was not called"
+                    # Verify PDF files exist at the returned paths
+                    for path_key in ("cv_pdf_path", "cl_pdf_path"):
+                        p = Path(paths[path_key])
+                        assert p.exists(), f"{path_key} file does not exist: {p}"
+                        assert p.read_bytes() == b"PDF", f"{path_key} file content unexpected"
 
         # Both jobs must be approved
         for job_id in [job1.id, job2.id]:
@@ -424,9 +429,7 @@ class TestParkAndResume:
 
         async with session_factory() as s:
             result = await s.execute(
-                __import__("sqlalchemy", fromlist=["select"]).select(Message).where(
-                    Message.job_id == job.id
-                )
+                select(Message).where(Message.job_id == job.id)
             )
             msgs = list(result.scalars().all())
 
