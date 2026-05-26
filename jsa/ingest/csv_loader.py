@@ -22,9 +22,19 @@ def load_csv(path: Path) -> tuple[list[dict], list[str]]:
 
     Raises ValueError if required headers are missing or unexpected.
     Soft-skips rows with invalid tier or completely blank rows (appends to errors).
+
+    Auto-detects the delimiter (comma, semicolon, tab, pipe) using csv.Sniffer
+    so that semicolon-separated exports (common from European-locale spreadsheets)
+    are accepted without any manual conversion.
     """
     with open(path, newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
+        sample = fh.read(8192)
+        fh.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel  # fallback: standard comma-separated
+        reader = csv.DictReader(fh, dialect=dialect)
 
         # Validate headers
         if reader.fieldnames is None:

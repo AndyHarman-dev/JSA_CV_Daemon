@@ -110,7 +110,9 @@ async def _preflight(settings: Settings, csv_path: Path, cv_path: Path) -> None:
     cv_text = await asyncio.to_thread(load_cv, cv_path)
 
     # 3. CSV ingest
-    jobs = load_csv(csv_path)
+    jobs, ingest_errors = load_csv(csv_path)
+    for err in ingest_errors:
+        typer.echo(f"Warning: {err}", err=True)
     async with session_factory() as session:
         for job_data in jobs:
             job_data["cv_text"] = cv_text
