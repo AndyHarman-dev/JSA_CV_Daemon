@@ -12,6 +12,8 @@ from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
 from jsa.db import repo
 from jsa.db.models import (
@@ -21,6 +23,13 @@ from jsa.db.models import (
     Message,
     RevisionRequest,
     Stage,
+)
+from jsa.events.bus import bus
+from jsa.events.schema import (
+    FollowUpNeededEvent,
+    StageCompleteEvent,
+    StatusChangedEvent,
+    event_to_dict,
 )
 from jsa.pipeline.checkpoints import checkpoint
 from jsa.prompts import loader
@@ -107,6 +116,27 @@ async def run_stage(
             reply=reply,
             accumulated_messages=accumulated_messages,
         )
+        # Fetch the follow-up row we just inserted so we can include its ID
+        # in the WS event.  The checkpoint above already committed, so the row
+        # is visible to the same session.
+        fu_result = await session.execute(
+            select(FollowUp).where(
+                FollowUp.job_id == job.id,
+                FollowUp.stage == stage,
+                FollowUp.answered_at.is_(None),
+            )
+        )
+        fu = fu_result.scalar_one()
+        await bus.publish(
+            event_to_dict(
+                FollowUpNeededEvent(
+                    job_id=job.id,
+                    follow_up_id=fu.id,
+                    question=reply.question or "",
+                    stage=stage.value,
+                )
+            )
+        )
         raise PausedForInput()
 
     # reply.kind == "final"
@@ -119,6 +149,44 @@ async def run_stage(
         reply=reply,
         accumulated_messages=accumulated_messages,
     )
+    # Publish stage-completion events after a successful FINAL checkpoint.
+    # `job.state` has been mutated by transition() inside _handle_final.
+    if stage == Stage.cv_adjust:
+        await bus.publish(
+            event_to_dict(StageCompleteEvent(job_id=job.id, stage="cv_adjust"))
+        )
+        await bus.publish(
+            event_to_dict(
+                StatusChangedEvent(
+                    job_id=job.id,
+                    from_state=JobState.running.value,
+                    to_state=JobState.cv_done.value,
+                )
+            )
+        )
+    elif stage == Stage.cover_letter:
+        await bus.publish(
+            event_to_dict(StageCompleteEvent(job_id=job.id, stage="cover_letter"))
+        )
+        await bus.publish(
+            event_to_dict(
+                StatusChangedEvent(
+                    job_id=job.id,
+                    from_state=JobState.running.value,
+                    to_state=JobState.review.value,
+                )
+            )
+        )
+    elif stage in (Stage.revising_cv, Stage.revising_cl):
+        await bus.publish(
+            event_to_dict(
+                StatusChangedEvent(
+                    job_id=job.id,
+                    from_state=JobState.running.value,
+                    to_state=JobState.review.value,
+                )
+            )
+        )
 
 
 async def _handle_needs_input(

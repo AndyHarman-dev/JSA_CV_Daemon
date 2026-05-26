@@ -350,7 +350,12 @@ async def reset_job(request: Request, job_id: str):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        return _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True)
+
+    # Wake the orchestrator so it picks up the now-pending job immediately.
+    request.app.state.orchestrator.kick()
+
+    return job_dict
 
 
 @router.get("/api/jobs/{job_id}/document/{stage}")

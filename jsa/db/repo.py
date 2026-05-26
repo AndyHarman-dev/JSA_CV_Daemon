@@ -59,6 +59,12 @@ async def upsert_job(session: AsyncSession, job_data: dict) -> Job:
         job.link = job_data["link"]
         if "cv_text" in job_data:
             job.cv_text = job_data["cv_text"]
+        # Per ARCH.md § Job identity: failed jobs reset to pending on re-run so
+        # the pipeline re-processes them without requiring a manual /reset call.
+        if job.state == JobState.failed:
+            from jsa.pipeline.state_machine import transition as _transition
+            _transition(job, JobState.pending, None)
+            job.error = None
         job.updated_at = datetime.utcnow()
         await session.flush()
 
@@ -123,10 +129,25 @@ async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
         return
     if job.state == JobState.approved:
         return  # terminal state — do not mark failed
+    prev_state = job.state
     transition(job, JobState.failed, None)  # validates transition and clears current_stage
     job.error = error
     job.updated_at = datetime.utcnow()
     await session.commit()
+
+    # Notify the frontend so it can refresh the job list immediately.
+    from jsa.events.bus import bus
+    from jsa.events.schema import StatusChangedEvent, event_to_dict
+
+    await bus.publish(
+        event_to_dict(
+            StatusChangedEvent(
+                job_id=job_id,
+                from_state=prev_state.value,
+                to_state=JobState.failed.value,
+            )
+        )
+    )
 
 
 async def checkpoint(

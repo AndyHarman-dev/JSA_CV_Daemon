@@ -133,7 +133,8 @@ class TestUpsertJob:
         await session.commit()
         assert updated_job.current_stage == Stage.cv_adjust
 
-    async def test_upsert_existing_does_not_overwrite_error(self, session):
+    async def test_upsert_failed_job_resets_to_pending(self, session):
+        """Per ARCH.md § Job identity: failed jobs are reset to pending on re-run."""
         job = await _insert_job(session)
         job.state = JobState.failed
         job.error = "something went wrong"
@@ -141,7 +142,8 @@ class TestUpsertJob:
         data = _job_data(jd="updated JD", jd_hash="updatedhashcccc")
         updated_job = await repo.upsert_job(session, data)
         await session.commit()
-        assert updated_job.error == "something went wrong"
+        assert updated_job.state == JobState.pending
+        assert updated_job.error is None
 
     async def test_upsert_returns_same_job_object_on_update(self, session):
         job1 = await _insert_job(session)

@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from jsa.agents.base import AgentBackend
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
+from jsa.events.bus import bus
+from jsa.events.schema import StatusChangedEvent, event_to_dict
 from jsa.pipeline import stages
 from jsa.pipeline.stages import PausedForInput
 from jsa.pipeline.state_machine import transition
@@ -117,6 +119,19 @@ class Orchestrator:
                     )
                     self.sem.release()
                     continue
+
+                # Publish status change AFTER the DB commit so the UI fetches
+                # consistent data.  `job.state` is the pre-transition state
+                # (from list_runnable_jobs); the new state is always `running`.
+                await bus.publish(
+                    event_to_dict(
+                        StatusChangedEvent(
+                            job_id=job.id,
+                            from_state=job.state.value,
+                            to_state=JobState.running.value,
+                        )
+                    )
+                )
 
                 # Spawn the worker task; sem is released in the task's finally block.
                 # Retain a strong reference to prevent premature GC.
