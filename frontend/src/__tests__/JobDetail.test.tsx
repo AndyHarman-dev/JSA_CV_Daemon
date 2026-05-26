@@ -1,8 +1,33 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { useStore } from "../store";
 import { JobDetail } from "../components/JobDetail";
 import type { JobDTO, LogEntry } from "../types";
+
+vi.mock("../api", () => ({
+  api: {
+    getJob: vi.fn().mockResolvedValue({
+      id: "j1",
+      company: "Acme",
+      role: "Engineer",
+      link: "https://example.com",
+      tier: "A",
+      state: "awaiting_input",
+      current_stage: null,
+      error: null,
+      updated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      follow_ups: [],
+      documents: [],
+    }),
+    getDocument: vi.fn().mockResolvedValue({ markdown: "# Doc", version: 1 }),
+    answerFollowUp: vi.fn().mockResolvedValue({}),
+    approve: vi.fn().mockResolvedValue({ cv_pdf_path: "/cv.pdf", cl_pdf_path: "/cl.pdf" }),
+    revise: vi.fn().mockResolvedValue({}),
+    config: vi.fn().mockResolvedValue({ backend: "anthropic" }),
+    getJobs: vi.fn().mockResolvedValue([]),
+  },
+}));
 
 // scrollIntoView is not implemented in jsdom
 beforeAll(() => {
@@ -111,31 +136,45 @@ describe("JobDetail", () => {
     expect(screen.getByText("Pipeline Progress")).toBeInTheDocument();
   });
 
-  it("shows follow-up placeholder for awaiting_input state", () => {
+  it("renders FollowUpPane (not placeholder) for awaiting_input state", () => {
     const job = makeJob({ id: "j1", state: "awaiting_input" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    expect(screen.getByText(/Follow-up pane coming in Phase 10/)).toBeInTheDocument();
+    // Phase 10 placeholder is gone; FollowUpPane mounts (shows loading state initially)
+    expect(screen.queryByText(/Follow-up pane coming in Phase 10/)).toBeNull();
+    expect(screen.queryByText(/coming in Phase 10/)).toBeNull();
+    // FollowUpPane renders its loading state
+    expect(screen.getByText("Loading follow-up…")).toBeInTheDocument();
   });
 
-  it("shows review placeholder for review state", () => {
+  it("renders ReviewPane (not placeholder) for review state", () => {
     const job = makeJob({ id: "j1", state: "review" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    expect(screen.getByText(/Review pane coming in Phase 10/)).toBeInTheDocument();
+    // Phase 10 placeholder is gone; ReviewPane mounts with tab bar
+    expect(screen.queryByText(/Review pane coming in Phase 10/)).toBeNull();
+    expect(screen.queryByText(/coming in Phase 10/)).toBeNull();
+    // Tab buttons rendered by ReviewPane (use getAllByText since option also has same text)
+    const cvResumeElements = screen.getAllByText("CV / Resume");
+    expect(cvResumeElements.length).toBeGreaterThan(0);
   });
 
-  it("shows review placeholder for approved state", () => {
+  it("renders ReviewPane (not placeholder) for approved state", () => {
     const job = makeJob({ id: "j1", state: "approved" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    expect(screen.getByText(/Review pane coming in Phase 10/)).toBeInTheDocument();
+    // Phase 10 placeholder is gone; ReviewPane mounts with tab bar
+    expect(screen.queryByText(/Review pane coming in Phase 10/)).toBeNull();
+    expect(screen.queryByText(/coming in Phase 10/)).toBeNull();
+    // Tab buttons rendered by ReviewPane
+    const cvResumeElements = screen.getAllByText("CV / Resume");
+    expect(cvResumeElements.length).toBeGreaterThan(0);
   });
 
   it("shows Logs section heading for a selected job", () => {
