@@ -17,7 +17,6 @@ dependencies = [
     "pypdf>=4.2",
     "weasyprint>=62",
     "markdown-it-py>=3.0",
-    "ptyprocess>=0.7",
     "anthropic>=0.26",
 ]
 
