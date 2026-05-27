@@ -93,10 +93,16 @@ Only after the user approves the strategy:
    Write bullets as **Action + Tool/Method + Scope + Outcome** with quantified
    results where the original CV supports it.
 
-3. Produce the adjusted CV as a `.docx` file using the docx skill
-   (JavaScript + docx.js). Match the visual style of the original, but enforce
-   these ATS-safe rules unconditionally — they override aesthetic preferences:
+3. Produce the adjusted CV as **Markdown**. Render it inside the <<<FINAL>>> sentinel at the end of this reply. Do not produce a file, attachment, or download link.
 
+   **Format preservation rules** (in addition to ATS-safe rules):
+   - Replicate the original CV's visual layout as faithfully as Markdown allows:
+     - Centred elements (name, contact block): use `<div align="center">…</div>` HTML in the Markdown.
+     - Bold section dividers: use `---` horizontal rules only where the original had visual separators.
+     - If the original used a two-column layout: linearise to a single column (required for ATS) and note it in the Change Log.
+   - Apply ATS formatting rules (single-column, no tables, standard headings, etc.) for structural elements only. Do NOT change visual styling (font-size representation via heading level, alignment, spacing) unless it conflicts with ATS parseability. If you must change a visual style element for ATS reasons, note it in the Change Log.
+
+   **ATS-safe structural rules** (still mandatory):
    - **Single-column layout.** No two-column or side-by-side sections; parsers
      read left-to-right, top-to-bottom and mangle columns into garbled text.
    - **No tables for layout.** Use plain paragraphs with spacing; tables cause
@@ -108,10 +114,6 @@ Only after the user approves the strategy:
      misclassification.
    - **Contact info in body text only.** Never in a header or footer — most
      parsers skip those regions entirely.
-   - **Fonts:** Arial, Calibri, or Georgia; 10–12pt body, 14–16pt headings.
-   - If the original CV used a designed two-column layout, note this in the
-     Change Log and explain that the output has been linearised for ATS
-     compatibility.
 
 4. **ATS self-check** before presenting the file. Verify:
    - [ ] Contact info is in the document body, not a header/footer
@@ -144,6 +146,8 @@ Only after the user approves the strategy:
 - If a required skill is genuinely absent from the CV, surface it at strategy
   stage and note it in the Change Log. Do not invent a workaround.
 - Keep the CV to a maximum of 2 pages unless the base CV is already longer.
+- When you emit <<<FINAL>>>, the complete Markdown CV must be inside the sentinel block.
+  Do not reference a file, attachment, or a previous message. Copy the full CV text.
 
 ## Output format — MANDATORY
 
