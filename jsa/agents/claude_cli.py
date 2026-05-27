@@ -78,6 +78,44 @@ class ClaudeCliBackend(AgentBackend):
         return stdout
 
     # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    async def _parse_with_nudge(self, session_id: str, raw: str) -> AgentReply:
+        """Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once.
+
+        If the first parse succeeds, return the result immediately.
+        If the reply is missing the sentinel block, log a warning, send a nudge
+        via --resume <session_id>, and return parse_reply of the nudge reply
+        (propagating on second failure).
+        Any other ProtocolError is re-raised immediately without retrying.
+        """
+        try:
+            return parse_reply(raw)
+        except ProtocolError as exc:
+            if "no sentinel block" not in str(exc):
+                raise
+            logger.warning(
+                "_parse_with_nudge: no sentinel block in reply — sending nudge and retrying once (session=%s)",
+                session_id,
+            )
+            nudge = (
+                "Your previous response was missing the required sentinel block. "
+                "Please restate your response and end it with exactly one of:\n"
+                "<<<NEED_INPUT>>>\n<your question>\n<<<END>>>\n"
+                "or\n"
+                "<<<FINAL>>>\n<your final content>\n<<<END>>>"
+            )
+            nudge_cmd = [
+                "claude",
+                "--output-format", "text",
+                "--resume", session_id,
+                "-p", nudge,
+            ]
+            raw2 = await asyncio.to_thread(self._run, nudge_cmd)
+            return parse_reply(raw2)  # Propagate on second failure
+
+    # ------------------------------------------------------------------
     # AgentBackend interface
     # ------------------------------------------------------------------
 
@@ -101,7 +139,7 @@ class ClaudeCliBackend(AgentBackend):
         ]
         raw = await asyncio.to_thread(self._run, cmd)
         handle = ClaudeSessionHandle(id=str(uuid.uuid4()), external_id=session_id)
-        reply = parse_reply(raw)
+        reply = await self._parse_with_nudge(session_id, raw)
         return handle, reply
 
     async def restore_session(
@@ -152,30 +190,7 @@ class ClaudeCliBackend(AgentBackend):
             "-p", text,
         ]
         raw = await asyncio.to_thread(self._run, cmd)
-        try:
-            return parse_reply(raw)
-        except ProtocolError as exc:
-            if "no sentinel block" not in str(exc):
-                raise
-            logger.warning(
-                "send_message: no sentinel block in reply — sending nudge and retrying once (session=%s)",
-                handle.external_id,
-            )
-            nudge = (
-                "Your previous response was missing the required sentinel block. "
-                "Please restate your response and end it with exactly one of:\n"
-                "<<<NEED_INPUT>>>\n<your question>\n<<<END>>>\n"
-                "or\n"
-                "<<<FINAL>>>\n<your final content>\n<<<END>>>"
-            )
-            nudge_cmd = [
-                "claude",
-                "--output-format", "text",
-                "--resume", handle.external_id,
-                "-p", nudge,
-            ]
-            raw2 = await asyncio.to_thread(self._run, nudge_cmd)
-            return parse_reply(raw2)  # Propagate on second failure
+        return await self._parse_with_nudge(handle.external_id, raw)
 
     async def end_session(self, handle: SessionHandle) -> None:
         """No-op: the subprocess has already exited when start_session/send_message returned."""
