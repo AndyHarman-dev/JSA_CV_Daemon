@@ -26,7 +26,12 @@ from __future__ import annotations
 import pytest
 
 from jsa.agents.base import AgentReply
-from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
+from jsa.agents.claude_cli import (
+    ClaudeCliBackend,
+    ClaudeCliError,
+    ClaudeSessionExpiredError,
+    ClaudeSessionHandle,
+)
 from jsa.agents.protocol import ProtocolError
 
 
@@ -294,3 +299,104 @@ class TestSendMessageNudgeIntegration:
         second_cmd = backend.run_call_args[1]
         assert "--resume" in second_cmd
         assert "sess-uuid" in second_cmd
+
+
+# ---------------------------------------------------------------------------
+# Test double: subclass of ClaudeCliBackend that simulates subprocess failures
+# ---------------------------------------------------------------------------
+
+class FailingClaudeBackend(ClaudeCliBackend):
+    """Simulates claude CLI subprocess failures without invoking a real subprocess."""
+
+    def __init__(self, returncode: int, stderr: str, stdout: str = "") -> None:
+        super().__init__(timeout=30.0)
+        self._returncode = returncode
+        self._stderr = stderr
+        self._stdout = stdout
+        self._invocation_count: int = 0
+
+    def _run(self, cmd: list[str], context: str = "") -> str:
+        self._invocation_count += 1
+        # Replicate the exact condition from production _run:
+        if self._returncode != 0 and not self._stdout.strip():
+            stderr_text = self._stderr
+            ctx = f" [{context}]" if context else ""
+            if "No conversation found" in stderr_text:
+                raise ClaudeSessionExpiredError(
+                    f"Claude session expired{ctx}: {stderr_text}. "
+                    "Reset this job to restart from scratch."
+                )
+            raise ClaudeCliError(
+                f"claude CLI failed (exit {self._returncode}){ctx}: {stderr_text or '(no stderr)'}"
+            )
+        return self._stdout
+
+
+# ---------------------------------------------------------------------------
+# Tests 7-11: ClaudeCliError / ClaudeSessionExpiredError raising behaviour
+# ---------------------------------------------------------------------------
+
+class TestClaudeCliErrorRaising:
+    """Test the error-raising paths in _run when the subprocess fails."""
+
+    async def test_run_session_not_found_raises_session_expired(self):
+        """Non-zero exit with 'No conversation found' in stderr raises ClaudeSessionExpiredError."""
+        backend = FailingClaudeBackend(
+            returncode=1,
+            stderr="No conversation found with session ID: abc-123",
+        )
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-handle")
+        with pytest.raises(ClaudeSessionExpiredError) as exc_info:
+            await backend.send_message(handle, "hello")
+        # The stderr text (including "abc-123") appears in the error message.
+        assert "abc-123" in str(exc_info.value)
+
+    async def test_run_generic_failure_raises_cli_error(self):
+        """Non-zero exit with unrecognised stderr raises ClaudeCliError (not the subclass)."""
+        backend = FailingClaudeBackend(
+            returncode=1,
+            stderr="Some other error",
+        )
+        handle = ClaudeSessionHandle(id="h2", external_id="sess-handle2")
+        with pytest.raises(ClaudeCliError) as exc_info:
+            await backend.send_message(handle, "hello")
+        # Must NOT be the session-expired subclass.
+        assert not isinstance(exc_info.value, ClaudeSessionExpiredError)
+        assert "Some other error" in str(exc_info.value)
+
+    async def test_run_nonzero_with_stdout_returns_stdout(self):
+        """Non-zero exit but non-empty stdout: no error is raised; stdout is parsed normally."""
+        backend = FailingClaudeBackend(
+            returncode=1,
+            stderr="warning",
+            stdout="<<<FINAL>>>\ncontent\n<<<END>>>",
+        )
+        handle = ClaudeSessionHandle(id="h3", external_id="sess-handle3")
+        # Should return an AgentReply (no exception) because stdout is non-empty.
+        reply = await backend.send_message(handle, "hello")
+        assert isinstance(reply, AgentReply)
+        assert reply.kind == "final"
+
+    async def test_session_expired_bypasses_nudge(self):
+        """ClaudeSessionExpiredError is raised before _parse_with_nudge can attempt a nudge.
+
+        _run must be called exactly once — the exception propagates immediately,
+        so no nudge subprocess call is made.
+        """
+        backend = FailingClaudeBackend(
+            returncode=1,
+            stderr="No conversation found with session ID: xyz",
+        )
+        handle = ClaudeSessionHandle(id="h4", external_id="sess-xyz")
+        with pytest.raises(ClaudeSessionExpiredError):
+            await backend.send_message(handle, "hello")
+        assert backend._invocation_count == 1
+
+    async def test_start_session_session_expired_propagates(self):
+        """ClaudeSessionExpiredError raised in start_session propagates to the caller."""
+        backend = FailingClaudeBackend(
+            returncode=1,
+            stderr="No conversation found with session ID: newone",
+        )
+        with pytest.raises(ClaudeSessionExpiredError):
+            await backend.start_session("system prompt", "user msg")
