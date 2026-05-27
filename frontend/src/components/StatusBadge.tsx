@@ -21,6 +21,7 @@ const STATE_CONFIG: Record<
   review: { label: "Review", classes: "bg-purple-100 text-purple-700" },
   approved: { label: "Approved", classes: "bg-green-100 text-green-700" },
   failed: { label: "Failed", classes: "bg-red-100 text-red-700" },
+  dismissed: { label: "Dismissed", classes: "bg-gray-100 text-gray-500" },
 };
 
 export function StatusBadge({ state, className = "" }: StatusBadgeProps) {

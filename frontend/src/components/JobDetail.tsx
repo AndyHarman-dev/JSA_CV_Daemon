@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useStore } from "../store";
+import { api } from "../api";
 import { StatusBadge } from "./StatusBadge";
 import { StageTimeline } from "./StageTimeline";
 import { LogTail } from "./LogTail";
@@ -16,6 +18,10 @@ export function JobDetail() {
   const job = useStore((s) =>
     s.selectedId !== undefined ? s.jobs[s.selectedId] : undefined
   );
+  const refetchAll = useStore((s) => s.refetchAll);
+
+  const [dismissing, setDismissing] = useState(false);
+  const [jdOpen, setJdOpen] = useState(false);
 
   if (selectedId === undefined || job === undefined) {
     return (
@@ -24,6 +30,32 @@ export function JobDetail() {
       </div>
     );
   }
+
+  async function handleDismiss() {
+    if (!job) return;
+    setDismissing(true);
+    try {
+      await api.dismiss(job.id);
+      await refetchAll();
+    } catch (err) {
+      console.error("Dismiss error:", err);
+    } finally {
+      setDismissing(false);
+    }
+  }
+
+  async function handleRequeue() {
+    if (!job) return;
+    try {
+      await api.reset(job.id);
+      await refetchAll();
+    } catch (err) {
+      console.error("Requeue error:", err);
+    }
+  }
+
+  const showDismiss = job.state !== "approved" && job.state !== "dismissed";
+  const showRequeue = job.state === "dismissed";
 
   return (
     <div className="flex flex-col gap-4 p-6 overflow-y-auto">
@@ -40,6 +72,33 @@ export function JobDetail() {
           Tier {job.tier}
         </span>
         <StatusBadge state={job.state} />
+        {showDismiss && (
+          <button
+            type="button"
+            className="text-sm px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50"
+            disabled={dismissing}
+            onClick={() => {
+              handleDismiss().catch((err: unknown) => {
+                console.error("JobDetail dismiss error:", err);
+              });
+            }}
+          >
+            {dismissing ? "Dismissing…" : "Dismiss"}
+          </button>
+        )}
+        {showRequeue && (
+          <button
+            type="button"
+            className="text-sm px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+            onClick={() => {
+              handleRequeue().catch((err: unknown) => {
+                console.error("JobDetail requeue error:", err);
+              });
+            }}
+          >
+            Re-queue
+          </button>
+        )}
       </div>
 
       {/* Stage timeline */}
@@ -50,6 +109,22 @@ export function JobDetail() {
         <StageTimeline job={job} />
       </div>
 
+      {/* Job Description collapsible section */}
+      <div>
+        <button
+          type="button"
+          className="text-xs font-semibold uppercase tracking-wider text-gray-500 flex items-center gap-1 mb-1 hover:text-gray-700"
+          onClick={() => setJdOpen((prev) => !prev)}
+        >
+          {jdOpen ? "▼" : "▶"} Job Description
+        </button>
+        {jdOpen && (
+          <pre className="whitespace-pre-wrap text-xs text-gray-700 bg-gray-50 rounded border border-gray-200 p-3 max-h-64 overflow-y-auto">
+            {job.jd}
+          </pre>
+        )}
+      </div>
+
       {/* Error box */}
       {job.error && (
         <div className="rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -58,8 +133,12 @@ export function JobDetail() {
         </div>
       )}
 
-      {job.state === "awaiting_input" && <FollowUpPane jobId={job.id} />}
-      {(job.state === "review" || job.state === "approved") && <ReviewPane jobId={job.id} />}
+      {job.state === "awaiting_input" && (
+        <FollowUpPane jobId={job.id} />
+      )}
+      {(job.state === "review" || job.state === "approved") && (
+        <ReviewPane jobId={job.id} state={job.state} />
+      )}
 
       {/* Log tail */}
       <div>

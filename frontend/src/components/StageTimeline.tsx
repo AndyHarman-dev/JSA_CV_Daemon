@@ -39,6 +39,8 @@ function getActiveStepIndex(state: JobState, currentStage: Stage | null): number
       if (currentStage === "cv_adjust" || currentStage === "revising_cv") return 1;
       if (currentStage === "cover_letter" || currentStage === "revising_cl") return 3;
       return 0;
+    case "dismissed":
+      return 0;
   }
 }
 

@@ -13,6 +13,7 @@ const GROUPS: Group[] = [
   { label: "Review", states: ["review"] },
   { label: "Done", states: ["approved"] },
   { label: "Failed", states: ["failed"] },
+  { label: "Dismissed", states: ["dismissed"] },
 ];
 
 function JobRow({

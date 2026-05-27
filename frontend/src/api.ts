@@ -48,6 +48,12 @@ export const api = {
     });
   },
 
+  dismiss(id: string): Promise<FullJobDTO> {
+    return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}/dismiss`, {
+      method: "POST",
+    });
+  },
+
   getDocument(
     id: string,
     stage: Stage,

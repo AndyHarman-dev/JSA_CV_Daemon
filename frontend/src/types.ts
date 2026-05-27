@@ -1,6 +1,6 @@
 export type JobState =
   | "pending" | "running" | "awaiting_input" | "cv_done"
-  | "cl_done" | "review" | "approved" | "failed";
+  | "cl_done" | "review" | "approved" | "failed" | "dismissed";
 
 export type Stage =
   | "cv_adjust" | "cover_letter" | "revising_cv" | "revising_cl";
@@ -11,6 +11,7 @@ export interface JobDTO {
   role: string;
   link: string;
   tier: "A" | "B" | "C";
+  jd: string;
   state: JobState;
   current_stage: Stage | null;
   error: string | null;
