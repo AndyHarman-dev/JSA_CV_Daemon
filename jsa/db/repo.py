@@ -127,8 +127,8 @@ async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
     job = await get_job(session, job_id)
     if job is None:
         return
-    if job.state == JobState.approved:
-        return  # terminal state — do not mark failed
+    if job.state in (JobState.approved, JobState.dismissed):
+        return  # terminal user-controlled state — do not mark failed
     prev_state = job.state
     transition(job, JobState.failed, None)  # validates transition and clears current_stage
     job.error = error

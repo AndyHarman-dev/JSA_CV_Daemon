@@ -31,6 +31,9 @@ jsa/static/*
 *.sqlite
 *.db
 
+# Output directory (generated PDFs and documents)
+output/
+
 # OS
 .DS_Store
 Thumbs.db
