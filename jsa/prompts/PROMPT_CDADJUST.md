@@ -115,7 +115,7 @@ Only after the user approves the strategy:
    - **Contact info in body text only.** Never in a header or footer — most
      parsers skip those regions entirely.
 
-4. **ATS self-check** before presenting the file. Verify:
+4. **ATS self-check** before rendering the final Markdown. Verify:
    - [ ] Contact info is in the document body, not a header/footer
    - [ ] No tables, text boxes, or multi-column layouts
    - [ ] All section headings match the standard list above
@@ -125,9 +125,9 @@ Only after the user approves the strategy:
    - [ ] CV is ≤ 2 pages
    Note any items that couldn't be satisfied and why.
 
-5. Present the file for download.
+5. Emit the complete Markdown CV inside the `<<<FINAL>>>` sentinel (see Output format section below).
 
-6. Include a **Change Log** underneath the file link:
+6. Include a **Change Log** immediately after the CV text, inside the `<<<FINAL>>>` block:
 
 <change_log>
 - [Section]: [what changed and why]
