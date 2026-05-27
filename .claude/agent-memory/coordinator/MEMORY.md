@@ -9,3 +9,4 @@
 - [Phase 6 gotchas](project_jsa_phase6.md) — cover_letter→review must be one checkpoint; orchestrator task GC; fresh/resume discriminated by Message row existence
 - [Phase 8 pre-flight](project_jsa_phase8_prep.md) — settings/cli.py duplication to fix; startup sequence order; static bundle path; CORS policy; Phase 8 is the full-system unlock
 - [Phase 8 gotchas](project_jsa_phase8.md) — set_current_stage() for revision flow; running→pending in ALLOWED; CORS regex; ASGITransport lifespan pattern; CLI startup sequence
+- [BF-1/2/3 bugfix phases](project_jsa_bugfixes_bf.md) — dismiss state, JD in API, agent_timeout, prompt fixes (cover letter sentinel, CV markdown + format)
