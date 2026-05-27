@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { api } from "../api";
 import type { FollowUpDTO } from "../types";
 import { ChatBox } from "./ChatBox";
+import { MarkdownPreview } from "./MarkdownPreview";
 
 interface Props {
   jobId: string;
@@ -61,8 +62,8 @@ export function FollowUpPane({ jobId }: Props) {
       <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-500">
         Follow-up Question
       </h3>
-      <div className="rounded border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-gray-800">
-        {followUp.question}
+      <div className="rounded border border-yellow-300 bg-yellow-50 px-4 py-3">
+        <MarkdownPreview markdown={followUp.question} className="text-gray-800" />
       </div>
       <ChatBox
         kind="answer"

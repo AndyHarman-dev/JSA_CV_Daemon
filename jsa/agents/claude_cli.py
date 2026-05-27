@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 
 from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
-from jsa.agents.protocol import parse_reply
+from jsa.agents.protocol import ProtocolError, parse_reply
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,30 @@ class ClaudeCliBackend(AgentBackend):
             "-p", text,
         ]
         raw = await asyncio.to_thread(self._run, cmd)
-        return parse_reply(raw)
+        try:
+            return parse_reply(raw)
+        except ProtocolError as exc:
+            if "no sentinel block" not in str(exc):
+                raise
+            logger.warning(
+                "send_message: no sentinel block in reply — sending nudge and retrying once (session=%s)",
+                handle.external_id,
+            )
+            nudge = (
+                "Your previous response was missing the required sentinel block. "
+                "Please restate your response and end it with exactly one of:\n"
+                "<<<NEED_INPUT>>>\n<your question>\n<<<END>>>\n"
+                "or\n"
+                "<<<FINAL>>>\n<your final content>\n<<<END>>>"
+            )
+            nudge_cmd = [
+                "claude",
+                "--output-format", "text",
+                "--resume", handle.external_id,
+                "-p", nudge,
+            ]
+            raw2 = await asyncio.to_thread(self._run, nudge_cmd)
+            return parse_reply(raw2)  # Propagate on second failure
 
     async def end_session(self, handle: SessionHandle) -> None:
         """No-op: the subprocess has already exited when start_session/send_message returned."""

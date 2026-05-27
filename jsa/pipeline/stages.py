@@ -199,9 +199,20 @@ async def _handle_needs_input(
     accumulated_messages: list[dict],
 ) -> None:
     """Park the job to awaiting_input, write FollowUp + messages atomically."""
+    # Build a display question that includes any pre-sentinel context
+    # (e.g. the Intel Brief Claude wrote before <<<NEED_INPUT>>>).
+    sentinel_marker = "<<<NEED_INPUT>>>"
+    raw_text = reply.raw
+    sentinel_pos = raw_text.find(sentinel_marker)
+    if sentinel_pos > 0:
+        context = raw_text[:sentinel_pos].strip()
+        display_question = f"{context}\n\n---\n\n{reply.question}" if context else reply.question
+    else:
+        display_question = reply.question
+
     follow_up_data = {
         "stage": stage,
-        "question": reply.question,
+        "question": display_question,
     }
     await checkpoint(
         session,
