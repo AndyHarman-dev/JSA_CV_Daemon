@@ -49,7 +49,7 @@ def create_app(settings: Settings) -> FastAPI:
                     model=settings.model,
                     timeout=settings.anthropic_timeout,
                 )
-            return backend_for(settings.backend)
+            return backend_for(settings.backend, timeout=settings.agent_timeout)
 
         orchestrator = Orchestrator(session_factory, _backend_factory)
         app.state.orchestrator = orchestrator

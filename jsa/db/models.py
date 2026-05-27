@@ -19,6 +19,7 @@ class JobState(str, enum.Enum):
     review = "review"
     approved = "approved"
     failed = "failed"
+    dismissed = "dismissed"
 
 
 class Stage(str, enum.Enum):

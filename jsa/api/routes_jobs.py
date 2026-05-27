@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 from jsa.db import repo
 from jsa.db.models import Document, FollowUp, Job, JobState, RevisionRequest, Stage
 from jsa.events.bus import bus
-from jsa.events.schema import ApprovedEvent, event_to_dict
+from jsa.events.schema import ApprovedEvent, StatusChangedEvent, event_to_dict
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
 
@@ -65,6 +65,7 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "role": job.role,
         "link": job.link,
         "tier": job.tier,
+        "jd": job.jd,
         "state": job.state.value if job.state is not None else None,
         "current_stage": job.current_stage.value if job.current_stage is not None else None,
         "error": job.error,
@@ -328,6 +329,43 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
     return job_dict
 
 
+@router.post("/api/jobs/{job_id}/dismiss")
+async def dismiss_job(request: Request, job_id: str):
+    """Dismiss a job (any non-approved, non-dismissed state → dismissed)."""
+    sf = _session_factory(request)
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state in (JobState.approved, JobState.dismissed):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is in state {job.state.value!r} and cannot be dismissed",
+            )
+
+        prev_state = job.state.value
+        await repo.checkpoint(session, job, JobState.dismissed, new_stage=None)
+
+    # Re-fetch with relationships after checkpoint
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        job_dict = _job_to_dict(job, full=True)
+
+    await bus.publish(
+        event_to_dict(
+            StatusChangedEvent(
+                job_id=job_id,
+                from_state=prev_state,
+                to_state=JobState.dismissed.value,
+            )
+        )
+    )
+
+    return job_dict
+
+
 @router.post("/api/jobs/{job_id}/reset")
 async def reset_job(request: Request, job_id: str):
     """Reset a failed job back to pending."""
@@ -336,10 +374,10 @@ async def reset_job(request: Request, job_id: str):
         job = await repo.get_job(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        if job.state != JobState.failed:
+        if job.state not in (JobState.failed, JobState.dismissed):
             raise HTTPException(
                 status_code=400,
-                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'failed'",
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'failed' or 'dismissed'",
             )
 
         # Use repo.checkpoint per CLAUDE.md checkpoint rule

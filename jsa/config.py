@@ -15,3 +15,4 @@ class Settings(BaseSettings):
     no_browser: bool = False
     model: str = "claude-opus-4-7"       # Anthropic model ID, overridable via JSA_MODEL
     anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT
+    agent_timeout: float = 300.0         # Timeout for CLI backends (claude-cli, gemini-cli), via JSA_AGENT_TIMEOUT

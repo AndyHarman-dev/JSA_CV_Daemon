@@ -7,14 +7,15 @@ class InvalidTransition(Exception): ...
 
 
 ALLOWED = {
-    JobState.pending:        {JobState.running, JobState.failed},
-    JobState.running:        {JobState.awaiting_input, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed, JobState.pending},
-    JobState.awaiting_input: {JobState.running, JobState.review, JobState.failed},
-    JobState.cv_done:        {JobState.running, JobState.failed},
-    JobState.cl_done:        {JobState.review, JobState.failed},
-    JobState.review:         {JobState.running, JobState.awaiting_input, JobState.approved, JobState.failed},
+    JobState.pending:        {JobState.running, JobState.failed, JobState.dismissed},
+    JobState.running:        {JobState.awaiting_input, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed, JobState.pending, JobState.dismissed},
+    JobState.awaiting_input: {JobState.running, JobState.review, JobState.failed, JobState.dismissed},
+    JobState.cv_done:        {JobState.running, JobState.failed, JobState.dismissed},
+    JobState.cl_done:        {JobState.review, JobState.failed, JobState.dismissed},
+    JobState.review:         {JobState.running, JobState.awaiting_input, JobState.approved, JobState.failed, JobState.dismissed},
     JobState.approved:       set(),
-    JobState.failed:         {JobState.pending},
+    JobState.failed:         {JobState.pending, JobState.dismissed},
+    JobState.dismissed:      {JobState.pending},
 }
 
 # Stage compatibility: which stages are valid for each state
