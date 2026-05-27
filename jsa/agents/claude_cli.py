@@ -22,6 +22,14 @@ from jsa.agents.protocol import ProtocolError, parse_reply
 logger = logging.getLogger(__name__)
 
 
+class ClaudeCliError(RuntimeError):
+    """Raised when the claude subprocess fails with no usable output."""
+
+
+class ClaudeSessionExpiredError(ClaudeCliError):
+    """Raised when claude reports the session ID is no longer known."""
+
+
 @dataclass(kw_only=True)
 class ClaudeSessionHandle(SessionHandle):
     """Session handle for ClaudeCliBackend — carries the claude CLI session UUID."""
@@ -46,10 +54,14 @@ class ClaudeCliBackend(AgentBackend):
     # Internal subprocess runner (runs in a thread via asyncio.to_thread)
     # ------------------------------------------------------------------
 
-    def _run(self, cmd: list[str]) -> str:
+    def _run(self, cmd: list[str], context: str = "") -> str:
         """Run a claude CLI command and return its stdout.
 
         Raises AgentTimeout if the process exceeds self._timeout seconds.
+        Raises ClaudeSessionExpiredError if the subprocess exits non-zero with
+        empty stdout and stderr contains "No conversation found".
+        Raises ClaudeCliError if the subprocess exits non-zero with empty stdout
+        for any other reason.
         stderr is logged at WARNING but never mixed into the returned string.
         """
         try:
@@ -74,6 +86,20 @@ class ClaudeCliBackend(AgentBackend):
         stderr_out = result.stderr.decode("utf-8", errors="replace").strip()
         if stderr_out:
             logger.debug("claude CLI stderr: %s", stderr_out)
+
+        if result.returncode != 0 and not stdout.strip():
+            # Subprocess failed and produced no usable output — raise rather than
+            # returning an empty string that will cause a misleading ProtocolError.
+            stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
+            ctx = f" [{context}]" if context else ""
+            if "No conversation found" in stderr_text:
+                raise ClaudeSessionExpiredError(
+                    f"Claude session expired{ctx}: {stderr_text}. "
+                    "Reset this job to restart from scratch."
+                )
+            raise ClaudeCliError(
+                f"claude CLI failed (exit {result.returncode}){ctx}: {stderr_text or '(no stderr)'}"
+            )
 
         return stdout
 
@@ -112,7 +138,7 @@ class ClaudeCliBackend(AgentBackend):
                 "--resume", session_id,
                 "-p", nudge,
             ]
-            raw2 = await asyncio.to_thread(self._run, nudge_cmd)
+            raw2 = await asyncio.to_thread(self._run, nudge_cmd, session_id)
             return parse_reply(raw2)  # Propagate on second failure
 
     # ------------------------------------------------------------------
@@ -137,7 +163,7 @@ class ClaudeCliBackend(AgentBackend):
             "--session-id", session_id,
             "-p", initial_user_msg,
         ]
-        raw = await asyncio.to_thread(self._run, cmd)
+        raw = await asyncio.to_thread(self._run, cmd, session_id)
         handle = ClaudeSessionHandle(id=str(uuid.uuid4()), external_id=session_id)
         reply = await self._parse_with_nudge(session_id, raw)
         return handle, reply
@@ -189,7 +215,7 @@ class ClaudeCliBackend(AgentBackend):
             "--resume", handle.external_id,
             "-p", text,
         ]
-        raw = await asyncio.to_thread(self._run, cmd)
+        raw = await asyncio.to_thread(self._run, cmd, handle.external_id)
         return await self._parse_with_nudge(handle.external_id, raw)
 
     async def end_session(self, handle: SessionHandle) -> None:
