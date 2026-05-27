@@ -7,7 +7,6 @@ import { ChatBox } from "./ChatBox";
 
 interface Props {
   jobId: string;
-  state?: JobState;
 }
 
 type TabKey = "cv" | "cl";
@@ -20,9 +19,8 @@ interface DocState {
 
 const emptyDoc: DocState = { markdown: "", loading: true, error: null };
 
-export function ReviewPane({ jobId, state: stateProp }: Props) {
-  const storeState = useStore((s) => s.jobs[jobId]?.state as JobState | undefined);
-  const state = stateProp ?? storeState;
+export function ReviewPane({ jobId }: Props) {
+  const state = useStore((s) => s.jobs[jobId]?.state as JobState | undefined);
   const [activeTab, setActiveTab] = useState<TabKey>("cv");
   const [cvDoc, setCvDoc] = useState<DocState>(emptyDoc);
   const [clDoc, setClDoc] = useState<DocState>(emptyDoc);
@@ -70,7 +68,7 @@ export function ReviewPane({ jobId, state: stateProp }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [jobId, state]);
+  }, [jobId]);
 
   async function handleApprove() {
     setApproving(true);

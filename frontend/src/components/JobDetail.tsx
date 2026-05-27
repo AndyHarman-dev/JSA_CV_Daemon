@@ -21,6 +21,9 @@ export function JobDetail() {
   const refetchAll = useStore((s) => s.refetchAll);
 
   const [dismissing, setDismissing] = useState(false);
+  const [dismissError, setDismissError] = useState<string | null>(null);
+  const [requeuing, setRequeuing] = useState(false);
+  const [requeueError, setRequeueError] = useState<string | null>(null);
   const [jdOpen, setJdOpen] = useState(false);
 
   if (selectedId === undefined || job === undefined) {
@@ -34,11 +37,12 @@ export function JobDetail() {
   async function handleDismiss() {
     if (!job) return;
     setDismissing(true);
+    setDismissError(null);
     try {
       await api.dismiss(job.id);
       await refetchAll();
     } catch (err) {
-      console.error("Dismiss error:", err);
+      setDismissError(err instanceof Error ? err.message : String(err));
     } finally {
       setDismissing(false);
     }
@@ -46,11 +50,15 @@ export function JobDetail() {
 
   async function handleRequeue() {
     if (!job) return;
+    setRequeuing(true);
+    setRequeueError(null);
     try {
       await api.reset(job.id);
       await refetchAll();
     } catch (err) {
-      console.error("Requeue error:", err);
+      setRequeueError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRequeuing(false);
     }
   }
 
@@ -89,17 +97,24 @@ export function JobDetail() {
         {showRequeue && (
           <button
             type="button"
-            className="text-sm px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+            className="text-sm px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            disabled={requeuing}
             onClick={() => {
               handleRequeue().catch((err: unknown) => {
                 console.error("JobDetail requeue error:", err);
               });
             }}
           >
-            Re-queue
+            {requeuing ? "Re-queuing…" : "Re-queue"}
           </button>
         )}
       </div>
+      {dismissError && (
+        <p className="text-sm text-red-600">{dismissError}</p>
+      )}
+      {requeueError && (
+        <p className="text-sm text-red-600">{requeueError}</p>
+      )}
 
       {/* Stage timeline */}
       <div>
@@ -137,7 +152,7 @@ export function JobDetail() {
         <FollowUpPane jobId={job.id} />
       )}
       {(job.state === "review" || job.state === "approved") && (
-        <ReviewPane jobId={job.id} state={job.state} />
+        <ReviewPane jobId={job.id} />
       )}
 
       {/* Log tail */}
