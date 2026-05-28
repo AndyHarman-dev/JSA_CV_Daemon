@@ -60,6 +60,12 @@ export const api = {
     });
   },
 
+  deleteJob(id: string): Promise<{ ok: boolean }> {
+    return apiFetch<{ ok: boolean }>(`/api/jobs/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
   getDocument(
     id: string,
     stage: Stage,

@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 from jsa.db import repo
 from jsa.db.models import Document, FollowUp, Job, JobState, RevisionRequest, Stage
 from jsa.events.bus import bus
-from jsa.events.schema import ApprovedEvent, StatusChangedEvent, event_to_dict
+from jsa.events.schema import ApprovedEvent, StatusChangedEvent, JobRemovedEvent, event_to_dict
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
 
@@ -412,6 +412,40 @@ async def cancel_job(request: Request, job_id: str):
     request.app.state.orchestrator.kick()
 
     return job_dict
+
+
+@router.delete("/api/jobs/{job_id}")
+async def delete_job(request: Request, job_id: str):
+    """Permanently delete a job and all its data from the database.
+
+    Works for any state. Best-effort for running jobs — an in-flight orchestrator
+    task will try to UPDATE a now-gone row; SQLite ignores 0-row UPDATEs and the
+    _run_one exception handler handles StaleDataError gracefully.
+    """
+    sf = _session_factory(request)
+    async with sf() as session:
+        result = await session.execute(
+            select(Job)
+            .options(
+                selectinload(Job.messages),
+                selectinload(Job.documents),
+                selectinload(Job.follow_ups),
+                selectinload(Job.revision_requests),
+            )
+            .where(Job.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+
+        await session.delete(job)
+        await session.commit()
+
+    await bus.publish(
+        event_to_dict(JobRemovedEvent(job_id=job_id))
+    )
+
+    return {"ok": True}
 
 
 @router.post("/api/jobs/{job_id}/reset")

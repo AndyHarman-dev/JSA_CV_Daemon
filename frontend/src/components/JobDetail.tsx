@@ -20,8 +20,8 @@ export function JobDetail() {
   );
   const refetchAll = useStore((s) => s.refetchAll);
 
-  const [cancelling, setCancelling] = useState(false);
-  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
   const [requeuing, setRequeuing] = useState(false);
@@ -36,17 +36,18 @@ export function JobDetail() {
     );
   }
 
-  async function handleCancel() {
+  async function handleDelete() {
     if (!job) return;
-    setCancelling(true);
-    setCancelError(null);
+    if (!window.confirm("Permanently delete this job and all its data? This cannot be undone.")) return;
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await api.cancel(job.id);
+      await api.deleteJob(job.id);
       await refetchAll();
     } catch (err) {
-      setCancelError(err instanceof Error ? err.message : String(err));
+      setDeleteError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCancelling(false);
+      setDeleting(false);
     }
   }
 
@@ -78,7 +79,7 @@ export function JobDetail() {
     }
   }
 
-  const showCancel = job.state === "running";
+  const showCancel = job.state !== "approved";
   const showDismiss = job.state !== "approved" && job.state !== "dismissed";
   const showRequeue = job.state === "dismissed";
 
@@ -100,15 +101,15 @@ export function JobDetail() {
         {showCancel && (
           <button
             type="button"
-            className="text-sm px-3 py-1 rounded border border-amber-400 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
-            disabled={cancelling}
+            className="text-sm px-3 py-1 rounded border border-red-500 text-red-600 hover:bg-red-50 disabled:opacity-50"
+            disabled={deleting}
             onClick={() => {
-              handleCancel().catch((err: unknown) => {
-                console.error("JobDetail cancel error:", err);
+              handleDelete().catch((err: unknown) => {
+                console.error("JobDetail delete error:", err);
               });
             }}
           >
-            {cancelling ? "Cancelling…" : "Cancel"}
+            {deleting ? "Deleting…" : "Cancel"}
           </button>
         )}
         {showDismiss && (
@@ -146,8 +147,8 @@ export function JobDetail() {
       {requeueError && (
         <p className="text-sm text-red-600">{requeueError}</p>
       )}
-      {cancelError && (
-        <p className="text-sm text-red-600">{cancelError}</p>
+      {deleteError && (
+        <p className="text-sm text-red-600">{deleteError}</p>
       )}
 
       {/* Stage timeline */}

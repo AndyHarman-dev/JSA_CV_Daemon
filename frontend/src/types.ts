@@ -40,7 +40,7 @@ export interface DocumentDTO {
 
 export type WSEventType =
   | "status_changed" | "stage_complete" | "follow_up_needed"
-  | "log" | "error" | "approved";
+  | "log" | "error" | "approved" | "job_removed";
 
 export interface WSEvent {
   type: WSEventType;

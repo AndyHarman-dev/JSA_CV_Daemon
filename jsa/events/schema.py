@@ -52,6 +52,12 @@ class ApprovedEvent:
     cl_pdf_path: str = ""
 
 
+@dataclass
+class JobRemovedEvent:
+    type: Literal["job_removed"] = "job_removed"
+    job_id: str = ""
+
+
 def event_to_dict(event) -> dict:
     """Convert any event dataclass to a JSON-serialisable dict."""
     return dataclasses.asdict(event)

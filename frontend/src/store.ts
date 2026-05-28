@@ -15,6 +15,7 @@ interface Store {
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
   appendLog(entry: LogEntry): void;
+  removeJob(id: string): void;
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -44,6 +45,16 @@ export const useStore = create<Store>((set, get) => ({
     });
   },
 
+  removeJob(id: string) {
+    set((state) => {
+      const { [id]: _, ...remaining } = state.jobs;
+      return {
+        jobs: remaining,
+        selectedId: state.selectedId === id ? undefined : state.selectedId,
+      };
+    });
+  },
+
   applyEvent(e: WSEvent) {
     const store = get();
     switch (e.type) {
@@ -70,6 +81,9 @@ export const useStore = create<Store>((set, get) => ({
         store.appendLog({ job_id: e.job_id, level: "error", text, ts: Date.now() });
         break;
       }
+      case "job_removed":
+        store.removeJob(e.job_id);
+        break;
     }
   },
 
