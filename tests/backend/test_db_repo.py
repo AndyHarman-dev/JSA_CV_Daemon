@@ -338,6 +338,89 @@ class TestListRunnableJobs:
         runnable = await repo.list_runnable_jobs(session)
         assert len(runnable) == 0
 
+    async def test_awaiting_input_with_answered_and_open_followup_not_returned(
+        self, session
+    ):
+        """BF-8 Fix 1: a job with one answered AND one still-open FollowUp must NOT
+        be returned as runnable — the open follow-up holds it back."""
+        job = await _insert_job(session, job_id="aaaa000000000001")
+        job.state = JobState.awaiting_input
+        job.current_stage = Stage.cv_adjust
+        await session.commit()
+
+        # FollowUp1: answered (answered_at IS NOT NULL — excluded from partial unique index)
+        fu1 = FollowUp(
+            job_id=job.id,
+            stage=Stage.cv_adjust,
+            question="First question",
+            answer="First answer",
+            answered_at=datetime.utcnow(),
+        )
+        session.add(fu1)
+        await session.commit()
+
+        # FollowUp2: open (answered_at IS NULL — covered by partial unique index).
+        # Inserting is legal because fu1 is NOT open, so only one open row exists.
+        fu2 = FollowUp(
+            job_id=job.id,
+            stage=Stage.cv_adjust,
+            question="Second question",
+            answer=None,
+            answered_at=None,
+        )
+        session.add(fu2)
+        await session.commit()
+
+        runnable = await repo.list_runnable_jobs(session)
+        assert len(runnable) == 0, (
+            "Job should NOT be runnable while an open FollowUp remains"
+        )
+
+    async def test_awaiting_input_becomes_runnable_only_after_all_followups_answered(
+        self, session
+    ):
+        """BF-8 Fix 1: the job becomes runnable only once every FollowUp is answered."""
+        job = await _insert_job(session, job_id="aaaa000000000001")
+        job.state = JobState.awaiting_input
+        job.current_stage = Stage.cv_adjust
+        await session.commit()
+
+        # Insert answered FollowUp1
+        fu1 = FollowUp(
+            job_id=job.id,
+            stage=Stage.cv_adjust,
+            question="First question",
+            answer="First answer",
+            answered_at=datetime.utcnow(),
+        )
+        session.add(fu1)
+        await session.commit()
+
+        # Insert open FollowUp2
+        fu2 = FollowUp(
+            job_id=job.id,
+            stage=Stage.cv_adjust,
+            question="Second question",
+            answer=None,
+            answered_at=None,
+        )
+        session.add(fu2)
+        await session.commit()
+
+        # Confirm not runnable while fu2 is still open
+        runnable = await repo.list_runnable_jobs(session)
+        assert len(runnable) == 0, "Job must not be runnable before fu2 is answered"
+
+        # User answers fu2
+        fu2.answer = "Second answer"
+        fu2.answered_at = datetime.utcnow()
+        await session.commit()
+
+        # Now both FollowUps are answered — job should become runnable
+        runnable = await repo.list_runnable_jobs(session)
+        assert len(runnable) == 1, "Job must be runnable once all FollowUps are answered"
+        assert runnable[0].id == job.id
+
 
 # ---------------------------------------------------------------------------
 # mark_failed tests
@@ -539,6 +622,45 @@ class TestCheckpoint:
             # messages not passed
         )
         assert job.state == JobState.cv_done
+
+    async def test_checkpoint_replaces_stale_open_followup(self, session):
+        """BF-8 Fix 2: if an open FollowUp already exists for (job_id, stage), checkpoint
+        must delete it before inserting the new one — no IntegrityError should be raised."""
+        job = await _insert_job(session, job_id="aaaa000000000001")
+        job.state = JobState.running
+        job.current_stage = Stage.cv_adjust
+        await session.commit()
+
+        # Simulate a stale open FollowUp left by a previous failed run
+        stale_fu = FollowUp(
+            job_id=job.id,
+            stage=Stage.cv_adjust,
+            question="old question",
+            answer=None,
+            answered_at=None,
+        )
+        session.add(stale_fu)
+        await session.commit()
+
+        # This checkpoint should succeed without raising IntegrityError
+        await repo.checkpoint(
+            session,
+            job,
+            new_state=JobState.awaiting_input,
+            new_stage=Stage.cv_adjust,
+            follow_up={"stage": Stage.cv_adjust, "question": "new question"},
+        )
+
+        # There must be exactly ONE open FollowUp for this job (the new one)
+        open_fus = await repo.get_follow_ups(session, job.id, answered=False)
+        assert len(open_fus) == 1, "Expected exactly one open FollowUp after checkpoint"
+        assert open_fus[0].question == "new question", (
+            "The stale FollowUp should have been replaced by the new one"
+        )
+
+        # The total FollowUp count must also be 1 (stale row was deleted, not kept)
+        all_fus = await repo.get_follow_ups(session, job.id)
+        assert len(all_fus) == 1, "Stale FollowUp must be deleted, not merely shadowed"
 
 
 # ---------------------------------------------------------------------------
