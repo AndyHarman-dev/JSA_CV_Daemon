@@ -41,10 +41,28 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
   **Fix 2** — `checkpoint` insert-FollowUp path (the `else` branch at ~line 223): before `session.add(fu)`, execute `DELETE FROM follow_ups WHERE job_id=? AND stage=? AND answered_at IS NULL` to purge any stale open FollowUp atomically within the same transaction.
   Both changes are confined to `jsa/db/repo.py`.
 
-- [x] Phase BF-9: CV revision resumes wrong CLI session — critical data-corruption bug. After both stages complete, `job.session_external_id` holds the **cover_letter** session UUID (the last one set). When `revising_cv` runs, `stages.py` calls `backend.restore_session(history, job.session_external_id)` — both `ClaudeCliBackend` and `GeminiCliBackend` ignore `history` and pass `external_id` directly to `claude --resume` / `gemini --resume`. Result: the AI continues the cover-letter conversation and produces cover-letter text, which gets stored as the `cv_adjust` document. The user sees cover-letter content in the CV section.
+- [x] Phase BF-9:
+- [x] Phase BF-10: Revision stages (`revising_cv`, `revising_cl`) have no `awaiting_input` resume path. When the agent asks a follow-up mid-revision and the user answers, `run_stage` re-runs `revising_cl` but always takes the "fresh revision" path — it re-loads the original stage history, fetches the (still unconsumed) `RevisionRequest` instruction, and re-sends the original instruction. The agent sees the same instruction, produces another NEED_INPUT "here's the draft, finalize?" — infinite loop.
+  **Root cause**: Lines 71-91 of `stages.py` have NO discriminator for fresh-vs-resume, unlike the `cv_adjust`/`cover_letter` branch (lines 92-116) which checks `_load_history(session, job.id, stage)`. Because NEED_INPUT messages during a revision are stored with `message_stage = job.current_stage = Stage.revising_cl`, checking `_load_history(session, job.id, stage)` (where `stage = Stage.revising_cl`) correctly distinguishes fresh (empty) from resume (non-empty).
+  **Fix** — single-file change to `stages.py`: Split the revision branch into fresh vs resume. Fresh: existing logic (get revision instruction, send it). Resume: get the user's latest answer via `_get_latest_answer(session, job.id, stage)`, restore session with combined history (`original_history + revision_turns`) for API backends (CLI backends ignore history), send the answer. Exact structure:
+  ```python
+  revision_turns = await _load_history(session, job.id, stage)
+  if revision_turns:
+      # Resume path: answer a follow-up within the revision
+      answer_text = await _get_latest_answer(session, job.id, stage)
+      original_history = await _load_history(session, job.id, original_stage)
+      combined_history = original_history + revision_turns
+      handle = await backend.restore_session(system_prompt, combined_history, revision_session_id)
+      reply = await backend.send_message(handle, answer_text)
+      accumulated_messages = [{"role": "user", "content": answer_text}, {"role": "assistant", "content": reply.raw}]
+  else:
+      # Fresh revision path: existing logic
+      ...
+  ``` CV revision resumes wrong CLI session — critical data-corruption bug. After both stages complete, `job.session_external_id` holds the **cover_letter** session UUID (the last one set). When `revising_cv` runs, `stages.py` calls `backend.restore_session(history, job.session_external_id)` — both `ClaudeCliBackend` and `GeminiCliBackend` ignore `history` and pass `external_id` directly to `claude --resume` / `gemini --resume`. Result: the AI continues the cover-letter conversation and produces cover-letter text, which gets stored as the `cv_adjust` document. The user sees cover-letter content in the CV section.
   **Fix**: Add `cv_session_id` and `cl_session_id` columns to `Job` (both `VARCHAR(128) nullable`). In `stages.py`, after a handle is obtained for `cv_adjust`, set `job.cv_session_id = handle.external_id`; likewise `cl_session_id` for `cover_letter`. In the revision path, pass `job.cv_session_id` for `revising_cv` and `job.cl_session_id` for `revising_cl` to `restore_session` instead of `job.session_external_id`. `session_external_id` continues to be updated as before (needed for `awaiting_input` resume). DB migration: in `init_db` (engine.py), after `create_all`, run `ALTER TABLE jobs ADD COLUMN cv_session_id VARCHAR(128)` and `ALTER TABLE jobs ADD COLUMN cl_session_id VARCHAR(128)` wrapped in try/except (SQLite ignores "duplicate column" errors). Legacy jobs in `review` state before this fix will have both columns NULL → revision will hit a backend `RuntimeError` (already raises "external_id is None") — this is acceptable and better than silent corruption.
 
 ## Change log
 2026-05-27 — Rewrote plan for bugfix wave 2. Removed all completed phases (1–12, BF-1–3). Added BF-4 (start_session nudge-retry), BF-5 (LogEvent publishing), BF-6 (Cancel button for running jobs), BF-7 (Gemini pty stuck).
 2026-05-28 — Added BF-8: duplicate open FollowUp UNIQUE constraint crash on multi-turn NEED_INPUT and failed-job reset.
 2026-05-28 — Added BF-9: CV/CL revision resumes wrong CLI session causing cover-letter content to appear in CV section.
+2026-05-28 — Added BF-10: Revision stages have no awaiting_input resume path — infinite NEED_INPUT loop.

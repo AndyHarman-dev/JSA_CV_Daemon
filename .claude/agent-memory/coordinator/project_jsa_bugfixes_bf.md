@@ -1,9 +1,19 @@
 ---
 name: project-jsa-bugfixes-bf
-description: BF-1 through BF-9 bugfix phases — dismiss, JD tab, timeout, prompts, Gemini rewrite, cancel button, LogEvent publishing, FollowUp uniqueness, revision wrong-session
+description: BF-1 through BF-10 bugfix phases — dismiss, JD tab, timeout, prompts, Gemini rewrite, cancel button, LogEvent publishing, FollowUp uniqueness, revision wrong-session, revision infinite loop
 metadata:
   type: project
 ---
+
+## BF-10 Revision stages had no awaiting_input resume path (complete — 2026-05-28)
+
+- **Root cause**: `run_stage`'s `revising_cv`/`revising_cl` branch always executed the "fresh revision" path — it re-fetched the unconsumed `RevisionRequest` instruction and re-sent it. No discriminator existed for "resume after mid-revision awaiting_input". When the agent asked a follow-up ("here's the draft, finalize?") and the user answered, the orchestrator re-ran `revising_cl`, re-sent the original instruction, the agent produced another NEED_INPUT → infinite loop.
+- **Fix**: Added `_get_revision_request(session, job_id) -> RevisionRequest` helper (returns full ORM object with `instruction` and `created_at`). Added `_is_revision_resume(session, job_id, stage, revision_created_at) -> bool` — checks for `FollowUp.stage == stage AND answered_at IS NOT NULL AND answered_at > revision_created_at`. Resume path: loads combined history (`original_history + revision_turns`) for Anthropic API, sends user's answer. Fresh path: unchanged.
+- **Discriminator design**: `_load_history(stage)` (naive check) would fail for second fresh revisions — old Message rows from completed prior revisions would erroneously trigger the resume path. Timestamp-based discriminator is correct: old FollowUps from completed revisions have `answered_at < new RevisionRequest.created_at`, so only in-flight revision FollowUps trigger resume.
+- **Dead code**: Removed `_get_revision_instruction` (old string-only helper, replaced by `_get_revision_request`).
+- **Tests**: 4 tests in `test_bf10_revision_resume.py` using `TrackingFakeBackend` that records `send_message_calls`. Critical discriminating assertion: `send_message_calls[1] == user_answer` (not the revision instruction). 4th test covers the boundary case: first revision parks, completes, second fresh revision starts — discriminator returns False correctly. 592 total tests pass.
+
+**Recurring pattern**: The revision code paths in `stages.py` are a recurring source of bugs because they're structurally different from the `cv_adjust`/`cover_letter` branches. BF-9 missed the awaiting_input sub-path; BF-10 was that missing sub-path. Any future change to `cv_adjust`/`cover_letter` resume logic should be mirrored in the revision branch and vice versa.
 
 ## BF-9 CV/CL revision resumes wrong CLI session (complete — 2026-05-28)
 
