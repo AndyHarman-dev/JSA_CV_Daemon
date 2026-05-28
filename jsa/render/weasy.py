@@ -31,9 +31,11 @@ class WeasyPrintRenderer(Renderer):
 
             # Convert Markdown → HTML with table and strikethrough extensions.
             md = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
-            # Strip any raw HTML tags the model may have emitted (e.g. <div align="center">).
-            # With html=False these would render as visible escaped text in the PDF.
-            clean_markdown = re.sub(r'<[^>]+>', '', markdown)
+            # Strip HTML tags (e.g. <div align="center">) while preserving CommonMark
+            # autolinks (<email@x.com>, <https://...>) and prose comparisons (<2%).
+            # A valid HTML tag starts with a letter (or / + letter for closing), which
+            # disambiguates it from autolinks (contain @ or :) and numeric comparisons.
+            clean_markdown = re.sub(r'</?[a-zA-Z][a-zA-Z0-9-]*(\s[^>]*)?\s*/?>', '', markdown)
             body_html = md.render(clean_markdown)
 
             # Build HTML shell using str.replace to avoid .format() KeyError on CSS with {}.
