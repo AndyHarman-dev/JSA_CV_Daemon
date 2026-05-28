@@ -110,7 +110,7 @@ export function JobDetail() {
               });
             }}
           >
-            {deleting ? "Deleting…" : "Cancel"}
+            {deleting ? "Deleting…" : "Delete"}
           </button>
         )}
         {showDismiss && (
