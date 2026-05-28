@@ -27,6 +27,7 @@ from jsa.db.models import (
 from jsa.events.bus import bus
 from jsa.events.schema import (
     FollowUpNeededEvent,
+    LogEvent,
     StageCompleteEvent,
     StatusChangedEvent,
     event_to_dict,
@@ -62,6 +63,10 @@ async def run_stage(
     On NEED_INPUT: writes FollowUp + Messages + transitions to awaiting_input, raises PausedForInput.
     """
     system_prompt = _get_system_prompt(stage)
+
+    await bus.publish(
+        event_to_dict(LogEvent(job_id=job.id, level="info", text=f"Starting stage: {stage.value}"))
+    )
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
         # Revision path: restore session with history from the original stage
@@ -128,6 +133,9 @@ async def run_stage(
         )
         fu = fu_result.scalar_one()
         await bus.publish(
+            event_to_dict(LogEvent(job_id=job.id, level="info", text=f"Stage {stage.value}: NEED_INPUT — agent is asking for input"))
+        )
+        await bus.publish(
             event_to_dict(
                 FollowUpNeededEvent(
                     job_id=job.id,
@@ -149,6 +157,11 @@ async def run_stage(
         reply=reply,
         accumulated_messages=accumulated_messages,
     )
+
+    await bus.publish(
+        event_to_dict(LogEvent(job_id=job.id, level="info", text=f"Stage {stage.value}: FINAL received"))
+    )
+
     # Publish stage-completion events after a successful FINAL checkpoint.
     # `job.state` has been mutated by transition() inside _handle_final.
     if stage == Stage.cv_adjust:

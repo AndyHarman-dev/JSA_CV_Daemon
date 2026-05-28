@@ -13,7 +13,7 @@ from jsa.agents.base import AgentBackend
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
 from jsa.events.bus import bus
-from jsa.events.schema import StatusChangedEvent, event_to_dict
+from jsa.events.schema import ErrorEvent, LogEvent, StatusChangedEvent, event_to_dict
 from jsa.pipeline import stages
 from jsa.pipeline.stages import PausedForInput
 from jsa.pipeline.state_machine import transition
@@ -117,12 +117,30 @@ class Orchestrator:
                     logger.error(
                         "Failed to transition job %s to running: %s", job.id, exc
                     )
+                    await bus.publish(
+                        event_to_dict(
+                            LogEvent(
+                                job_id=job.id,
+                                level="warn",
+                                text=f"Failed to start {stage.value}: {exc}",
+                            )
+                        )
+                    )
                     self.sem.release()
                     continue
 
                 # Publish status change AFTER the DB commit so the UI fetches
                 # consistent data.  `job.state` is the pre-transition state
                 # (from list_runnable_jobs); the new state is always `running`.
+                await bus.publish(
+                    event_to_dict(
+                        LogEvent(
+                            job_id=job.id,
+                            level="info",
+                            text=f"Picked up: starting {stage.value}",
+                        )
+                    )
+                )
                 await bus.publish(
                     event_to_dict(
                         StatusChangedEvent(
@@ -181,6 +199,13 @@ class Orchestrator:
                 async with self._db_session_factory() as err_session:
                     await err_session.rollback()
                     await repo.mark_failed(err_session, job_id, str(exc))
+                # Publish after commit so the UI fetches consistent data
+                await bus.publish(
+                    event_to_dict(LogEvent(job_id=job_id, level="error", text=str(exc)))
+                )
+                await bus.publish(
+                    event_to_dict(ErrorEvent(job_id=job_id, message=str(exc)))
+                )
             except Exception as inner_exc:
                 logger.error(
                     "_run_one: failed to mark job %s as failed: %s",
