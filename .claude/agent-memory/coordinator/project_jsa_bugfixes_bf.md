@@ -1,6 +1,6 @@
 ---
 name: project-jsa-bugfixes-bf
-description: BF-1/BF-2/BF-3/BF-4/BF-5 bugfix phases — dismiss state, JD tab, timeout, prompt fixes, Gemini subprocess rewrite
+description: BF-1 through BF-7 bugfix phases — dismiss, JD tab, timeout, prompts, Gemini rewrite, cancel button, LogEvent publishing
 metadata:
   type: project
 ---
@@ -31,6 +31,22 @@ metadata:
 - **Tests**: `tests/backend/test_claude_cli_nudge.py` — 29 tests, `ScriptedClaudeBackend` subclass test double (no mocks).
 
 **Why:** First reply from Claude CLI on large CV tasks sometimes omitted the sentinel. Without the fallback in `start_session`, the job went straight to `failed` with no recovery opportunity.
+
+## BF-7 LogEvent/ErrorEvent publishing (complete — 2026-05-27)
+
+- **Root cause**: `LogEvent`/`ErrorEvent` existed in schema but were never published. Frontend LogTail was always empty.
+- **Fix**: 6 publish points in `orchestrator.py` (A: job pickup, B: failed transition, C: _run_one exception) and `stages.py` (D: stage entry, E: FINAL received, F: NEED_INPUT before FollowUpNeededEvent).
+- **Ordering guarantee**: LogEvent before StatusChangedEvent at A and E; LogEvent before FollowUpNeededEvent at F. Tested with ordering assertions.
+- **Exception at C**: `mark_failed` publishes `StatusChangedEvent(running→failed)` internally; then orchestrator publishes `LogEvent(error)` + `ErrorEvent`. Order at C is: StatusChanged → LogEvent → ErrorEvent (asymmetric from A/E by design — mark_failed is internal).
+- **Tests**: `test_log_events_bf7.py` — 23 tests covering all 6 points, presence, job_id, level, text content, ordering. 582 total tests pass.
+
+**Why:** LogTail was a working frontend feature with no backend data. Milestones chosen to show meaningful progress without noise.
+
+## BF-6 Cancel button for running jobs (complete — 2026-05-27)
+
+- **Fix**: `POST /api/jobs/{id}/cancel` (running → pending, StatusChangedEvent, orchestrator.kick()); `api.cancel(id)` frontend; Cancel button (amber) in JobDetail visible only when `state === "running"`.
+- **Caveat**: Cancel is best-effort for in-flight agent turns. The orchestrator holds in-memory Job for duration of agent call; completing checkpoint can overwrite pending. Documented in route docstring. Hard-stop requires orchestrator-level task cancellation.
+- **Tests**: `test_cancel_bf6.py` (12) + `cancel_bf6.test.tsx` (11). 559 backend + 166 frontend.
 
 ## BF-5 GeminiCliBackend subprocess rewrite (complete — 2026-05-27)
 
