@@ -54,6 +54,12 @@ export const api = {
     });
   },
 
+  cancel(id: string): Promise<FullJobDTO> {
+    return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    });
+  },
+
   getDocument(
     id: string,
     stage: Stage,

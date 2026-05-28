@@ -366,6 +366,45 @@ async def dismiss_job(request: Request, job_id: str):
     return job_dict
 
 
+@router.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(request: Request, job_id: str):
+    """Cancel a running job — transitions running → pending and kicks the orchestrator."""
+    sf = _session_factory(request)
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.running:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'running'",
+            )
+
+        prev_state = job.state.value
+        await repo.checkpoint(session, job, JobState.pending, new_stage=None)
+
+    # Re-fetch with relationships after checkpoint
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        job_dict = _job_to_dict(job, full=True)
+
+    await bus.publish(
+        event_to_dict(
+            StatusChangedEvent(
+                job_id=job_id,
+                from_state=prev_state,
+                to_state=JobState.pending.value,
+            )
+        )
+    )
+
+    request.app.state.orchestrator.kick()
+
+    return job_dict
+
+
 @router.post("/api/jobs/{job_id}/reset")
 async def reset_job(request: Request, job_id: str):
     """Reset a failed job back to pending."""

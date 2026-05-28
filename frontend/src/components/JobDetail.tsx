@@ -20,6 +20,8 @@ export function JobDetail() {
   );
   const refetchAll = useStore((s) => s.refetchAll);
 
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
   const [requeuing, setRequeuing] = useState(false);
@@ -32,6 +34,20 @@ export function JobDetail() {
         ← Select a job
       </div>
     );
+  }
+
+  async function handleCancel() {
+    if (!job) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await api.cancel(job.id);
+      await refetchAll();
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCancelling(false);
+    }
   }
 
   async function handleDismiss() {
@@ -62,6 +78,7 @@ export function JobDetail() {
     }
   }
 
+  const showCancel = job.state === "running";
   const showDismiss = job.state !== "approved" && job.state !== "dismissed";
   const showRequeue = job.state === "dismissed";
 
@@ -80,6 +97,20 @@ export function JobDetail() {
           Tier {job.tier}
         </span>
         <StatusBadge state={job.state} />
+        {showCancel && (
+          <button
+            type="button"
+            className="text-sm px-3 py-1 rounded border border-amber-400 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+            disabled={cancelling}
+            onClick={() => {
+              handleCancel().catch((err: unknown) => {
+                console.error("JobDetail cancel error:", err);
+              });
+            }}
+          >
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
+        )}
         {showDismiss && (
           <button
             type="button"
@@ -114,6 +145,9 @@ export function JobDetail() {
       )}
       {requeueError && (
         <p className="text-sm text-red-600">{requeueError}</p>
+      )}
+      {cancelError && (
+        <p className="text-sm text-red-600">{cancelError}</p>
       )}
 
       {/* Stage timeline */}
