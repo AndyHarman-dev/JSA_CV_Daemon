@@ -409,24 +409,6 @@ async def _load_history(
     return [HistoryTurn(role=m.role, content=m.content) for m in messages]  # type: ignore[arg-type]
 
 
-async def _get_revision_instruction(
-    session: AsyncSession,
-    job_id: str,
-) -> str:
-    """Return the instruction text from the unconsumed RevisionRequest for this job."""
-    stmt = (
-        select(RevisionRequest)
-        .where(
-            RevisionRequest.job_id == job_id,
-            RevisionRequest.consumed_at.is_(None),
-        )
-    )
-    result = await session.execute(stmt)
-    rev = result.scalar_one_or_none()
-    if rev is None:
-        raise ValueError(f"No unconsumed RevisionRequest found for job {job_id}")
-    return rev.instruction
-
 
 async def _get_latest_answer(
     session: AsyncSession,
