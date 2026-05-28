@@ -168,9 +168,3 @@ curl http://localhost:8765/api/jobs        # should return []
 cd frontend && npm run dev
 # Open http://localhost:5173 in a browser
 ```
-
----
-
-## Change log
-2026-05-23 — Initial conventions document. Covers sentinel protocol, state transitions, checkpoint rule, backend registration, prompt files, testing conventions, renderer invocation, async discipline, job identity, and port config.
-2026-05-23 — Added "How to test a phase" section with step-by-step commands for backend tests, frontend tests, CLI smoke tests, and server smoke tests.

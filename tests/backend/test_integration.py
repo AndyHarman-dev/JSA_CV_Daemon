@@ -633,6 +633,9 @@ class TestRevisionFlow:
             # Message history for cv_adjust stage (required by restore_session)
             s.add(Message(job_id=job_id, stage=Stage.cv_adjust, role="user", content="Initial CV"))
             s.add(Message(job_id=job_id, stage=Stage.cv_adjust, role="assistant", content="# Original CV"))
+            # Set per-stage session IDs so the BF-9 null-session guard does not fire.
+            job.cv_session_id = "fake-session-cv-123"
+            job.cl_session_id = "fake-session-cl-123"
             await s.commit()
 
         async with session_factory() as s:

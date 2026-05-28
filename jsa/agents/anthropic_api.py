@@ -24,7 +24,7 @@ class AnthropicAPIBackend(AgentBackend):
 
     name = "anthropic"
 
-    def __init__(self, model: str = "claude-opus-4-7", timeout: float = 180.0) -> None:
+    def __init__(self, model: str = "claude-haiku-4-5", timeout: float = 180.0) -> None:
         self._model = model
         self._timeout = timeout
 
