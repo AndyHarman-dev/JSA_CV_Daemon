@@ -19,6 +19,7 @@ export function JobDetail() {
     s.selectedId !== undefined ? s.jobs[s.selectedId] : undefined
   );
   const refetchAll = useStore((s) => s.refetchAll);
+  const removeJob = useStore((s) => s.removeJob);
 
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -43,7 +44,7 @@ export function JobDetail() {
     setDeleteError(null);
     try {
       await api.deleteJob(job.id);
-      await refetchAll();
+      removeJob(job.id);  // immediately remove from store; WS job_removed event is a no-op
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : String(err));
     } finally {
