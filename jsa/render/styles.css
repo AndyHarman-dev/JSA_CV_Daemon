@@ -28,3 +28,5 @@ a { color: #0066cc; }
 hr { border: none; border-top: 1px solid #ccc; margin: 12pt 0; }
 
 del { text-decoration: line-through; color: #666; }
+
+[align="center"] { text-align: center; }
