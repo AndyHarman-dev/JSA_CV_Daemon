@@ -1,7 +1,7 @@
 """Repository functions: get_job, list_jobs, upsert_job, checkpoint, etc."""
 
 from datetime import datetime
-from sqlalchemy import select, or_, exists, update
+from sqlalchemy import select, or_, exists, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.db.models import Job, Message, Document, FollowUp, RevisionRequest, JobState, Stage
@@ -92,6 +92,18 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
         .exists()
     )
 
+    # Condition 3b: no open (unanswered) follow-up still pending for this stage
+    no_open_followup = ~(
+        select(FollowUp.id)
+        .where(
+            FollowUp.job_id == Job.id,
+            FollowUp.stage == Job.current_stage,
+            FollowUp.answered_at.is_(None),
+        )
+        .correlate(Job)
+        .exists()
+    )
+
     # Condition 4: review with an unconsumed revision request
     unconsumed_revision = (
         select(RevisionRequest.id)
@@ -109,7 +121,7 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
             or_(
                 Job.state == JobState.pending,
                 Job.state == JobState.cv_done,
-                (Job.state == JobState.awaiting_input) & answered_followup,
+                (Job.state == JobState.awaiting_input) & answered_followup & no_open_followup,
                 (Job.state == JobState.review) & unconsumed_revision,
             )
         )
@@ -221,6 +233,16 @@ async def checkpoint(
                 )
             )
         else:
+            # Delete any stale open FollowUp for this (job, stage) before inserting,
+            # so a reset-from-failed job or a re-run doesn't hit the partial unique index.
+            await session.execute(
+                delete(FollowUp)
+                .where(
+                    FollowUp.job_id == job.id,
+                    FollowUp.stage == follow_up["stage"],
+                    FollowUp.answered_at.is_(None),
+                )
+            )
             # Insert new FollowUp
             fu = FollowUp(
                 job_id=job.id,
