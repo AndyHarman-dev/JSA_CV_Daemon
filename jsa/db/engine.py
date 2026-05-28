@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from jsa.db.models import Base
@@ -27,7 +28,7 @@ async def init_db(engine) -> None:
         for col in ("cv_session_id", "cl_session_id"):
             try:
                 await conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {col} VARCHAR(128)"))
-            except Exception:
+            except OperationalError:
                 pass  # column already exists — safe to ignore
 
 

@@ -77,6 +77,11 @@ async def run_stage(
         history = await _load_history(session, job.id, original_stage)
         instruction = await _get_revision_instruction(session, job.id)
         revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
+        if revision_session_id is None:
+            raise ValueError(
+                f"Cannot resume revision for {stage.value}: per-stage session ID was not "
+                f"recorded (job predates BF-9 fix). Reset the job to re-run from scratch."
+            )
         handle = await backend.restore_session(system_prompt, history, revision_session_id)
         reply = await backend.send_message(handle, instruction)
         # Only the new turns (user instruction + assistant reply) are new
