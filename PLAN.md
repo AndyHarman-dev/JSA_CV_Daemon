@@ -34,7 +34,7 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 ## Open questions
 - BF-7: Does the `gemini` CLI installed on this machine support a non-interactive flag? (Coder should run `gemini --help` as the first step of that phase.)
 
-- [~] Phase BF-8: Duplicate open FollowUp → UNIQUE constraint crash on re-run — Two bugs in `jsa/db/repo.py` combine to crash jobs at NEED_INPUT when a job has been processed before.
+- [x] Phase BF-8: Duplicate open FollowUp → UNIQUE constraint crash on re-run — Two bugs in `jsa/db/repo.py` combine to crash jobs at NEED_INPUT when a job has been processed before.
   **Bug 1** (`list_runnable_jobs`): condition 3 only checks that an answered FollowUp exists for `current_stage`, but does NOT check that no open (unanswered) FollowUp also exists. When a multi-turn NEED_INPUT cycle occurs (user answers → agent asks again → second open FollowUp committed), the old answered FollowUp makes the job appear runnable immediately, the orchestrator re-dispatches it, the agent returns NEED_INPUT again, and `checkpoint` tries to INSERT a third open FollowUp — blocked by the partial unique index.
   **Bug 2** (`checkpoint` insert path): When a job is reset `failed → pending` (by `upsert_job` on startup), stale open FollowUps are left in the DB. The next run's NEED_INPUT checkpoint tries to INSERT a new open FollowUp → same UNIQUE constraint failure.
   **Fix 1** — `list_runnable_jobs` condition 3: add a `no_open_followup` negation subquery on `(job_id, current_stage, answered_at IS NULL)` AND'd with `answered_followup`.

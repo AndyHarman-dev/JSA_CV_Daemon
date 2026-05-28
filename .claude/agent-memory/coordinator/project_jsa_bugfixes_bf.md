@@ -1,6 +1,6 @@
 ---
 name: project-jsa-bugfixes-bf
-description: BF-1 through BF-7 bugfix phases — dismiss, JD tab, timeout, prompts, Gemini rewrite, cancel button, LogEvent publishing
+description: BF-1 through BF-8 bugfix phases — dismiss, JD tab, timeout, prompts, Gemini rewrite, cancel button, LogEvent publishing, FollowUp uniqueness
 metadata:
   type: project
 ---
@@ -20,6 +20,17 @@ metadata:
 - **ReviewPane**: `useEffect([jobId])` — do NOT add `state` to dep array. It would cause a "Loading…" flash on approve. State change on revision is handled by unmount/remount of ReviewPane when job goes running→review.
 
 **Why:** Revert from `[jobId, state]` dep — the revision case uses unmount/remount anyway (JobDetail conditionally renders ReviewPane only for review/approved).
+
+## BF-8 Duplicate open FollowUp UNIQUE constraint crash (complete — 2026-05-28)
+
+- **Root cause (Bug 1)**: `list_runnable_jobs` condition 3 only checked for any answered FollowUp for `current_stage`, but did NOT check whether an open (unanswered) FollowUp also existed. Multi-turn NEED_INPUT cycles (user answers → agent asks again → FollowUp2 committed open) caused the job to be returned as runnable when it shouldn't be, leading to a re-run that hit the partial unique index `uq_followup_open`.
+- **Root cause (Bug 2)**: When a job is reset `failed → pending` by `upsert_job`, stale open FollowUps remain. The next run's checkpoint tried to INSERT over them → same UNIQUE constraint.
+- **Fix 1**: Added `no_open_followup = ~(select(FollowUp.id).where(... answered_at IS NULL ...).exists())` subquery to `list_runnable_jobs` condition 3. Condition now: `answered_followup & no_open_followup`.
+- **Fix 2**: In `checkpoint` insert-FollowUp path, added `DELETE FROM follow_ups WHERE job_id=? AND stage=? AND answered_at IS NULL` before the INSERT. Atomic within same transaction.
+- **Tests**: 3 new tests in `test_db_repo.py` — awaiting_input not runnable with open FollowUp, becomes runnable only after all answered, checkpoint replaces stale open FollowUp. 52 total tests in that file.
+- **Symptom**: `sqlite3.IntegrityError: UNIQUE constraint failed: follow_ups.job_id, follow_ups.stage` at cover_letter/cv_adjust stage when running with `--backend gemini` after previous runs left jobs with open FollowUps.
+
+**Why:** The gemini agent's conversational multi-turn style (asking a clarifying question, getting an answer, then asking another question) triggers this more frequently than Claude CLI's typical one-shot NEED_INPUT. The fix is correct for all backends.
 
 ## BF-4 `start_session` nudge-retry (complete — 2026-05-27)
 
