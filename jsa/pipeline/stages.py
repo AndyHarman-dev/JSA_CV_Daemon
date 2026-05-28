@@ -56,8 +56,8 @@ async def run_stage(
 
     Handles:
     - Fresh sessions: cv_adjust (from pending) and cover_letter (from cv_done)
-    - Resumed sessions: awaiting_input resume (send answer)
-    - Revision sessions: revising_cv and revising_cl
+    - Resumed sessions: awaiting_input resume (send answer) — cv_adjust, cover_letter, and revision stages
+    - Revision sessions: revising_cv and revising_cl (fresh revision from review state)
 
     On FINAL: writes Document + Messages + transitions to next state atomically.
     On NEED_INPUT: writes FollowUp + Messages + transitions to awaiting_input, raises PausedForInput.
@@ -69,26 +69,60 @@ async def run_stage(
     )
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
-        # Revision path: restore session with history from the original stage.
-        # Use the per-stage session ID so we resume the correct conversation
-        # (not the most-recently-stored session_external_id, which may belong
-        # to a different stage).
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
-        history = await _load_history(session, job.id, original_stage)
-        instruction = await _get_revision_instruction(session, job.id)
         revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
         if revision_session_id is None:
             raise ValueError(
                 f"Cannot resume revision for {stage.value}: per-stage session ID was not "
                 f"recorded (job predates BF-9 fix). Reset the job to re-run from scratch."
             )
-        handle = await backend.restore_session(system_prompt, history, revision_session_id)
-        reply = await backend.send_message(handle, instruction)
-        # Only the new turns (user instruction + assistant reply) are new
-        accumulated_messages = [
-            {"role": "user", "content": instruction},
-            {"role": "assistant", "content": reply.raw},
-        ]
+
+        # Fetch the unconsumed RevisionRequest — needed for its instruction (fresh path)
+        # and its created_at (discriminator).
+        rev_req = await _get_revision_request(session, job.id)
+
+        # Discriminate fresh revision vs resume after awaiting_input.
+        #
+        # The spec's original discriminator (_load_history non-empty) is insufficient
+        # because Message rows from prior completed revisions persist under the same
+        # stage enum value. The correct discriminator is:
+        #
+        #   Resume iff a FollowUp for this revision stage was answered AFTER the
+        #   current (unconsumed) RevisionRequest was created.
+        #
+        # This handles all cases correctly:
+        #   - Fresh 1st revision: no FollowUp at all → fresh
+        #   - Mid-revision park then resume: FollowUp.answered_at > RevReq.created_at → resume
+        #   - Fresh 2nd revision: any old FollowUp.answered_at < RevReq.created_at → fresh
+        #   - 2nd revision parks then resumes: new FollowUp.answered_at > new RevReq.created_at → resume
+        is_resume = await _is_revision_resume(session, job.id, stage, rev_req.created_at)
+
+        if is_resume:
+            # Resume: the user answered a follow-up question mid-revision.
+            # The CLI session already has the full context; just send the answer.
+            # For AnthropicAPIBackend (history-based), pass combined history so
+            # the model has the original cover-letter/CV context AND the revision turns.
+            revision_turns = await _load_history(session, job.id, stage)
+            answer_text = await _get_latest_answer(session, job.id, stage)
+            original_history = await _load_history(session, job.id, original_stage)
+            combined_history = original_history + revision_turns
+            handle = await backend.restore_session(system_prompt, combined_history, revision_session_id)
+            reply = await backend.send_message(handle, answer_text)
+            accumulated_messages = [
+                {"role": "user", "content": answer_text},
+                {"role": "assistant", "content": reply.raw},
+            ]
+        else:
+            # Fresh revision: restore the original stage's session and send the
+            # revision instruction.
+            history = await _load_history(session, job.id, original_stage)
+            instruction = rev_req.instruction
+            handle = await backend.restore_session(system_prompt, history, revision_session_id)
+            reply = await backend.send_message(handle, instruction)
+            accumulated_messages = [
+                {"role": "user", "content": instruction},
+                {"role": "assistant", "content": reply.raw},
+            ]
     elif stage in (Stage.cv_adjust, Stage.cover_letter):
         # Determine fresh vs resume by checking whether Message rows exist for
         # this job+stage.  The orchestrator already transitioned the job to
@@ -420,3 +454,50 @@ async def _get_latest_answer(
             f"FollowUp for job {job_id}, stage {stage} has no answer text"
         )
     return fu.answer
+
+
+async def _get_revision_request(
+    session: AsyncSession,
+    job_id: str,
+) -> RevisionRequest:
+    """Return the unconsumed RevisionRequest for this job, raising if absent."""
+    stmt = (
+        select(RevisionRequest)
+        .where(
+            RevisionRequest.job_id == job_id,
+            RevisionRequest.consumed_at.is_(None),
+        )
+    )
+    result = await session.execute(stmt)
+    rev = result.scalar_one_or_none()
+    if rev is None:
+        raise ValueError(f"No unconsumed RevisionRequest found for job {job_id}")
+    return rev
+
+
+async def _is_revision_resume(
+    session: AsyncSession,
+    job_id: str,
+    stage: Stage,
+    revision_created_at: datetime,
+) -> bool:
+    """Return True if this revision invocation is a resume after a mid-revision park.
+
+    A revision is a resume iff a FollowUp for this revision stage was answered
+    AFTER the current (unconsumed) RevisionRequest was created. This correctly
+    handles multiple sequential revisions: old FollowUp rows from completed
+    prior revisions have answered_at < current RevisionRequest.created_at and
+    therefore do not trigger the resume path.
+    """
+    stmt = (
+        select(FollowUp)
+        .where(
+            FollowUp.job_id == job_id,
+            FollowUp.stage == stage,
+            FollowUp.answered_at.is_not(None),
+            FollowUp.answered_at > revision_created_at,
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
