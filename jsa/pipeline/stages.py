@@ -69,11 +69,15 @@ async def run_stage(
     )
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
-        # Revision path: restore session with history from the original stage
+        # Revision path: restore session with history from the original stage.
+        # Use the per-stage session ID so we resume the correct conversation
+        # (not the most-recently-stored session_external_id, which may belong
+        # to a different stage).
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
         history = await _load_history(session, job.id, original_stage)
         instruction = await _get_revision_instruction(session, job.id)
-        handle = await backend.restore_session(system_prompt, history, job.session_external_id)
+        revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
+        handle = await backend.restore_session(system_prompt, history, revision_session_id)
         reply = await backend.send_message(handle, instruction)
         # Only the new turns (user instruction + assistant reply) are new
         accumulated_messages = [
@@ -110,6 +114,14 @@ async def run_stage(
 
     # Persist session_external_id while we have the handle in case we need to park
     job.session_external_id = handle.external_id
+
+    # Keep per-stage session IDs so revision can resume the correct conversation.
+    # Only set for the primary stages; do NOT overwrite during revising_* branches
+    # (revisions continue the original session, so the UUID stays the same).
+    if stage == Stage.cv_adjust:
+        job.cv_session_id = handle.external_id
+    elif stage == Stage.cover_letter:
+        job.cl_session_id = handle.external_id
 
     # Handle the reply
     if reply.kind == "needs_input":

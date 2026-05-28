@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from jsa.db.models import Base
@@ -21,6 +22,13 @@ async def init_db(engine) -> None:
     """Run create_all — creates tables if they don't exist. Safe to call on re-run."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add new columns to existing databases that predate this migration.
+        # SQLite raises OperationalError if the column already exists; safe to ignore.
+        for col in ("cv_session_id", "cl_session_id"):
+            try:
+                await conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {col} VARCHAR(128)"))
+            except Exception:
+                pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

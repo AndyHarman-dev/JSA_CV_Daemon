@@ -45,6 +45,8 @@ class Job(Base):
     state: Mapped[JobState] = mapped_column(SAEnum(JobState))
     current_stage: Mapped[Stage | None] = mapped_column(SAEnum(Stage), nullable=True)
     session_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # backend resume token
+    cv_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cv_adjust stage
+    cl_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cover_letter stage
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
