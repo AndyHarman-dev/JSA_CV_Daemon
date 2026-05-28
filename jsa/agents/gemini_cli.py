@@ -86,21 +86,20 @@ class GeminiCliBackend(AgentBackend):
 
         ctx = f" [{context}]" if context else ""
 
+        # Decode stderr once; log at the appropriate level based on exit code.
+        stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
         if result.returncode != 0:
-            stderr = result.stderr.decode("utf-8", errors="replace").strip()
-            if stderr:
-                logger.warning("gemini CLI stderr (exit %d): %s", result.returncode, stderr)
-
-        stderr_out = result.stderr.decode("utf-8", errors="replace").strip()
-        if stderr_out:
-            logger.debug("gemini CLI stderr: %s", stderr_out)
+            if stderr_text:
+                logger.warning("gemini CLI stderr (exit %d): %s", result.returncode, stderr_text)
+        else:
+            if stderr_text:
+                logger.debug("gemini CLI stderr: %s", stderr_text)
 
         stdout = result.stdout.decode("utf-8", errors="replace")
 
         if result.returncode != 0 and not stdout.strip():
             # Subprocess failed and produced no usable output — raise rather than
             # returning an empty dict that will cause a misleading KeyError.
-            stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
             # NOTE: The exact stderr string for session-not-found is TBD pending
             # real-CLI observation. Conservative check: both "session" and "not found"
             # (case-insensitive) present in stderr.

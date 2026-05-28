@@ -21,6 +21,17 @@ metadata:
 
 **Why:** Revert from `[jobId, state]` dep — the revision case uses unmount/remount anyway (JobDetail conditionally renders ReviewPane only for review/approved).
 
+## BF-4 `start_session` nudge-retry (complete — 2026-05-27)
+
+- **Root cause**: `ClaudeCliBackend.start_session` called bare `parse_reply(raw)` with no fallback. `send_message` already had a nudge-retry block; `start_session` was missing it.
+- **Fix**: Extracted shared `async _parse_with_nudge(session_id, raw) -> AgentReply` helper. Called from both `start_session` (passing the fresh `session_id` UUID) and `send_message` (passing `handle.external_id`). Nudge builds `--resume <session_id>` command.
+- **Reviewer note**: `"no sentinel block"` string is coupled to the exact error message wording in `protocol.py:42`. If that wording ever changes, the guard silently inverts. Future cleanup: export a named constant or subclass.
+- **Session-expired fix (second round)**: `_run` also now raises `ClaudeSessionExpiredError(ClaudeCliError)` when `returncode != 0 AND not stdout.strip()` + stderr contains "No conversation found". Otherwise raises `ClaudeCliError`. This prevents the misleading "no sentinel block" error when the real cause is a dead session. `context` param added to `_run` and threaded through all callers so session_id appears in the error message.
+- **Tests**: `FailingClaudeBackend` test double added; 5 tests covering session-expired, generic CLI error, stdout-present-no-raise, nudge-bypass, and start_session propagation. 486 total tests pass.
+- **Tests**: `tests/backend/test_claude_cli_nudge.py` — 29 tests, `ScriptedClaudeBackend` subclass test double (no mocks).
+
+**Why:** First reply from Claude CLI on large CV tasks sometimes omitted the sentinel. Without the fallback in `start_session`, the job went straight to `failed` with no recovery opportunity.
+
 ## BF-3 Prompt Fixes (complete — 2026-05-27)
 
 - **CVL_PROMPT.md**: STEP 4 delivers draft in plain text + ends with `<<<NEED_INPUT>>>` asking for changes or "finalize". STEP 5 sub-case B: on approval, copy full letter into `<<<FINAL>>>`. HARD RULE added: no "see above" in `<<<FINAL>>>`.
