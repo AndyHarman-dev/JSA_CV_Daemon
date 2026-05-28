@@ -97,7 +97,7 @@ Only after the user approves the strategy:
 
    **Format preservation rules** (in addition to ATS-safe rules):
    - Replicate the original CV's visual layout as faithfully as Markdown allows:
-     - Centred elements (name, contact block): use `<div align="center">…</div>` HTML in the Markdown.
+     - Centred elements (name, contact block): use a top-level Markdown heading (`# Name`) — the PDF stylesheet centres `h1` automatically. Do NOT use raw HTML tags (`<div>`, `<p>`, `<span>`, etc.) anywhere in the output.
      - Bold section dividers: use `---` horizontal rules only where the original had visual separators.
      - If the original used a two-column layout: linearise to a single column (required for ATS) and note it in the Change Log.
    - Apply ATS formatting rules (single-column, no tables, standard headings, etc.) for structural elements only. Do NOT change visual styling (font-size representation via heading level, alignment, spacing) unless it conflicts with ATS parseability. If you must change a visual style element for ATS reasons, note it in the Change Log.

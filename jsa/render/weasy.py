@@ -1,6 +1,7 @@
 """WeasyPrintRenderer: Markdown -> HTML -> PDF via WeasyPrint."""
 
 import asyncio
+import re
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -30,7 +31,10 @@ class WeasyPrintRenderer(Renderer):
 
             # Convert Markdown → HTML with table and strikethrough extensions.
             md = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
-            body_html = md.render(markdown)
+            # Strip any raw HTML tags the model may have emitted (e.g. <div align="center">).
+            # With html=False these would render as visible escaped text in the PDF.
+            clean_markdown = re.sub(r'<[^>]+>', '', markdown)
+            body_html = md.render(clean_markdown)
 
             # Build HTML shell using str.replace to avoid .format() KeyError on CSS with {}.
             html_string = (

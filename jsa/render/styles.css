@@ -10,7 +10,7 @@ body {
     color: #000;
 }
 
-h1 { font-size: 18pt; margin-bottom: 4pt; }
+h1 { font-size: 18pt; margin-bottom: 4pt; text-align: center; }
 h2 { font-size: 14pt; margin-top: 12pt; margin-bottom: 4pt; }
 h3 { font-size: 12pt; margin-top: 8pt; margin-bottom: 2pt; }
 
