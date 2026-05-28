@@ -1,9 +1,21 @@
 ---
 name: project-jsa-bugfixes-bf
-description: BF-1 through BF-8 bugfix phases — dismiss, JD tab, timeout, prompts, Gemini rewrite, cancel button, LogEvent publishing, FollowUp uniqueness
+description: BF-1 through BF-9 bugfix phases — dismiss, JD tab, timeout, prompts, Gemini rewrite, cancel button, LogEvent publishing, FollowUp uniqueness, revision wrong-session
 metadata:
   type: project
 ---
+
+## BF-9 CV/CL revision resumes wrong CLI session (complete — 2026-05-28)
+
+- **Root cause**: `job.session_external_id` is always overwritten by the most-recent stage's session UUID. After both stages complete, it holds the cover_letter session UUID. The revision path called `backend.restore_session(history, job.session_external_id)`. Both `ClaudeCliBackend` and `GeminiCliBackend` **ignore `history`** in `restore_session` and use `external_id` directly as a `--resume` token. So `revising_cv` resumed the cover-letter conversation → AI produced cover-letter text → stored as cv_adjust document → user saw cover-letter in CV section.
+- **Fix**: Added `cv_session_id` and `cl_session_id` nullable columns to `Job`. Set `cv_session_id = handle.external_id` after cv_adjust's handle is created; `cl_session_id` after cover_letter. Revision path now passes `cv_session_id` for `revising_cv` and `cl_session_id` for `revising_cl`. `session_external_id` unchanged (still needed for awaiting_input resume, which is always same stage that set it).
+- **DB migration**: `init_db` runs `ALTER TABLE jobs ADD COLUMN cv_session_id/cl_session_id VARCHAR(128)` in try/except `OperationalError` — safe for both fresh and existing databases.
+- **Legacy jobs**: Jobs in review state before this fix have NULL per-stage session IDs → `ValueError` with message "job predates BF-9 fix, reset to re-run". Better than the prior silent data corruption.
+- **Tests**: 3 new tests in `test_bf9_revision_session.py` using `TrackingFakeBackend` (subclass of FakeAgentBackend that records `restore_calls`). Also fixed 8 existing tests in `test_stages.py` and `test_integration.py` whose `_setup_job_in_review` helpers set `cv_session_id = "fake-session-cv-123"` / `cl_session_id = "fake-session-cl-123"`. FakeAgentBackend.start_session returns `external_id=None`, so those helpers needed explicit non-None fake IDs to pass the null-session guard. 588 total tests pass.
+
+**Critical insight for future sessions**: `ClaudeCliBackend.restore_session` AND `GeminiCliBackend.restore_session` both IGNORE the `history` parameter. They only care about `external_id`. The `AnthropicAPIBackend` is the opposite — it uses `history` and ignores `external_id`. This asymmetry means any two-session scenario where `session_external_id` gets overwritten will silently corrupt CLI-backend data while being invisible to Anthropic-backend tests.
+
+**Why:** Reproducing every time a job reaches review state and the user requests CV format adjustments. The bug affected ALL CLI-backend users on any job that completed both stages.
 
 ## BF-1 Backend Bugfixes (complete — 2026-05-27)
 
