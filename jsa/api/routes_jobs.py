@@ -368,7 +368,16 @@ async def dismiss_job(request: Request, job_id: str):
 
 @router.post("/api/jobs/{job_id}/cancel")
 async def cancel_job(request: Request, job_id: str):
-    """Cancel a running job — transitions running → pending and kicks the orchestrator."""
+    """Cancel a running job — transitions running → pending and kicks the orchestrator.
+
+    Note: cancel is best-effort for in-flight agent turns. The orchestrator holds
+    an in-memory Job object for the duration of an agent subprocess call; if cancel
+    fires mid-turn, the completing checkpoint will overwrite the pending state.
+    Cancel is reliable when the job is between agent turns (e.g., just picked up or
+    about to checkpoint). For a single-user local tool this is acceptable behaviour.
+    Hard-stopping an in-flight subprocess would require orchestrator-level task
+    cancellation, which is out of scope for this phase.
+    """
     sf = _session_factory(request)
     async with sf() as session:
         job = await repo.get_job(session, job_id)
