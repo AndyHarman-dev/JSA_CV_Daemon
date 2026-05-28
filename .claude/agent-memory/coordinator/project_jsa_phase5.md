@@ -22,26 +22,18 @@ except OSError:
 
 ---
 
-## Gemini CLI has no native session resume
+## Gemini CLI DOES support native session resume (since BF-5)
 
-`GeminiCliBackend.restore_session()` falls back to history-replay (re-sends prior user turns in the pty session). This is a documented limitation — a WARNING is logged. The assumption is that the system prompt makes follow-up generation deterministic given the same user turns.
+**Updated in BF-5**: `GeminiCliBackend` was completely rewritten from pty to subprocess mode. `--resume <uuid>` works. `restore_session` now mirrors `ClaudeCliBackend` exactly — if `external_id` is set, returns handle immediately; if None, raises RuntimeError.
 
-**Why:** Gemini CLI did not expose a `--resume` flag equivalent at implementation time.
+The old history-replay fallback (and the WARNING log) is gone. Session UUIDs are reliably persisted via `-o json` output which includes `"session_id"`.
 
-**How to apply:** Phase 12 integration tests with GeminiCliBackend must account for this — the resumed assistant content may differ from the original. Don't assert exact assistant text equality across park/resume with Gemini.
-
----
-
-## _extract_session_id uses a UUID heuristic on raw pty output
-
-`jsa/agents/_pty_common.py` → `_extract_session_id` scans the pty output for the first UUID-shaped string to find the Claude CLI session ID. This is a heuristic — if the JD or CV text contains a UUID-like string, it could extract the wrong one.
-
-**Why:** Claude CLI doesn't provide a structured output channel for the session ID.
-
-**How to apply:** There's a TODO comment in the code. If resume failures are observed in testing (Phase 12), check whether input data contains UUID-like strings.
+**Why:** Gemini CLI v0.41.2 has `--session-id <uuid>` (create) and `--resume <uuid>` (continue) flags. Sessions stored on disk. Also has `-p` non-interactive mode and `-o json` for structured output.
 
 ---
 
-## Shared pty helpers are in `jsa/agents/_pty_common.py`
+## `jsa/agents/_pty_common.py` is DELETED (since BF-5)
 
-Both `ClaudeCliBackend` and `GeminiCliBackend` use shared pty read/write helpers extracted in Phase 5. Any new pty-based backend (Phase 11 is Anthropic API so not pty) should reuse these rather than duplicate.
+Deleted in BF-5 — it was only used by the old pty-based `GeminiCliBackend`. `ClaudeCliBackend` was already subprocess-based. `ptyprocess` dependency removed from `pyproject.toml`.
+
+Do not reference `_pty_common` in any new code.

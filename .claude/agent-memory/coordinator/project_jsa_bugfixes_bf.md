@@ -1,6 +1,6 @@
 ---
 name: project-jsa-bugfixes-bf
-description: BF-1/BF-2/BF-3 bugfix phases — dismiss state, JD tab, timeout, prompt fixes
+description: BF-1/BF-2/BF-3/BF-4/BF-5 bugfix phases — dismiss state, JD tab, timeout, prompt fixes, Gemini subprocess rewrite
 metadata:
   type: project
 ---
@@ -31,6 +31,19 @@ metadata:
 - **Tests**: `tests/backend/test_claude_cli_nudge.py` — 29 tests, `ScriptedClaudeBackend` subclass test double (no mocks).
 
 **Why:** First reply from Claude CLI on large CV tasks sometimes omitted the sentinel. Without the fallback in `start_session`, the job went straight to `failed` with no recovery opportunity.
+
+## BF-5 GeminiCliBackend subprocess rewrite (complete — 2026-05-27)
+
+- **Root cause**: Pty-based approach was broken by (1) directory trust check blocking without `--skip-trust`/`GEMINI_CLI_TRUST_WORKSPACE=true`, (2) ANSI codes corrupting sentinel detection, (3) large stdin blob not reliably triggering pty processing.
+- **Fix**: Complete rewrite to subprocess `-p` mode, identical pattern to `ClaudeCliBackend`. Key flags: `--skip-trust` (bypass trust), `-o json` (structured output with `session_id`+`response`), `--session-id <uuid>` (fresh session), `--resume <uuid>` (subsequent messages).
+- **Session management**: Gemini CLI v0.41.2 stores sessions on disk by UUID. `restore_session` with `external_id` → no-op like Claude; without → RuntimeError.
+- **Deleted**: `jsa/agents/_pty_common.py` (only used by old Gemini pty code). Removed `ptyprocess>=0.7` from `pyproject.toml`.
+- **`GeminiSessionHandle`**: `pty` field removed. Only `id` and `external_id`.
+- **`_run` stderr logging**: Decode stderr ONCE at top of block; WARNING on nonzero exit, DEBUG on success (not both — reviewer caught a double-log bug where both fired on failure).
+- **Session-expired heuristic**: `"session" in stderr_lower and "not found" in stderr_lower` — TBD, exact Gemini CLI string unknown. Falls back to `GeminiCliError` if heuristic misses.
+- **Tests**: `tests/backend/test_gemini_cli_bf5.py` — 52 tests. `test_cli_backends.py` Gemini section fully rewritten. 547 total tests pass.
+
+**Why:** Jobs using gemini-cli backend were stuck in "running" forever because the pty never produced a sentinel response.
 
 ## BF-3 Prompt Fixes (complete — 2026-05-27)
 
