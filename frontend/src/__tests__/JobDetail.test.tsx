@@ -48,6 +48,7 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     state: "pending",
     current_stage: null,
     error: null,
+    retry_count: 0,
     updated_at: "2026-01-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -236,5 +237,117 @@ describe("JobDetail", () => {
     const btn = screen.getByRole("button", { name: /retry/i });
     await userEvent.click(btn);
     expect(api.reset).toHaveBeenCalledWith("j99");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BF-15: Smart Retry — nuclear confirmation modal tests
+// ---------------------------------------------------------------------------
+
+describe("JobDetail — BF-15 Smart Retry modal", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useStore.setState({
+      jobs: {},
+      selectedId: undefined,
+      wsStatus: "connecting",
+      logs: [] as LogEntry[],
+    });
+  });
+
+  it("shows nuclear confirm modal when retry_count > 0 and Retry is clicked", async () => {
+    const { api } = await import("../api");
+    const job = makeJob({
+      id: "j2",
+      state: "failed",
+      error: "some error",
+      retry_count: 1,
+    });
+    useStore.setState({ jobs: { j2: job }, selectedId: "j2" });
+    render(<JobDetail />);
+
+    const btn = screen.getByRole("button", { name: /retry/i });
+    await userEvent.click(btn);
+
+    // Modal warning text should appear
+    expect(
+      screen.getByText(/permanently delete all progress/i)
+    ).toBeInTheDocument();
+
+    // api.reset must NOT have been called yet
+    expect(api.reset).not.toHaveBeenCalled();
+  });
+
+  it("nuclear confirm triggers reset on 'Yes, restart from scratch'", async () => {
+    const { api } = await import("../api");
+    const job = makeJob({
+      id: "j3",
+      state: "failed",
+      error: "crash",
+      retry_count: 1,
+    });
+    useStore.setState({ jobs: { j3: job }, selectedId: "j3" });
+    render(<JobDetail />);
+
+    // Open modal
+    const retryBtn = screen.getByRole("button", { name: /retry/i });
+    await userEvent.click(retryBtn);
+
+    // Confirm
+    const confirmBtn = screen.getByRole("button", { name: /yes, restart from scratch/i });
+    await userEvent.click(confirmBtn);
+
+    expect(api.reset).toHaveBeenCalledWith("j3");
+  });
+
+  it("nuclear confirm cancel hides modal without calling reset", async () => {
+    const { api } = await import("../api");
+    const job = makeJob({
+      id: "j4",
+      state: "failed",
+      error: "oops",
+      retry_count: 1,
+    });
+    useStore.setState({ jobs: { j4: job }, selectedId: "j4" });
+    render(<JobDetail />);
+
+    // Open modal
+    const retryBtn = screen.getByRole("button", { name: /retry/i });
+    await userEvent.click(retryBtn);
+
+    // Cancel
+    const cancelBtn = screen.getByRole("button", { name: /^cancel$/i });
+    await userEvent.click(cancelBtn);
+
+    // Modal should be gone
+    expect(
+      screen.queryByText(/permanently delete all progress/i)
+    ).not.toBeInTheDocument();
+
+    // api.reset must NOT have been called
+    expect(api.reset).not.toHaveBeenCalled();
+  });
+
+  it("soft retry fires immediately when retry_count is 0 (no modal)", async () => {
+    const { api } = await import("../api");
+    const job = makeJob({
+      id: "j5",
+      state: "failed",
+      error: "first failure",
+      retry_count: 0,
+    });
+    useStore.setState({ jobs: { j5: job }, selectedId: "j5" });
+    render(<JobDetail />);
+
+    const retryBtn = screen.getByRole("button", { name: /retry/i });
+    await userEvent.click(retryBtn);
+
+    // No modal should appear
+    expect(
+      screen.queryByText(/permanently delete all progress/i)
+    ).not.toBeInTheDocument();
+
+    // api.reset should have been called immediately
+    expect(api.reset).toHaveBeenCalledWith("j5");
   });
 });

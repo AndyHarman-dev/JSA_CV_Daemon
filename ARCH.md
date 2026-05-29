@@ -661,7 +661,138 @@ When `jsa --csv jobs.csv --cv resume.pdf` is invoked:
 - **Multiple CVs per run.** Single CV per invocation is assumed. If a user wants per-job CVs later, the schema already supports it (`Job.cv_text` is per-job), but the CLI does not expose it.
 - **Concurrent CLI backend processes.** Whether 5 concurrent Claude/Gemini CLI subprocesses share rate limits in a way that breaks parallelism — to be measured empirically. If it bites, lower the cap via config; no architectural change needed.
 
+## BF-15: Smart Retry (soft vs nuclear)
+
+### Problem
+`POST /api/jobs/{id}/reset` always resets a failed job to `pending` via `checkpoint()` but never deletes the `Message` rows for completed stages. The orchestrator then picks the job up, finds a non-empty `_load_history` for `cv_adjust`, takes the *resume* branch in `run_stage`, and calls `backend.restore_session(dead_session_uuid)` — reproducing the exact same error. The Retry button is therefore broken for session-loss failures (e.g. a Gemini CLI session file that was deleted). Retry must clear enough state that the resumed-vs-fresh discriminator in `run_stage` selects the correct path.
+
+### Two-tier retry model
+Retry is now two-tier, discriminated by `Job.retry_count`:
+
+- **Soft reset** (first retry, `retry_count == 0`): rewind to the start of the *failed* stage, deleting only that stage's transcript so the orchestrator runs it fresh. Documents from earlier completed stages survive. Sets `retry_count = 1`.
+- **Nuclear reset** (second+ retry, `retry_count > 0`): delete everything (Messages, Documents, FollowUps, RevisionRequests, all session IDs) and restart from `pending`. Sets `retry_count = 0`.
+
+```
+                 ┌─ failed (current_stage ∈ {cv_adjust, revising_cv, None}) ─┐
+                 │                                                            │
+  soft reset ────┤                                                           ▼
+ (retry_count 0) │                                                        pending
+                 │                                                            ▲
+                 └─ failed (current_stage ∈ {cover_letter, revising_cl}) ─► cv_done
+                                                                            (CV doc kept,
+                                                                             CL regenerated)
+
+  nuclear reset
+ (retry_count>0) ─── failed (any current_stage) ───────────────────────────► pending
+                     (all Messages / Documents / FollowUps / RevisionRequests deleted)
+```
+
+### Core invariant: `current_stage` on a failed job = "the stage that failed"
+After BF-15, a `failed` job MAY carry a non-`None` `current_stage` indicating which stage was running when it failed (`None` only if it failed before any stage started). This is the discriminator the soft reset branches on. This does NOT make failed jobs runnable — `list_runnable_jobs` filters on `state`, never on `current_stage`, and `failed` is not a runnable state. We deliberately do NOT introduce a new "failed-with-stage" state; the existing `failed` state plus the nullable `current_stage` field carries the information.
+
+### `retry_count` lifecycle
+| value | meaning |
+|-------|---------|
+| `0`   | initial value; OR a stage just completed (`_handle_final` resets it); OR a nuclear reset just ran |
+| `1`   | one soft retry has been performed — the next Retry click goes nuclear |
+
+`retry_count` is reset to `0` on **every** successful FINAL (`_handle_final`), including revision FINALs — a successful revision counts as "the retry worked", so the next failure starts fresh from a soft retry again.
+
+### Backend changes (file by file)
+
+**`jsa/db/models.py`** — Add to `Job`:
+```python
+retry_count: Mapped[int] = mapped_column(Integer, default=0)
+```
+
+**`jsa/db/engine.py` → `init_db`** — Add a try/except `ALTER TABLE` for the new column, mirroring the existing `cv_session_id` / `cl_session_id` pattern (no Alembic):
+```python
+try:
+    await conn.execute(text("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"))
+except OperationalError:
+    pass
+```
+Note the integer-with-default ALTER is separate from the existing `for col in (...)` VARCHAR loop because the type and `NOT NULL DEFAULT` clause differ.
+
+**`jsa/pipeline/state_machine.py`** — Add `JobState.cv_done` to `ALLOWED[JobState.failed]`. The set becomes `{JobState.pending, JobState.dismissed, JobState.cv_done}`. `STAGE_FOR_STATE` is unchanged — `cv_done` requires `current_stage is None`, which `transition(job, JobState.cv_done, None)` satisfies. No other transition-table changes. The new `failed → cv_done` edge fires only inside `soft_reset_job` when the failed stage was `cover_letter`/`revising_cl`.
+
+**`jsa/db/repo.py`**
+
+1. `mark_failed`: preserve the failing stage.
+   ```python
+   prev_state = job.state
+   stage_at_failure = job.current_stage          # capture before transition clears it
+   transition(job, JobState.failed, None)        # validates state→failed, sets current_stage=None
+   job.current_stage = stage_at_failure          # restore — DELIBERATE direct attribute set
+   job.error = error
+   ...
+   ```
+   This is an **explicit, justified exception** to the CLAUDE.md rule "never set `Job.state`/`Job.current_stage` directly." We still route the state change through `transition()` so the `→ failed` edge is validated; we then restore `current_stage` by direct assignment because the state-machine table cannot express "failed, and here is the stage that failed" — the guard forces `current_stage=None` on entry to `failed`. Coder must not "fix" this back to a plain `transition()`.
+
+2. New `soft_reset_job(session, job)` — caller passes a `job` already loaded in `session`:
+   - `failed_stage = job.current_stage`
+   - If `failed_stage in (Stage.cover_letter, Stage.revising_cl)`:
+     - `delete()` `Message` rows where `job_id == job.id AND stage IN (cover_letter, revising_cl)`
+     - `delete()` `FollowUp` rows where `job_id == job.id AND stage IN (cover_letter, revising_cl)`
+     - `delete()` any unconsumed `RevisionRequest` for this job (covers a revision-stage failure)
+     - `job.cl_session_id = None`; `job.session_external_id = None` (leave `cv_session_id` intact)
+     - `transition(job, JobState.cv_done, None)`
+   - Else (`failed_stage in (Stage.cv_adjust, Stage.revising_cv)` or `None`):
+     - `delete()` ALL `Message` rows for this job
+     - `delete()` ALL `FollowUp` rows for this job
+     - `delete()` ALL `RevisionRequest` rows for this job
+     - `job.cv_session_id = job.cl_session_id = job.session_external_id = None`
+     - `transition(job, JobState.pending, None)`
+   - `job.retry_count = 1`; `job.error = None`; `job.updated_at = datetime.utcnow()`
+   - `session.add(job)`; `await session.commit()`
+   - Return the new state to the caller (or read it off `job` after) so the route can publish the event. The route — not the repo — calls `orchestrator.kick()`.
+
+3. New `nuclear_reset_job(session, job)`:
+   - `delete()` ALL `Message`, `Document`, `FollowUp`, `RevisionRequest` rows for this job (explicit `delete()` statements keyed by `job_id` — do NOT rely on ORM cascade; the job row is **reset, not deleted**, so there is no cascade to trigger)
+   - `job.cv_session_id = job.cl_session_id = job.session_external_id = None`
+   - `job.error = None`; `job.retry_count = 0`
+   - `transition(job, JobState.pending, None)`
+   - `job.updated_at = datetime.utcnow()`; `session.add(job)`; `await session.commit()`
+
+4. `upsert_job`: replace the existing failed-job block (the `if job.state == JobState.failed:` branch that currently calls `transition(job, pending, None)` and clears `error`) with a call to `nuclear_reset_job(session, job)`. CSV re-import of a failed job is **always nuclear** (Q2). Because `nuclear_reset_job` uses explicit `delete()` statements keyed by `job_id`, it does **not** require the job's relations to be eager-loaded — safe to call from `upsert_job` where the job was fetched bare. `upsert_job` keeps `await session.flush()` for the insert/update path; `nuclear_reset_job` does its own `commit()`, which is acceptable here (re-import is a discrete operation).
+
+**`jsa/api/routes_jobs.py`**
+
+- `reset_job`:
+  - Keep the existing guard accepting `failed` and `dismissed`.
+  - Branch:
+    - `state == failed`: `if job.retry_count == 0: await repo.soft_reset_job(session, job)` else `await repo.nuclear_reset_job(session, job)`.
+    - `state == dismissed`: **unchanged** — keep the existing `repo.checkpoint(session, job, JobState.pending, None)` path. Soft/nuclear branching applies ONLY to `failed`. (Q3 scope: dismissed is out of scope for BF-15.)
+  - Capture `prev_state` before the reset and the resulting state after, then publish a `StatusChangedEvent(prev → new_state)` (this is a **new** event publication — the old `reset_job` published none and relied on the returned dict + kick; cross-tab WS sync now gets the update). The frontend confirmation modal decision is purely client-side, so the server treats both retries identically aside from which repo helper it calls.
+  - Re-fetch with relations, `orchestrator.kick()`, return `_job_to_dict(job, full=True)`.
+- `_job_to_dict`: add `"retry_count": job.retry_count` to the **base** dict (not gated behind `full`). `retry_count` must appear in every job API response so the frontend can always choose the soft-vs-nuclear path without a full fetch.
+
+**`jsa/pipeline/stages.py` → `_handle_final`** — At the start of `_handle_final`, before any `checkpoint()` call, set `job.retry_count = 0`. `checkpoint()` does `session.add(job)` + `session.commit()`, so this persists atomically in the same transaction as the document/state write. Applies to all FINAL paths (`cv_adjust`, `cover_letter`, `revising_cv`, `revising_cl`).
+
+### Frontend changes (file by file)
+
+**`frontend/src/types.ts`** — Add `retry_count: number;` to `JobDTO`.
+
+**`frontend/src/components/JobDetail.tsx`**
+- New state: `showNuclearConfirm: boolean` (default `false`).
+- `handleRetry()`:
+  - `job.retry_count === 0` → call `api.reset(job.id)` immediately (existing behavior, no dialog).
+  - `job.retry_count > 0` → `setShowNuclearConfirm(true)` (does NOT call reset yet).
+- Inline confirmation section (kept in-file, NOT a separate modal component, NOT `window.confirm`) rendered when `showNuclearConfirm`:
+  - Warning text: "This will permanently delete all progress for this job and restart from scratch."
+  - "Yes, restart from scratch" → `api.reset(job.id)`, then `setShowNuclearConfirm(false)` on success.
+  - "No, keep failed" → `setShowNuclearConfirm(false)` (job stays `failed`; no API call).
+- Retry button label: keep plain "Retry". The confirmation modal carries the warning, so no special "nuclear" label is needed.
+
+### Edge cases & notes for Coder
+- **`revising_cl` failure → soft reset → `cv_done` is intentional asymmetry.** Existing Documents (including any prior CV and CL versions) survive — soft reset deletes only `Message`/`FollowUp`/`RevisionRequest` rows. State rewinds to `cv_done` so the cover_letter stage regenerates fresh; the next FINAL writes CL version N+1 (the document versioning in `_handle_final` counts existing docs, so old versions remain in history). This is not a bug.
+- **`failed` with `current_stage is None`** (failure before any stage produced messages) takes the `cv_adjust` soft-reset branch → `pending` with all transcript cleared. Correct: there is nothing earlier to preserve.
+- **Use explicit `delete()` statements**, not ORM cascade, for all selective deletes — soft reset deletes by stage, and nuclear keeps the job row. ORM cascade only fires on `session.delete(job)`, which neither helper does.
+- **Atomicity:** `soft_reset_job` and `nuclear_reset_job` each own a single `commit()` covering all their deletes + the `transition()` + field updates, satisfying the CLAUDE.md "single atomic transaction per state change" rule.
+- **Open question (none blocking):** none. The design is fully specified; dismissed-reset is explicitly scoped out.
+
 ## Change log
+2026-05-29 — BF-15 Smart Retry. Two-tier reset: soft (rewind failed stage, `retry_count 0→1`) vs nuclear (full wipe, restart from `pending`, `retry_count→0`). Added `Job.retry_count` (+`ALTER TABLE` migration in `init_db`). `mark_failed` now preserves `current_stage` on the failed job (deliberate direct-attribute exception to the no-direct-set rule) so soft reset can discriminate which stage failed; the `failed` state now carries the "stage that failed" via the nullable `current_stage`. Added `failed → cv_done` to the allowed-transitions table (used only by soft reset when the cover-letter stage failed; does not make failed jobs runnable). New repo helpers `soft_reset_job` / `nuclear_reset_job`; `upsert_job` reuses `nuclear_reset_job` (CSV re-import of failed jobs is always nuclear). `reset_job` route branches on `retry_count` for `failed` (dismissed path unchanged) and now publishes a `StatusChangedEvent`. `_handle_final` resets `retry_count` to 0 on every successful FINAL (including revisions). `retry_count` exposed in all job API responses. Frontend: in-UI nuclear confirmation modal in `JobDetail.tsx` (first retry no dialog; second+ retry confirms first).
 2026-05-23 — Initial architecture document. Establishes Python + FastAPI backend, React + Vite frontend, SQLite persistence, sentinel-based follow-up protocol, park-as-task-exit concurrency, post-approval-only PDF rendering.
 2026-05-24 — Phase 4 implementation decision: `SessionHandle` is implemented as a concrete `@dataclass` base class (not a `Protocol`). Backends subclass it and attach process/connection state as additional fields. `FakeSessionHandle` subclasses it for tests. This diverges from the `Protocol` annotation in the spec above; `Protocol` style is left in the conceptual description for documentation clarity but is not the runtime type. All backends in Phases 5 and 11 must subclass `SessionHandle`.
 2026-05-23 — Revision-flow correctness: replaced "tear-down + replay user turns" with native `restore_session` ABC method (Anthropic = full messages array, Claude CLI = `--resume`, Gemini CLI = native or prompt-determinism fallback). Reasoning: replaying user turns and discarding regenerated assistant turns silently diverges from prior conversation. Added `session_external_id` to `Job`. Added `RevisionRequest` table and routed revisions through `current_stage ∈ {revising_cv, revising_cl}` with state remaining `review` (closing the state-machine hole where `running` had no path back to `review`). Added `Stage.revising_cv` / `Stage.revising_cl`. Updated allowed-transitions table accordingly. Added sentinel-parser resolution rules (zero/multiple/unclosed/nested cases). Added unique partial indexes enforcing "at most one open FollowUp per (job, stage)" and "at most one unconsumed RevisionRequest per job". Specified the per-checkpoint single-transaction boundary.
