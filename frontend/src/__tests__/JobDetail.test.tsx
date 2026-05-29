@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useStore } from "../store";
 import { JobDetail } from "../components/JobDetail";
 import type { JobDTO, LogEntry } from "../types";
@@ -26,6 +27,9 @@ vi.mock("../api", () => ({
     revise: vi.fn().mockResolvedValue({}),
     config: vi.fn().mockResolvedValue({ backend: "anthropic" }),
     getJobs: vi.fn().mockResolvedValue([]),
+    reset: vi.fn().mockResolvedValue({}),
+    dismiss: vi.fn().mockResolvedValue({}),
+    deleteJob: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 
@@ -208,5 +212,29 @@ describe("JobDetail", () => {
     render(<JobDetail />);
 
     expect(screen.getByText("pipeline started")).toBeInTheDocument();
+  });
+
+  it("shows a Retry button when job is failed and has an error", () => {
+    const job = makeJob({ id: "j1", state: "failed", error: "agent timed out" });
+    useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
+    render(<JobDetail />);
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it("does not show a Retry button when job is not failed", () => {
+    const job = makeJob({ id: "j1", state: "pending", error: null });
+    useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
+    render(<JobDetail />);
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+  });
+
+  it("calls api.reset with the correct job id when Retry is clicked", async () => {
+    const { api } = await import("../api");
+    const job = makeJob({ id: "j99", state: "failed", error: "boom" });
+    useStore.setState({ jobs: { j99: job }, selectedId: "j99" });
+    render(<JobDetail />);
+    const btn = screen.getByRole("button", { name: /retry/i });
+    await userEvent.click(btn);
+    expect(api.reset).toHaveBeenCalledWith("j99");
   });
 });
