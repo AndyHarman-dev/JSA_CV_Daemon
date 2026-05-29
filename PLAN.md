@@ -77,6 +77,27 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
   3. `frontend/src/store.ts`: Add `removeJob(id: string)` action (removes from `jobs` map, sets `selectedId = undefined` if it matches). In `applyEvent`, add `case "job_removed": store.removeJob(e.job_id)`.
   4. `frontend/src/components/JobDetail.tsx`: Remove the existing amber "Cancel" button (running → pending). Add a red "Cancel" button visible when `job.state !== "approved"`. On click: call `window.confirm("Permanently delete this job and all its data?")`, then `api.deleteJob(job.id)`, then `refetchAll()`. Keep Dismiss button unchanged.
 
+- [x] Phase BF-13: PDF/browser rendering sync — exported PDF styling doesn't match browser preview. Two root causes: (1) the model sometimes generates HTML (`<div align="center">`, `<strong>`, `<b>`) for styling; `marked` in the browser renders these as real HTML → centering/bold visible; `markdown-it` with `html: False` escapes them → BF-11's strip regex then removes tags AND their content styling, so the PDF loses both centering and bold. Fix: switch `markdown-it` to `html: True` and remove the HTML stripping regex — HTML passes through to WeasyPrint just like it does to the browser. (2) Even for pure `# Name` markdown, the browser preview doesn't center h1 (no `text-center` in Tailwind CSS), but the PDF does (`h1 { text-align: center; }` in styles.css). Fix: add `[&_h1]:text-center` to `MarkdownPreview.tsx`.
+  **Files changed** (4):
+  1. `jsa/render/weasy.py`: Remove the `re.sub(…)` HTML stripping step and the `import re`. Change `MarkdownIt("commonmark", {"html": False})` to `MarkdownIt("commonmark", {"html": True})`. HTML now passes through to WeasyPrint unchanged.
+  2. `jsa/render/styles.css`: Add `[align="center"] { text-align: center; }` rule to handle deprecated HTML `align` attributes that might appear via model output.
+  3. `frontend/src/components/MarkdownPreview.tsx`: Add `[&_h1]:text-center` to the h1 class string so the browser preview centers h1, matching the PDF behaviour.
+  4. `tests/backend/test_bf11_html_strip.py`: Update expectations — HTML now passes through (not stripped). Flip assertions: `<div` SHOULD be in html_string; `&lt;div` should NOT be. Rename test class/file docstring to reflect pass-through semantics. Tests for autolinks, prose comparisons, and clean-markdown are unchanged.
+
+- [x] Phase BF-14: Retry button for failed jobs — When a job reaches `failed` state, the error box in `JobDetail.tsx` shows the error message but offers no action. Add a "Retry" button inside the error box so the user can immediately re-queue the job without hunting for another control.
+  **Backend:** No changes needed. `POST /api/jobs/{id}/reset` already accepts `failed` state, resets to `pending`, and kicks the orchestrator.
+  **Frontend** (1 file: `frontend/src/components/JobDetail.tsx`):
+  1. Add `retrying` (`boolean`) and `retryError` (`string | null`) state variables.
+  2. Add `handleRetry()` async function: call `api.reset(job.id)` → on success call `refetchAll()`. On error set `retryError`.
+  3. Add `showRetry = job.state === "failed"` visibility flag.
+  4. Inside the error box (lines 180-185), render the error text and — when `showRetry` is true — a "Retry" button below the error text. Button label: `retrying ? "Retrying…" : "Retry"`. Style: small, outlined, white background, green or indigo border to contrast with the red error box. Disable while `retrying`.
+  5. If `retryError` is non-null, show it as a small paragraph below the error box.
+  **Tests** (add to `frontend/src/__tests__/JobDetail.test.tsx`):
+  - Add `api.reset` to the vi.mock (return `mockResolvedValue({})` or a job shape).
+  - Test: renders a "Retry" button when `job.state === "failed"` and `job.error` is set.
+  - Test: does NOT render a "Retry" button when `job.state !== "failed"` (e.g. `pending`).
+  - Test: clicking "Retry" calls `api.reset` with the correct job id.
+
 ## Change log
 2026-05-27 — Rewrote plan for bugfix wave 2. Removed all completed phases (1–12, BF-1–3). Added BF-4 (start_session nudge-retry), BF-5 (LogEvent publishing), BF-6 (Cancel button for running jobs), BF-7 (Gemini pty stuck).
 2026-05-28 — Added BF-8: duplicate open FollowUp UNIQUE constraint crash on multi-turn NEED_INPUT and failed-job reset.
@@ -84,3 +105,5 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 2026-05-28 — Added BF-10: Revision stages have no awaiting_input resume path — infinite NEED_INPUT loop.
 2026-05-28 — Added BF-11: HTML tags visible as literal text in exported CV PDF — prompt instructed AI to use HTML divs; renderer had html:False.
 2026-05-28 — Added BF-12: Hard-delete Cancel button at every stage.
+2026-05-28 — Added BF-13: PDF/browser rendering sync — html:True in markdown-it passes HTML through to WeasyPrint; add text-center to browser h1.
+2026-05-28 — Added BF-14: Retry button for failed jobs — frontend-only; backend reset endpoint already handles failed→pending.

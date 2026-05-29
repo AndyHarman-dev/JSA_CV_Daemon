@@ -11,3 +11,5 @@
 - [Phase 8 gotchas](project_jsa_phase8.md) — set_current_stage() for revision flow; running→pending in ALLOWED; CORS regex; ASGITransport lifespan pattern; CLI startup sequence
 - [BF-1/2/3 + BF-8 bugfix phases](project_jsa_bugfixes_bf.md) — dismiss state, JD in API, agent_timeout, prompts, Gemini, cancel, LogEvent, FollowUp uniqueness
 - [BF-12 hard-delete Cancel](project_jsa_phase_bf12.md) — selectinload before ORM cascade delete; refetchAll() can't remove rows (use removeJob directly); publish WS event outside session block
+- [BF-13 PDF/browser rendering sync](project_jsa_phase_bf13.md) — html:True in markdown-it passes HTML through; browser h1 needs text-center; BF-11 strip was wrong fix
+- [BF-14 Retry button for failed jobs](project_jsa_phase_bf14.md) — frontend-only; test commit oversight: always verify git status before declaring phase done
