@@ -135,7 +135,7 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
 
 
 async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
-    """Set job.state = failed (via transition), job.error = error, clear current_stage."""
+    """Set job.state = failed (via transition), job.error = error. Preserves current_stage (deliberate BF-15 exception — see ARCH.md) so soft_reset_job can discriminate which stage failed."""
     from jsa.pipeline.state_machine import transition
 
     job = await get_job(session, job_id)
