@@ -30,7 +30,7 @@ function makeJob(id: string, overrides: Partial<JobDTO> = {}): JobDTO {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting", logs: [] });
+  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting" });
   (api.config as ReturnType<typeof vi.fn>).mockResolvedValue({ backend: "anthropic" });
 });
 

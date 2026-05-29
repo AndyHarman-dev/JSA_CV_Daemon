@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { useStore } from "../store";
-import type { JobDTO, LogEntry, WSEvent } from "../types";
+import type { JobDTO, WSEvent } from "../types";
 
 // Mock the api module so refetchAll doesn't make real HTTP calls
 vi.mock("../api", () => ({
@@ -10,14 +10,6 @@ vi.mock("../api", () => ({
 }));
 
 import { api } from "../api";
-
-// Snapshot the initial state to reset between tests
-const initialState = {
-  jobs: {},
-  selectedId: undefined as string | undefined,
-  wsStatus: "connecting" as const,
-  logs: [] as LogEntry[],
-};
 
 function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   return {
@@ -41,7 +33,6 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
-    logs: [],
   });
   vi.clearAllMocks();
 });
@@ -116,121 +107,6 @@ describe("setWsStatus", () => {
   });
 });
 
-describe("appendLog", () => {
-  it("adds a log entry to the logs array", () => {
-    const entry: LogEntry = { job_id: "job1", level: "info", text: "hello", ts: 1000 };
-    useStore.getState().appendLog(entry);
-
-    const logs = useStore.getState().logs;
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toEqual(entry);
-  });
-
-  it("caps logs at 200 when more than 200 entries are appended", () => {
-    // Append 201 entries
-    for (let i = 0; i < 201; i++) {
-      useStore.getState().appendLog({
-        job_id: "job1",
-        level: "info",
-        text: `log line ${i}`,
-        ts: i,
-      });
-    }
-
-    const logs = useStore.getState().logs;
-    expect(logs).toHaveLength(200);
-    // Should have kept the most recent 200 (indices 1..200, i.e. "log line 1" through "log line 200")
-    expect(logs[0].text).toBe("log line 1");
-    expect(logs[199].text).toBe("log line 200");
-  });
-
-  it("retains all entries when exactly 200 are appended", () => {
-    for (let i = 0; i < 200; i++) {
-      useStore.getState().appendLog({
-        job_id: "job1",
-        level: "info",
-        text: `line ${i}`,
-        ts: i,
-      });
-    }
-    expect(useStore.getState().logs).toHaveLength(200);
-  });
-});
-
-describe("applyEvent - log event", () => {
-  it("appends a LogEntry with level info and correct text for a log event", () => {
-    const event: WSEvent = {
-      type: "log",
-      job_id: "job1",
-      level: "info",
-      text: "build started",
-    };
-    useStore.getState().applyEvent(event);
-
-    const logs = useStore.getState().logs;
-    expect(logs).toHaveLength(1);
-    expect(logs[0].job_id).toBe("job1");
-    expect(logs[0].level).toBe("info");
-    expect(logs[0].text).toBe("build started");
-  });
-
-  it("appends a LogEntry with level warn for a warn log event", () => {
-    const event: WSEvent = {
-      type: "log",
-      job_id: "job2",
-      level: "warn",
-      text: "quota near limit",
-    };
-    useStore.getState().applyEvent(event);
-
-    const logs = useStore.getState().logs;
-    expect(logs[0].level).toBe("warn");
-    expect(logs[0].text).toBe("quota near limit");
-  });
-
-  it("defaults to info level for unknown log levels", () => {
-    const event = {
-      type: "log",
-      job_id: "job1",
-      level: "debug",
-      text: "verbose message",
-    } as unknown as WSEvent;
-    useStore.getState().applyEvent(event);
-
-    const logs = useStore.getState().logs;
-    expect(logs[0].level).toBe("info");
-  });
-});
-
-describe("applyEvent - error event", () => {
-  it("appends an error-level LogEntry for an error event", () => {
-    const event: WSEvent = {
-      type: "error",
-      job_id: "job1",
-      message: "agent timed out",
-    };
-    useStore.getState().applyEvent(event);
-
-    const logs = useStore.getState().logs;
-    expect(logs).toHaveLength(1);
-    expect(logs[0].level).toBe("error");
-    expect(logs[0].text).toBe("agent timed out");
-    expect(logs[0].job_id).toBe("job1");
-  });
-
-  it("uses the message string directly for error events", () => {
-    const event: WSEvent = {
-      type: "error",
-      job_id: "job1",
-      message: "42",
-    };
-    useStore.getState().applyEvent(event);
-
-    const logs = useStore.getState().logs;
-    expect(logs[0].text).toBe("42");
-  });
-});
-
 describe("applyEvent - status_changed event", () => {
   it("calls refetchAll (api.getJobs) when a status_changed event is received", async () => {
     const event: WSEvent = {
@@ -248,18 +124,6 @@ describe("applyEvent - status_changed event", () => {
     expect(api.getJobs).toHaveBeenCalledTimes(1);
   });
 
-  it("does not append a log entry for status_changed event", async () => {
-    const event: WSEvent = {
-      type: "status_changed",
-      job_id: "job1",
-      from_state: "pending",
-      to_state: "running",
-    };
-    useStore.getState().applyEvent(event);
-    await Promise.resolve();
-
-    expect(useStore.getState().logs).toHaveLength(0);
-  });
 });
 
 describe("applyEvent - stage_complete event", () => {

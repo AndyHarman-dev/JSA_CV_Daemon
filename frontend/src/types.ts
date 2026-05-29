@@ -48,13 +48,6 @@ export type WSEvent =
   | { type: "approved"; job_id: string; cv_pdf_path: string; cl_pdf_path: string }
   | { type: "job_removed"; job_id: string };
 
-export interface LogEntry {
-  job_id: string;
-  level: "info" | "warn" | "error";
-  text: string;
-  ts: number; // Date.now() when received
-}
-
 export interface FullJobDTO extends JobDTO {
   follow_ups: FollowUpDTO[];
   documents: DocumentDTO[];

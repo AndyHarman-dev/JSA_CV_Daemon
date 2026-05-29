@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useStore } from "../store";
 import { JobDetail } from "../components/JobDetail";
-import type { JobDTO, LogEntry } from "../types";
+import type { JobDTO } from "../types";
 
 vi.mock("../api", () => ({
   api: {
@@ -60,7 +60,6 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
-    logs: [] as LogEntry[],
   });
 });
 
@@ -182,39 +181,6 @@ describe("JobDetail", () => {
     expect(cvResumeElements.length).toBeGreaterThan(0);
   });
 
-  it("shows Logs section heading for a selected job", () => {
-    const job = makeJob({ id: "j1" });
-    useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
-
-    render(<JobDetail />);
-
-    expect(screen.getByText("Logs")).toBeInTheDocument();
-  });
-
-  it("shows 'No log entries yet.' when no logs for the job", () => {
-    const job = makeJob({ id: "j1" });
-    useStore.setState({ jobs: { j1: job }, selectedId: "j1", logs: [] });
-
-    render(<JobDetail />);
-
-    expect(screen.getByText("No log entries yet.")).toBeInTheDocument();
-  });
-
-  it("shows log entries for the selected job", () => {
-    const job = makeJob({ id: "j1" });
-    const logEntry: LogEntry = {
-      job_id: "j1",
-      level: "info",
-      text: "pipeline started",
-      ts: Date.now(),
-    };
-    useStore.setState({ jobs: { j1: job }, selectedId: "j1", logs: [logEntry] });
-
-    render(<JobDetail />);
-
-    expect(screen.getByText("pipeline started")).toBeInTheDocument();
-  });
-
   it("shows a Retry button when job is failed and has an error", () => {
     const job = makeJob({ id: "j1", state: "failed", error: "agent timed out" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
@@ -251,7 +217,6 @@ describe("JobDetail — BF-15 Smart Retry modal", () => {
       jobs: {},
       selectedId: undefined,
       wsStatus: "connecting",
-      logs: [] as LogEntry[],
     });
   });
 

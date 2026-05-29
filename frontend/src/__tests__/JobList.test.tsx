@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { useStore } from "../store";
 import { JobList } from "../components/JobList";
-import type { JobDTO, LogEntry } from "../types";
+import type { JobDTO } from "../types";
 
 function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   return {
@@ -25,7 +25,6 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
-    logs: [] as LogEntry[],
   });
 });
 

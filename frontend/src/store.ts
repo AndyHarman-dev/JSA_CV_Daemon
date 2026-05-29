@@ -1,20 +1,16 @@
 import { create } from "zustand";
-import type { JobDTO, WSEvent, LogEntry } from "./types";
+import type { JobDTO, WSEvent } from "./types";
 import { api } from "./api";
-
-const MAX_LOGS = 200;
 
 interface Store {
   jobs: Record<string, JobDTO>;
   selectedId: string | undefined;
   wsStatus: "connecting" | "open" | "closed";
-  logs: LogEntry[];
   upsertJob(j: JobDTO): void;
   selectJob(id: string): void;
   setWsStatus(s: Store["wsStatus"]): void;
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
-  appendLog(entry: LogEntry): void;
   removeJob(id: string): void;
 }
 
@@ -22,7 +18,6 @@ export const useStore = create<Store>((set, get) => ({
   jobs: {},
   selectedId: undefined,
   wsStatus: "connecting",
-  logs: [],
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -36,13 +31,6 @@ export const useStore = create<Store>((set, get) => ({
 
   setWsStatus(s: Store["wsStatus"]) {
     set({ wsStatus: s });
-  },
-
-  appendLog(entry: LogEntry) {
-    set((state) => {
-      const logs = [...state.logs, entry];
-      return { logs: logs.length > MAX_LOGS ? logs.slice(logs.length - MAX_LOGS) : logs };
-    });
   },
 
   removeJob(id: string) {
@@ -66,16 +54,10 @@ export const useStore = create<Store>((set, get) => ({
           console.error("refetchAll failed:", err);
         });
         break;
-      case "log": {
-        const level: LogEntry["level"] =
-          e.level === "warn" || e.level === "error" ? e.level : "info";
-        store.appendLog({ job_id: e.job_id, level, text: e.text, ts: Date.now() });
+      case "log":
         break;
-      }
-      case "error": {
-        store.appendLog({ job_id: e.job_id, level: "error", text: e.message, ts: Date.now() });
+      case "error":
         break;
-      }
       case "job_removed":
         store.removeJob(e.job_id);
         break;

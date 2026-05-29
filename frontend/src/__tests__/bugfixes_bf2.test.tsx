@@ -5,7 +5,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { JobList } from "../components/JobList";
 import { JobDetail } from "../components/JobDetail";
 import { StageTimeline } from "../components/StageTimeline";
-import type { JobDTO, LogEntry } from "../types";
+import type { JobDTO } from "../types";
 
 // ---------------------------------------------------------------------------
 // Mock api — include all methods used by JobDetail (+ dismiss and reset)
@@ -68,7 +68,6 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
-    logs: [] as LogEntry[],
   });
 });
 

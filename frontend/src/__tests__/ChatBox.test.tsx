@@ -16,7 +16,7 @@ vi.mock("../api", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   // Reset store so refetchAll doesn't blow up
-  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting", logs: [] });
+  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting" });
   (api.getJobs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 

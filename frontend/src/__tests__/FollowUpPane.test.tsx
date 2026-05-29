@@ -33,7 +33,7 @@ function makeFullJob(overrides: Partial<FullJobDTO> = {}): FullJobDTO {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting", logs: [] });
+  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting" });
   (api.getJobs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 

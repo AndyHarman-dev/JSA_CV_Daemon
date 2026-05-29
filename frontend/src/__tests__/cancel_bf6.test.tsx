@@ -14,7 +14,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useStore } from "../store";
 import { api } from "../api";
 import { JobDetail } from "../components/JobDetail";
-import type { JobDTO, LogEntry } from "../types";
+import type { JobDTO } from "../types";
 
 // ---------------------------------------------------------------------------
 // Mock the api module — include all methods used by JobDetail
@@ -78,7 +78,6 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
-    logs: [] as LogEntry[],
   });
   // Clear call counts and reset implementations before each test
   vi.clearAllMocks();

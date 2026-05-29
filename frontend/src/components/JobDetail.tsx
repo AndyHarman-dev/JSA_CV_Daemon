@@ -3,7 +3,6 @@ import { useStore } from "../store";
 import { api } from "../api";
 import { StatusBadge } from "./StatusBadge";
 import { StageTimeline } from "./StageTimeline";
-import { LogTail } from "./LogTail";
 import { FollowUpPane } from "./FollowUpPane";
 import { ReviewPane } from "./ReviewPane";
 
@@ -256,7 +255,7 @@ export function JobDetail() {
       {(job.error || job.state === "failed") && (
         <div className="rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
           <span className="font-semibold">Error: </span>
-          {job.error || "An error occurred. Check logs for details."}
+          {job.error || "An unknown error occurred."}
         </div>
       )}
 
@@ -267,13 +266,6 @@ export function JobDetail() {
         <ReviewPane jobId={job.id} />
       )}
 
-      {/* Log tail */}
-      <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
-          Logs
-        </h3>
-        <LogTail jobId={job.id} />
-      </div>
     </div>
   );
 }
