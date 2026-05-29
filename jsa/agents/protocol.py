@@ -17,6 +17,31 @@ _BLOCK_RE = re.compile(
 # Matches any open sentinel marker (to detect unterminated blocks)
 _OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL)>>>")
 
+# Defense-in-depth: strip Change Log content if a model places it inside a FINAL block.
+# Matches <change_log>...</change_log> (XML-wrapped, case-insensitive, any surrounding whitespace).
+_CHANGE_LOG_XML_RE = re.compile(
+    r"\s*<change_log>.*?</change_log>\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+# Matches a ## or ### Change Log heading and everything that follows it to end of string.
+_CHANGE_LOG_HEADING_RE = re.compile(
+    r"^#{2,3}\s+Change\s+Log.*",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+
+
+def _strip_change_log(content: str) -> str:
+    """Remove any Change Log content from a FINAL block payload.
+
+    Strips both:
+    - XML-wrapped form: <change_log>...</change_log> (case-insensitive)
+    - Markdown heading form: ## Change Log or ### Change Log and all text following it
+      to end of string (case-insensitive)
+    """
+    content = _CHANGE_LOG_XML_RE.sub("", content)
+    content = _CHANGE_LOG_HEADING_RE.sub("", content)
+    return content.strip()
+
 
 class ProtocolError(Exception):
     pass
@@ -53,6 +78,7 @@ def parse_reply(raw: str) -> AgentReply:
     content = inner.strip()
 
     if marker == "FINAL":
+        content = _strip_change_log(content)
         return AgentReply(raw=raw, content=content, kind="final", question=None)
     else:  # NEED_INPUT
         return AgentReply(raw=raw, content=content, kind="needs_input", question=content)
