@@ -67,18 +67,13 @@ export const useStore = create<Store>((set, get) => ({
         });
         break;
       case "log": {
-        const rawLevel = e.payload["level"];
-        const rawText = e.payload["text"];
         const level: LogEntry["level"] =
-          rawLevel === "warn" || rawLevel === "error" ? rawLevel : "info";
-        const text = typeof rawText === "string" ? rawText : String(rawText ?? "");
-        store.appendLog({ job_id: e.job_id, level, text, ts: Date.now() });
+          e.level === "warn" || e.level === "error" ? e.level : "info";
+        store.appendLog({ job_id: e.job_id, level, text: e.text, ts: Date.now() });
         break;
       }
       case "error": {
-        const rawMsg = e.payload["message"];
-        const text = typeof rawMsg === "string" ? rawMsg : String(rawMsg ?? "");
-        store.appendLog({ job_id: e.job_id, level: "error", text, ts: Date.now() });
+        store.appendLog({ job_id: e.job_id, level: "error", text: e.message, ts: Date.now() });
         break;
       }
       case "job_removed":

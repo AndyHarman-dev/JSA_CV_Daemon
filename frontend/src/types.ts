@@ -39,15 +39,14 @@ export interface DocumentDTO {
   pdf_path: string | null;
 }
 
-export type WSEventType =
-  | "status_changed" | "stage_complete" | "follow_up_needed"
-  | "log" | "error" | "approved" | "job_removed";
-
-export interface WSEvent {
-  type: WSEventType;
-  job_id: string;
-  payload: Record<string, unknown>;
-}
+export type WSEvent =
+  | { type: "status_changed"; job_id: string; from_state: string; to_state: string }
+  | { type: "stage_complete"; job_id: string; stage: string }
+  | { type: "follow_up_needed"; job_id: string; follow_up_id: number; question: string; stage: string }
+  | { type: "log"; job_id: string; level: "info" | "warn" | "error"; text: string }
+  | { type: "error"; job_id: string; message: string }
+  | { type: "approved"; job_id: string; cv_pdf_path: string; cl_pdf_path: string }
+  | { type: "job_removed"; job_id: string };
 
 export interface LogEntry {
   job_id: string;

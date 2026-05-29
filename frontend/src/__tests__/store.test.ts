@@ -162,7 +162,8 @@ describe("applyEvent - log event", () => {
     const event: WSEvent = {
       type: "log",
       job_id: "job1",
-      payload: { level: "info", text: "build started" },
+      level: "info",
+      text: "build started",
     };
     useStore.getState().applyEvent(event);
 
@@ -177,7 +178,8 @@ describe("applyEvent - log event", () => {
     const event: WSEvent = {
       type: "log",
       job_id: "job2",
-      payload: { level: "warn", text: "quota near limit" },
+      level: "warn",
+      text: "quota near limit",
     };
     useStore.getState().applyEvent(event);
 
@@ -187,11 +189,12 @@ describe("applyEvent - log event", () => {
   });
 
   it("defaults to info level for unknown log levels", () => {
-    const event: WSEvent = {
+    const event = {
       type: "log",
       job_id: "job1",
-      payload: { level: "debug", text: "verbose message" },
-    };
+      level: "debug",
+      text: "verbose message",
+    } as unknown as WSEvent;
     useStore.getState().applyEvent(event);
 
     const logs = useStore.getState().logs;
@@ -204,7 +207,7 @@ describe("applyEvent - error event", () => {
     const event: WSEvent = {
       type: "error",
       job_id: "job1",
-      payload: { message: "agent timed out" },
+      message: "agent timed out",
     };
     useStore.getState().applyEvent(event);
 
@@ -215,11 +218,11 @@ describe("applyEvent - error event", () => {
     expect(logs[0].job_id).toBe("job1");
   });
 
-  it("converts non-string message to string for error events", () => {
+  it("uses the message string directly for error events", () => {
     const event: WSEvent = {
       type: "error",
       job_id: "job1",
-      payload: { message: 42 as unknown as string },
+      message: "42",
     };
     useStore.getState().applyEvent(event);
 
@@ -233,7 +236,8 @@ describe("applyEvent - status_changed event", () => {
     const event: WSEvent = {
       type: "status_changed",
       job_id: "job1",
-      payload: { from: "pending", to: "running" },
+      from_state: "pending",
+      to_state: "running",
     };
     useStore.getState().applyEvent(event);
 
@@ -248,7 +252,8 @@ describe("applyEvent - status_changed event", () => {
     const event: WSEvent = {
       type: "status_changed",
       job_id: "job1",
-      payload: { from: "pending", to: "running" },
+      from_state: "pending",
+      to_state: "running",
     };
     useStore.getState().applyEvent(event);
     await Promise.resolve();
@@ -262,7 +267,7 @@ describe("applyEvent - stage_complete event", () => {
     const event: WSEvent = {
       type: "stage_complete",
       job_id: "job1",
-      payload: { stage: "cv_adjust" },
+      stage: "cv_adjust",
     };
     useStore.getState().applyEvent(event);
 
