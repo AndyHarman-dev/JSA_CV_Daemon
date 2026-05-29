@@ -30,6 +30,11 @@ async def init_db(engine) -> None:
                 await conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {col} VARCHAR(128)"))
             except OperationalError:
                 pass  # column already exists — safe to ignore
+        # retry_count uses a different type/clause so it gets its own migration block.
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

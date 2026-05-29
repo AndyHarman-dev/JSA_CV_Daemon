@@ -15,6 +15,7 @@ export interface JobDTO {
   state: JobState;
   current_stage: Stage | null;
   error: string | null;
+  retry_count: number;
   updated_at: string;
   created_at: string;
 }

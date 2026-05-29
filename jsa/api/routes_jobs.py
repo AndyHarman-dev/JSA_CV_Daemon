@@ -69,6 +69,7 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "state": job.state.value if job.state is not None else None,
         "current_stage": job.current_stage.value if job.current_stage is not None else None,
         "error": job.error,
+        "retry_count": job.retry_count,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
@@ -450,7 +451,10 @@ async def delete_job(request: Request, job_id: str):
 
 @router.post("/api/jobs/{job_id}/reset")
 async def reset_job(request: Request, job_id: str):
-    """Reset a failed job back to pending."""
+    """Soft-reset (retry_count==0) or nuclear-reset (retry_count>0) a failed job.
+
+    Dismissed jobs use an unchanged checkpoint path (BF-15 scope: dismissed is out of scope).
+    """
     sf = _session_factory(request)
     async with sf() as session:
         job = await repo.get_job(session, job_id)
@@ -462,17 +466,41 @@ async def reset_job(request: Request, job_id: str):
                 detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'failed' or 'dismissed'",
             )
 
-        # Use repo.checkpoint per CLAUDE.md checkpoint rule
-        await repo.checkpoint(session, job, JobState.pending, new_stage=None)
+        prev_state = job.state.value
 
-    # Re-fetch with relationships after checkpoint
+        failed_reset = job.state == JobState.failed
+        if failed_reset:
+            if job.retry_count == 0:
+                await repo.soft_reset_job(session, job)
+            else:
+                await repo.nuclear_reset_job(session, job)
+
+            new_state = job.state.value  # updated by the reset function
+        else:
+            # dismissed → pending: existing checkpoint path (unchanged)
+            await repo.checkpoint(session, job, JobState.pending, new_stage=None)
+            new_state = JobState.pending.value
+
+    # Publish status change event for failed→* resets (dismissed path unchanged — no event).
+    if failed_reset:
+        await bus.publish(
+            event_to_dict(
+                StatusChangedEvent(
+                    job_id=job_id,
+                    from_state=prev_state,
+                    to_state=new_state,
+                )
+            )
+        )
+
+    # Re-fetch with relationships for the response
     async with sf() as session:
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         job_dict = _job_to_dict(job, full=True)
 
-    # Wake the orchestrator so it picks up the now-pending job immediately.
+    # Wake the orchestrator so it picks up the now-pending/cv_done job immediately.
     request.app.state.orchestrator.kick()
 
     return job_dict

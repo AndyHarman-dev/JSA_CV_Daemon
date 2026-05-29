@@ -434,7 +434,13 @@ class TestMarkFailed:
         assert job.state == JobState.failed
         assert job.error == "timeout error"
 
-    async def test_mark_failed_clears_current_stage(self, session):
+    async def test_mark_failed_preserves_current_stage(self, session):
+        """BF-15: mark_failed preserves current_stage so soft_reset_job can discriminate.
+
+        The old behavior (clear current_stage) was intentionally changed in BF-15.
+        Failed jobs retain current_stage = the stage that failed; they are never
+        dispatched by list_runnable_jobs, so this is safe.
+        """
         job = await _insert_job(session, job_id="aaaa000000000001")
         job.state = JobState.running
         job.current_stage = Stage.cv_adjust
@@ -442,7 +448,7 @@ class TestMarkFailed:
         await repo.mark_failed(session, "aaaa000000000001", "agent crashed")
         refreshed = await repo.get_job(session, "aaaa000000000001")
         assert refreshed.state == JobState.failed
-        assert refreshed.current_stage is None
+        assert refreshed.current_stage == Stage.cv_adjust  # preserved, not cleared
 
     async def test_mark_failed_noop_for_missing_job(self, session):
         # Should not raise

@@ -299,6 +299,10 @@ async def _handle_final(
     accumulated_messages: list[dict],
 ) -> None:
     """Finalize the stage: compute next state, version document, write checkpoint."""
+    # A successful FINAL means any soft retry worked — reset the retry counter.
+    # checkpoint() calls session.add(job) + commit, so this persists atomically.
+    job.retry_count = 0
+
     # Determine document stage (revision docs stored under original stage)
     if stage == Stage.revising_cv:
         doc_stage = Stage.cv_adjust

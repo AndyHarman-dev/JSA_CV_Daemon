@@ -14,7 +14,7 @@ ALLOWED = {
     JobState.cl_done:        {JobState.review, JobState.failed, JobState.dismissed},
     JobState.review:         {JobState.running, JobState.awaiting_input, JobState.approved, JobState.failed, JobState.dismissed},
     JobState.approved:       set(),
-    JobState.failed:         {JobState.pending, JobState.dismissed},
+    JobState.failed:         {JobState.pending, JobState.dismissed, JobState.cv_done},
     JobState.dismissed:      {JobState.pending},
 }
 

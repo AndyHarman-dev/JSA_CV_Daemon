@@ -61,12 +61,14 @@ async def upsert_job(session: AsyncSession, job_data: dict) -> Job:
             job.cv_text = job_data["cv_text"]
         # Per ARCH.md § Job identity: failed jobs reset to pending on re-run so
         # the pipeline re-processes them without requiring a manual /reset call.
+        # CSV re-import of a failed job is always nuclear (ARCH.md BF-15).
+        # nuclear_reset_job includes its own commit, which persists the field
+        # updates already set above together with the nuclear reset.
         if job.state == JobState.failed:
-            from jsa.pipeline.state_machine import transition as _transition
-            _transition(job, JobState.pending, None)
-            job.error = None
-        job.updated_at = datetime.utcnow()
-        await session.flush()
+            await nuclear_reset_job(session, job)
+        else:
+            job.updated_at = datetime.utcnow()
+            await session.flush()
 
     return job
 
@@ -142,7 +144,13 @@ async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
     if job.state in (JobState.approved, JobState.dismissed):
         return  # terminal user-controlled state — do not mark failed
     prev_state = job.state
-    transition(job, JobState.failed, None)  # validates transition and clears current_stage
+    stage_at_failure = job.current_stage          # capture before transition clears it
+    transition(job, JobState.failed, None)        # validates state→failed, sets current_stage=None
+    # Deliberately restore current_stage after transition — ARCH.md BF-15 documented exception.
+    # transition() forces current_stage=None on entry to 'failed', but we need to remember
+    # which stage failed so soft_reset_job can discriminate. failed jobs are never dispatched
+    # by list_runnable_jobs, so this is safe.
+    job.current_stage = stage_at_failure
     job.error = error
     job.updated_at = datetime.utcnow()
     await session.commit()
@@ -160,6 +168,85 @@ async def mark_failed(session: AsyncSession, job_id: str, error: str) -> None:
             )
         )
     )
+
+
+async def soft_reset_job(session: AsyncSession, job: Job) -> None:
+    """Rewind the failed stage only. Clears its Messages/FollowUps/session ID.
+
+    failed_stage == cover_letter or revising_cl → rewind to cv_done
+    failed_stage == cv_adjust, revising_cv, or None → rewind to pending
+
+    Sets retry_count = 1. The job must be in state 'failed' on entry.
+    """
+    from jsa.pipeline.state_machine import transition
+
+    failed_stage = job.current_stage
+
+    if failed_stage in (Stage.cover_letter, Stage.revising_cl):
+        # Delete cover_letter and revising_cl messages/followups only —
+        # keep cv_adjust messages so the orchestrator can resume with full CV context.
+        await session.execute(
+            delete(Message).where(
+                Message.job_id == job.id,
+                Message.stage.in_([Stage.cover_letter, Stage.revising_cl]),
+            )
+        )
+        await session.execute(
+            delete(FollowUp).where(
+                FollowUp.job_id == job.id,
+                FollowUp.stage.in_([Stage.cover_letter, Stage.revising_cl]),
+            )
+        )
+        # Delete any unconsumed revision request (covers revision-stage failures)
+        await session.execute(
+            delete(RevisionRequest).where(
+                RevisionRequest.job_id == job.id,
+                RevisionRequest.consumed_at.is_(None),
+            )
+        )
+        job.cl_session_id = None
+        job.session_external_id = None
+        # Transition failed → cv_done (new edge added to ALLOWED in BF-15)
+        transition(job, JobState.cv_done, None)
+    else:
+        # cv_adjust, revising_cv, or None — rewind to pending
+        await session.execute(delete(Message).where(Message.job_id == job.id))
+        await session.execute(delete(FollowUp).where(FollowUp.job_id == job.id))
+        await session.execute(delete(RevisionRequest).where(RevisionRequest.job_id == job.id))
+        job.cv_session_id = None
+        job.cl_session_id = None
+        job.session_external_id = None
+        transition(job, JobState.pending, None)
+
+    job.retry_count = 1
+    job.error = None
+    job.updated_at = datetime.utcnow()
+    session.add(job)
+    await session.commit()
+
+
+async def nuclear_reset_job(session: AsyncSession, job: Job) -> None:
+    """Delete all job data and reset to pending (retry_count=0).
+
+    Explicit DELETE statements are used (not ORM cascade) because the job row
+    is reset, not deleted — there is no cascade to trigger.
+    """
+    from jsa.pipeline.state_machine import transition
+
+    await session.execute(delete(Message).where(Message.job_id == job.id))
+    await session.execute(delete(Document).where(Document.job_id == job.id))
+    await session.execute(delete(FollowUp).where(FollowUp.job_id == job.id))
+    await session.execute(delete(RevisionRequest).where(RevisionRequest.job_id == job.id))
+
+    job.cv_session_id = None
+    job.cl_session_id = None
+    job.session_external_id = None
+    job.error = None
+    job.retry_count = 0
+    transition(job, JobState.pending, None)
+    job.updated_at = datetime.utcnow()
+    session.add(job)
+    await session.commit()
 
 
 async def checkpoint(

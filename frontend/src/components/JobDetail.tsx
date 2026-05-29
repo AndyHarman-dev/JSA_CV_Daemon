@@ -29,6 +29,7 @@ export function JobDetail() {
   const [requeueError, setRequeueError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [showNuclearConfirm, setShowNuclearConfirm] = useState(false);
   const [jdOpen, setJdOpen] = useState(false);
 
   if (selectedId === undefined || job === undefined) {
@@ -84,6 +85,26 @@ export function JobDetail() {
 
   async function handleRetry() {
     if (!job) return;
+    if (job.retry_count > 0) {
+      // Show confirmation modal instead of acting immediately (nuclear reset)
+      setShowNuclearConfirm(true);
+      return;
+    }
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      await api.reset(job.id);
+      await refetchAll();
+    } catch (err) {
+      setRetryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  async function handleNuclearConfirm() {
+    if (!job) return;
+    setShowNuclearConfirm(false);
     setRetrying(true);
     setRetryError(null);
     try {
@@ -173,6 +194,27 @@ export function JobDetail() {
           </button>
         )}
       </div>
+      {showNuclearConfirm && (
+        <div className="mt-2 p-3 border border-red-400 rounded bg-red-50 text-sm">
+          <p className="text-red-700 font-medium mb-2">
+            This will permanently delete all progress for this job and restart from scratch.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { handleNuclearConfirm().catch(console.error); }}
+              className="px-3 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+            >
+              Yes, restart from scratch
+            </button>
+            <button
+              onClick={() => setShowNuclearConfirm(false)}
+              className="px-3 py-1 border border-gray-400 rounded text-xs hover:bg-gray-100"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {dismissError && (
         <p className="text-sm text-red-600">{dismissError}</p>
       )}
