@@ -18,15 +18,17 @@ _BLOCK_RE = re.compile(
 _OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL)>>>")
 
 # Defense-in-depth: strip Change Log content if a model places it inside a FINAL block.
-# Matches <change_log>...</change_log> (XML-wrapped, case-insensitive, any surrounding whitespace).
+# Matches <change_log>...</change_log> (XML-wrapped, case-insensitive).
+# Consumes at most one newline on each side to preserve surrounding paragraph structure.
 _CHANGE_LOG_XML_RE = re.compile(
-    r"\s*<change_log>.*?</change_log>\s*",
+    r"\n?[ \t]*<change_log>.*?</change_log>[ \t]*\n?",
     re.DOTALL | re.IGNORECASE,
 )
-# Matches a ## or ### Change Log heading and everything that follows it to end of string.
+# Matches a ## or ### Change Log heading and its section body (lines until the next heading).
+# Uses [^\n]* instead of .* so re.DOTALL is not needed; stops at the next Markdown heading.
 _CHANGE_LOG_HEADING_RE = re.compile(
-    r"^#{2,3}\s+Change\s+Log.*",
-    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+    r"^#{2,3}\s+Change\s+Log\b[^\n]*(?:\n(?!#{1,3}\s)[^\n]*)*",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
