@@ -37,8 +37,8 @@ def _strip_change_log(content: str) -> str:
 
     Strips both:
     - XML-wrapped form: <change_log>...</change_log> (case-insensitive)
-    - Markdown heading form: ## Change Log or ### Change Log and all text following it
-      to end of string (case-insensitive)
+    - Markdown heading form: ## Change Log or ### Change Log plus its section body
+      (lines up to the next Markdown heading or end of string, case-insensitive)
     """
     content = _CHANGE_LOG_XML_RE.sub("", content)
     content = _CHANGE_LOG_HEADING_RE.sub("", content)

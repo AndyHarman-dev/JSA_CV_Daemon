@@ -100,6 +100,17 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 
 - [x] Phase BF-15: Smart retry — soft reset vs nuclear reset — Two-tier retry logic for failed jobs. First Retry (retry_count==0) soft-resets only the failed stage (deletes its Messages/FollowUps, clears its session ID, rewinds job to pre-stage state). Second Retry (retry_count>0) shows a confirmation dialog in the UI; on confirm, nuclear-resets the entire job (delete all Messages, Documents, FollowUps, RevisionRequests, clear session IDs, reset to pending). Requires: Job.retry_count DB column + migration, preserve current_stage on mark_failed, failed→cv_done transition, soft_reset_job/nuclear_reset_job repo helpers, reset endpoint branching, _job_to_dict including retry_count, _handle_final resetting retry_count to 0 on success, upsert_job using nuclear semantics for failed jobs, and a frontend confirmation modal for the nuclear path.
 
+- [~] Phase BF-16: Change Log section appearing inside rendered CV — `PROMPT_CDADJUST.md` step 6 instructs the model to include the Change Log **inside** the `<<<FINAL>>>` block. `parse_reply` stores the entire FINAL content as the document markdown, so the Change Log ends up rendered in the PDF/browser preview. The issue is most consistent with Gemini CLI (which follows the prompt instruction literally).
+  **Root cause:** The prompt says "inside the `<<<FINAL>>>` block" — the model obeys.
+  **Fix — two layers:**
+  1. **Prompt** (`jsa/prompts/PROMPT_CDADJUST.md`): Change step 6 so the Change Log is written as conversational reply text **before** the `<<<FINAL>>>` sentinel, not inside it. Add an explicit sentence: "Do NOT include the Change Log inside the `<<<FINAL>>>` block — the FINAL block must contain only the clean CV Markdown." Update the Output format reminder to reflect this.
+  2. **Code safety net** (`jsa/agents/protocol.py`): After extracting `content` from a FINAL block, strip any embedded Change Log — both `<change_log>…</change_log>` XML wrapper and any trailing `## Change Log` / `### Change Log` Markdown section — using a small `_strip_change_log(content)` helper. This catches models that ignore the updated prompt.
+  **Tests** (`tests/backend/test_bf16_change_log_strip.py`):
+  - `parse_reply` returns clean content when FINAL has an XML `<change_log>` block.
+  - `parse_reply` returns clean content when FINAL has a `## Change Log` Markdown section.
+  - `parse_reply` is unchanged when FINAL has no Change Log at all.
+  - Prompt test: confirm the word "before" (or equivalent) is present in the updated step 6 instruction and "inside the `<<<FINAL>>>` block" is absent from the Change Log instruction.
+
 ## Change log
 2026-05-27 — Rewrote plan for bugfix wave 2. Removed all completed phases (1–12, BF-1–3). Added BF-4 (start_session nudge-retry), BF-5 (LogEvent publishing), BF-6 (Cancel button for running jobs), BF-7 (Gemini pty stuck).
 2026-05-28 — Added BF-8: duplicate open FollowUp UNIQUE constraint crash on multi-turn NEED_INPUT and failed-job reset.
@@ -109,3 +120,4 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 2026-05-28 — Added BF-12: Hard-delete Cancel button at every stage.
 2026-05-28 — Added BF-13: PDF/browser rendering sync — html:True in markdown-it passes HTML through to WeasyPrint; add text-center to browser h1.
 2026-05-28 — Added BF-14: Retry button for failed jobs — frontend-only; backend reset endpoint already handles failed→pending.
+2026-05-29 — Added BF-16: Change Log section appearing inside rendered CV — prompt told model to include Change Log in FINAL block; fix: move it before FINAL in prompt + strip safety net in protocol.py.
