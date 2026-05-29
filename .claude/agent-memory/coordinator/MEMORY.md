@@ -13,3 +13,4 @@
 - [BF-12 hard-delete Cancel](project_jsa_phase_bf12.md) — selectinload before ORM cascade delete; refetchAll() can't remove rows (use removeJob directly); publish WS event outside session block
 - [BF-13 PDF/browser rendering sync](project_jsa_phase_bf13.md) — html:True in markdown-it passes HTML through; browser h1 needs text-center; BF-11 strip was wrong fix
 - [BF-14 Retry button for failed jobs](project_jsa_phase_bf14.md) — frontend-only; test commit oversight: always verify git status before declaring phase done
+- [BF-15 Smart Retry soft/nuclear](project_jsa_phase_bf15.md) — mark_failed preserves current_stage; failed→cv_done in ALLOWED; retry_count in base _job_to_dict; inline modal in JobDetail
