@@ -158,6 +158,20 @@ export function JobDetail() {
             {requeuing ? "Re-queuing…" : "Re-queue"}
           </button>
         )}
+        {showRetry && (
+          <button
+            type="button"
+            className="text-sm px-3 py-1 rounded border border-indigo-400 text-indigo-700 bg-white hover:bg-indigo-50 disabled:opacity-50"
+            disabled={retrying}
+            onClick={() => {
+              handleRetry().catch((err: unknown) => {
+                console.error("JobDetail retry error:", err);
+              });
+            }}
+          >
+            {retrying ? "Retrying…" : "Retry"}
+          </button>
+        )}
       </div>
       {dismissError && (
         <p className="text-sm text-red-600">{dismissError}</p>
@@ -167,6 +181,9 @@ export function JobDetail() {
       )}
       {deleteError && (
         <p className="text-sm text-red-600">{deleteError}</p>
+      )}
+      {retryError && (
+        <p className="text-sm text-red-600">{retryError}</p>
       )}
 
       {/* Stage timeline */}
@@ -194,30 +211,11 @@ export function JobDetail() {
       </div>
 
       {/* Error box */}
-      {job.error && (
+      {(job.error || job.state === "failed") && (
         <div className="rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
           <span className="font-semibold">Error: </span>
-          {job.error}
-          {showRetry && (
-            <div className="mt-2">
-              <button
-                type="button"
-                className="text-sm px-3 py-1 rounded border border-indigo-400 text-indigo-700 bg-white hover:bg-indigo-50 disabled:opacity-50"
-                disabled={retrying}
-                onClick={() => {
-                  handleRetry().catch((err: unknown) => {
-                    console.error("JobDetail retry error:", err);
-                  });
-                }}
-              >
-                {retrying ? "Retrying…" : "Retry"}
-              </button>
-            </div>
-          )}
+          {job.error || "An error occurred. Check logs for details."}
         </div>
-      )}
-      {retryError && (
-        <p className="text-sm text-red-600">{retryError}</p>
       )}
 
       {job.state === "awaiting_input" && (
