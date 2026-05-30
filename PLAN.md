@@ -142,6 +142,8 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
   - Prompt test: assert `---` separator rule is unconditional ("every section heading").
   - CSS test: parse `styles.css` as text and assert each tightened value is present (e.g., `0.75in`, `10.5pt`, `1.3`, etc.).
 
+- [x] Phase DEV-1: `--dev-tunnel` flag with cloudflared integration — Add a `--dev-tunnel` boolean CLI flag. When set: (1) `create_app()` in `server.py` relaxes CORS from `localhost:*` regex to `allow_origins=["*"]`; (2) the CLI spawns `cloudflared tunnel --url http://localhost:<port>` as a background subprocess after the server starts; (3) parse cloudflared's stderr for the `trycloudflare.com` URL and print it prominently (e.g. `[JSA] Tunnel URL: https://...trycloudflare.com`); (4) if `cloudflared` is not on PATH, print a friendly error and abort. The bind address stays `127.0.0.1` — cloudflared connects from the same machine and doesn't need `0.0.0.0`. No DB, pipeline, or auth changes.
+
 ## Change log
 2026-05-27 — Rewrote plan for bugfix wave 2. Removed all completed phases (1–12, BF-1–3). Added BF-4 (start_session nudge-retry), BF-5 (LogEvent publishing), BF-6 (Cancel button for running jobs), BF-7 (Gemini pty stuck).
 2026-05-28 — Added BF-8: duplicate open FollowUp UNIQUE constraint crash on multi-turn NEED_INPUT and failed-job reset.
@@ -153,3 +155,4 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 2026-05-28 — Added BF-14: Retry button for failed jobs — frontend-only; backend reset endpoint already handles failed→pending.
 2026-05-29 — Added BF-16: Change Log section appearing inside rendered CV — prompt told model to include Change Log in FINAL block; fix: move it before FINAL in prompt + strip safety net in protocol.py.
 2026-05-30 — Added BF-17: CV format rules — drop profession title from header, mandate unconditional `---` separators, tighten CSS spacing (0.75in margins, 10.5pt font, 1.3 line-height) to target ≤2 pages.
+2026-05-30 — Added DEV-1: `--dev-tunnel` flag — cloudflared quick tunnel + relaxed CORS for phone/remote dev access.
