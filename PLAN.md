@@ -100,7 +100,7 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 
 - [x] Phase BF-15: Smart retry — soft reset vs nuclear reset — Two-tier retry logic for failed jobs. First Retry (retry_count==0) soft-resets only the failed stage (deletes its Messages/FollowUps, clears its session ID, rewinds job to pre-stage state). Second Retry (retry_count>0) shows a confirmation dialog in the UI; on confirm, nuclear-resets the entire job (delete all Messages, Documents, FollowUps, RevisionRequests, clear session IDs, reset to pending). Requires: Job.retry_count DB column + migration, preserve current_stage on mark_failed, failed→cv_done transition, soft_reset_job/nuclear_reset_job repo helpers, reset endpoint branching, _job_to_dict including retry_count, _handle_final resetting retry_count to 0 on success, upsert_job using nuclear semantics for failed jobs, and a frontend confirmation modal for the nuclear path.
 
-- [~] Phase BF-16: Change Log section appearing inside rendered CV — `PROMPT_CDADJUST.md` step 6 instructs the model to include the Change Log **inside** the `<<<FINAL>>>` block. `parse_reply` stores the entire FINAL content as the document markdown, so the Change Log ends up rendered in the PDF/browser preview. The issue is most consistent with Gemini CLI (which follows the prompt instruction literally).
+- [x] Phase BF-16: Change Log section appearing inside rendered CV — `PROMPT_CDADJUST.md` step 6 instructs the model to include the Change Log **inside** the `<<<FINAL>>>` block. `parse_reply` stores the entire FINAL content as the document markdown, so the Change Log ends up rendered in the PDF/browser preview. The issue is most consistent with Gemini CLI (which follows the prompt instruction literally).
   **Root cause:** The prompt says "inside the `<<<FINAL>>>` block" — the model obeys.
   **Fix — two layers:**
   1. **Prompt** (`jsa/prompts/PROMPT_CDADJUST.md`): Change step 6 so the Change Log is written as conversational reply text **before** the `<<<FINAL>>>` sentinel, not inside it. Add an explicit sentence: "Do NOT include the Change Log inside the `<<<FINAL>>>` block — the FINAL block must contain only the clean CV Markdown." Update the Output format reminder to reflect this.
@@ -110,6 +110,37 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
   - `parse_reply` returns clean content when FINAL has a `## Change Log` Markdown section.
   - `parse_reply` is unchanged when FINAL has no Change Log at all.
   - Prompt test: confirm the word "before" (or equivalent) is present in the updated step 6 instruction and "inside the `<<<FINAL>>>` block" is absent from the Change Log instruction.
+
+- [~] Phase BF-17: CV format rules — compact, ATS-friendly, ≤2 pages — The model produces a header block with a stray "profession title" line between the name and contact details, omits `---` section separators, and the CSS is too generous, causing CVs to spill to 3–4 pages.
+  **Root causes:**
+  - Prompt gives no spec for the header block structure beyond "use `# Name`" — model improvises a title line.
+  - Prompt says "use `---` only where the original had visual separators" — too conservative; separators are lost when PDF is parsed.
+  - CSS: `line-height: 1.5`, `1in` page margins, `h2 margin-top: 12pt`, `h3 margin-top: 8pt`, `font-size: 11pt` together yield only ~39 usable lines per page.
+  **Fix — two files only:**
+  1. **`jsa/prompts/PROMPT_CDADJUST.md`** — Phase 3 "Format preservation rules":
+     - Replace current header instruction with the mandated exact two-line block:
+       ```
+       # Full Name
+       email@example.com | +X-XXX-XXX-XXXX | linkedin.com/in/handle | City, Country
+       ```
+       No profession title anywhere. No blank line between `# Name` and the contact paragraph.
+     - Replace "use `---` only where the original had separators" with: "Place a `---` horizontal rule immediately before **every** section heading (`## Summary`, `## Experience`, etc.). This is unconditional — do not infer from the original."
+     - Add explicit compactness rules in a new bullet: "No blank lines between bullet items within a job block. No blank line between the date line and the bullet list. One blank line between consecutive jobs. No trailing blank lines at end of sections."
+     - ATS self-check item: add "[ ] No profession title line in header — header is exactly `# Name` + contact paragraph."
+  2. **`jsa/render/styles.css`** — tighten spacing to fit ≤2 pages:
+     - `@page margin: 1in` → `0.75in`
+     - `font-size: 11pt` → `10.5pt`
+     - `line-height: 1.5` → `1.3`
+     - `h2 margin-top: 12pt` → `8pt`
+     - `h3 margin-top: 8pt` → `4pt`
+     - `p margin: 4pt 0` → `2pt 0`
+     - `ul, ol margin: 4pt 0` → `2pt 0`
+     - `li margin: 2pt 0` → `1pt 0`
+     - `hr margin: 12pt 0` → `6pt 0`
+  **Tests** (`tests/backend/test_bf17_format.py`):
+  - Prompt test: assert the mandated two-line header format example is present; assert "profession title" instruction is absent.
+  - Prompt test: assert `---` separator rule is unconditional ("every section heading").
+  - CSS test: parse `styles.css` as text and assert each tightened value is present (e.g., `0.75in`, `10.5pt`, `1.3`, etc.).
 
 ## Change log
 2026-05-27 — Rewrote plan for bugfix wave 2. Removed all completed phases (1–12, BF-1–3). Added BF-4 (start_session nudge-retry), BF-5 (LogEvent publishing), BF-6 (Cancel button for running jobs), BF-7 (Gemini pty stuck).
@@ -121,3 +152,4 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 2026-05-28 — Added BF-13: PDF/browser rendering sync — html:True in markdown-it passes HTML through to WeasyPrint; add text-center to browser h1.
 2026-05-28 — Added BF-14: Retry button for failed jobs — frontend-only; backend reset endpoint already handles failed→pending.
 2026-05-29 — Added BF-16: Change Log section appearing inside rendered CV — prompt told model to include Change Log in FINAL block; fix: move it before FINAL in prompt + strip safety net in protocol.py.
+2026-05-30 — Added BF-17: CV format rules — drop profession title from header, mandate unconditional `---` separators, tighten CSS spacing (0.75in margins, 10.5pt font, 1.3 line-height) to target ≤2 pages.
