@@ -97,8 +97,21 @@ Only after the user approves the strategy:
 
    **Format preservation rules** (in addition to ATS-safe rules):
    - Replicate the original CV's visual layout as faithfully as Markdown allows:
-     - Centred elements (name, contact block): use a top-level Markdown heading (`# Name`) — the PDF stylesheet centres `h1` automatically. Do NOT use raw HTML tags (`<div>`, `<p>`, `<span>`, etc.) anywhere in the output.
-     - Bold section dividers: use `---` horizontal rules only where the original had visual separators.
+     - **Header block — exact format, no variation:**
+       ```
+       # Full Name
+       email@example.com | +X-XXX-XXX-XXXX | linkedin.com/in/handle | City, Country
+       ```
+       Line 1: `# Full Name` (h1, centred by PDF stylesheet).
+       Line 2: a single paragraph with contact details separated by ` | `. No profession title, no job title, no tagline — name and contacts only.
+       No blank line between line 1 and line 2.
+       Do NOT use raw HTML tags (`<div>`, `<p>`, `<span>`, etc.) anywhere in the output.
+     - **Section separators:** Place a `---` horizontal rule immediately before **every** major section heading (`## Summary`, `## Experience`, `## Skills`, `## Education`, `## Certifications`, etc.). This is unconditional — do not infer from the original CV's layout.
+     - **Compactness (required for ≤2 pages):**
+       - No blank lines between bullet items within a job block.
+       - No blank line between the date line and the bullet list that follows it.
+       - One blank line between consecutive jobs within a section (to separate them).
+       - No trailing blank lines at the end of any section.
      - If the original used a two-column layout: linearise to a single column (required for ATS) and note it in the Change Log.
    - Apply ATS formatting rules (single-column, no tables, standard headings, etc.) for structural elements only. Do NOT change visual styling (font-size representation via heading level, alignment, spacing) unless it conflicts with ATS parseability. If you must change a visual style element for ATS reasons, note it in the Change Log.
 
@@ -123,6 +136,7 @@ Only after the user approves the strategy:
          (not only in the Skills list)
    - [ ] Both acronym and long form used at least once for key technical terms
    - [ ] CV is ≤ 2 pages
+   - [ ] Header is exactly `# Full Name` + contact paragraph — no profession title, no tagline
    Note any items that couldn't be satisfied and why.
 
 5. Emit the complete Markdown CV inside the `<<<FINAL>>>` sentinel (see Output format section below).
