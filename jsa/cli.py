@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import shutil
+import subprocess
 import threading
 import time
 import webbrowser
@@ -23,6 +26,38 @@ from jsa.server import create_app
 app = typer.Typer(help="JSA — Job Search Assistant")
 
 _VALID_BACKENDS = {"claude-cli", "gemini-cli", "anthropic"}
+
+
+def _start_tunnel(port: int) -> None:
+    """Spawn a cloudflared quick tunnel and print the public URL once available.
+
+    Runs non-blocking: the subprocess and the stdout-watching thread are both
+    daemons that die automatically when the main process exits.
+    """
+    if not shutil.which("cloudflared"):
+        print("[JSA] ERROR: cloudflared not found. Install with: brew install cloudflared")
+        raise typer.Exit(1)
+
+    proc = subprocess.Popen(
+        ["cloudflared", "tunnel", "--url", f"http://localhost:{port}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merge stderr into stdout
+        text=True,
+    )
+
+    def _watch() -> None:
+        url_pattern = re.compile(r"https://[^\s]+\.trycloudflare\.com")
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            m = url_pattern.search(line)
+            if m:
+                url = m.group(0)
+                print(f"\n[JSA] ✓ Tunnel URL: {url}")
+                print(f"   Open this on your phone: {url}\n")
+                break  # stop after finding the URL
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
 
 
 @app.command()
@@ -48,6 +83,7 @@ def main(
     db: Optional[Path] = typer.Option(None, "--db", help="SQLite database path"),
     port: Optional[int] = typer.Option(None, "--port", help="Port for the local web server"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser on start", is_flag=True),
+    dev_tunnel: bool = typer.Option(False, "--dev-tunnel", help="Start a cloudflared quick tunnel for remote/phone access (dev only)"),
 ) -> None:
     """Run JSA: process a CSV of job listings with a CV file."""
     # Validate --csv extension
@@ -101,12 +137,15 @@ def main(
     asyncio.run(_preflight(settings, csv_path=csv, cv_path=cv))
 
     # Start server
-    fastapi_app = create_app(settings)
+    fastapi_app = create_app(settings, dev_tunnel=dev_tunnel)
     if not settings.no_browser:
         def _open():
             time.sleep(1.5)
             webbrowser.open(f"http://localhost:{settings.port}")
         threading.Thread(target=_open, daemon=True).start()
+
+    if dev_tunnel:
+        _start_tunnel(settings.port)
 
     uvicorn.run(fastapi_app, host="127.0.0.1", port=settings.port, log_level="info")
 

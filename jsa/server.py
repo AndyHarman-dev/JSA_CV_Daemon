@@ -19,17 +19,27 @@ from jsa.pipeline.orchestrator import Orchestrator
 from jsa.agents.registry import backend_for
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
     app = FastAPI(title="JSA", version="1.0")
 
-    # CORS — wide-open for all localhost ports (intentional: local-only tool)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=r"http://localhost:\d+",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS — wide-open for all localhost ports (intentional: local-only tool).
+    # When dev_tunnel=True, allow all origins so a cloudflared public URL works.
+    if dev_tunnel:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"http://localhost:\d+",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     app.state.settings = settings
     app.state.bus = bus
