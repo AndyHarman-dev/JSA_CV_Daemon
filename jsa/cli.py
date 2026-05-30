@@ -47,14 +47,20 @@ def _start_tunnel(port: int) -> None:
 
     def _watch() -> None:
         url_pattern = re.compile(r"https://[^\s]+\.trycloudflare\.com")
-        assert proc.stdout is not None
+        if proc.stdout is None:
+            return
+        found = False
         for line in proc.stdout:
-            m = url_pattern.search(line)
-            if m:
-                url = m.group(0)
-                print(f"\n[JSA] ✓ Tunnel URL: {url}")
-                print(f"   Open this on your phone: {url}\n")
-                break  # stop after finding the URL
+            if not found:
+                m = url_pattern.search(line)
+                if m:
+                    url = m.group(0)
+                    print(f"\n[JSA] ✓ Tunnel URL: {url}")
+                    print(f"   Open this on your phone: {url}\n")
+                    found = True
+            # Keep draining the pipe so cloudflared never stalls
+        if not found:
+            print("[JSA] WARNING: cloudflared exited without printing a tunnel URL — check your internet connection.")
 
     t = threading.Thread(target=_watch, daemon=True)
     t.start()
@@ -83,7 +89,7 @@ def main(
     db: Optional[Path] = typer.Option(None, "--db", help="SQLite database path"),
     port: Optional[int] = typer.Option(None, "--port", help="Port for the local web server"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser on start", is_flag=True),
-    dev_tunnel: bool = typer.Option(False, "--dev-tunnel", help="Start a cloudflared quick tunnel for remote/phone access (dev only)"),
+    dev_tunnel: bool = typer.Option(False, "--dev-tunnel", help="Start a cloudflared quick tunnel for remote/phone access. WARNING: exposes the unauthenticated API publicly — dev use only."),
 ) -> None:
     """Run JSA: process a CSV of job listings with a CV file."""
     # Validate --csv extension
