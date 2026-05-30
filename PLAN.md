@@ -111,7 +111,7 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
   - `parse_reply` is unchanged when FINAL has no Change Log at all.
   - Prompt test: confirm the word "before" (or equivalent) is present in the updated step 6 instruction and "inside the `<<<FINAL>>>` block" is absent from the Change Log instruction.
 
-- [~] Phase BF-17: CV format rules — compact, ATS-friendly, ≤2 pages — The model produces a header block with a stray "profession title" line between the name and contact details, omits `---` section separators, and the CSS is too generous, causing CVs to spill to 3–4 pages.
+- [x] Phase BF-17: CV format rules — compact, ATS-friendly, ≤2 pages — The model produces a header block with a stray "profession title" line between the name and contact details, omits `---` section separators, and the CSS is too generous, causing CVs to spill to 3–4 pages.
   **Root causes:**
   - Prompt gives no spec for the header block structure beyond "use `# Name`" — model improvises a title line.
   - Prompt says "use `---` only where the original had visual separators" — too conservative; separators are lost when PDF is parsed.
