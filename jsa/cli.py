@@ -55,12 +55,12 @@ def _start_tunnel(port: int) -> None:
                 m = url_pattern.search(line)
                 if m:
                     url = m.group(0)
-                    print(f"\n[JSA] ✓ Tunnel URL: {url}")
-                    print(f"   Open this on your phone: {url}\n")
+                    print(f"\n[JSA] ✓ Tunnel URL: {url}", flush=True)
+                    print(f"   Open this on your phone: {url}\n", flush=True)
                     found = True
             # Keep draining the pipe so cloudflared never stalls
         if not found:
-            print("[JSA] WARNING: cloudflared exited without printing a tunnel URL — check your internet connection.")
+            print("[JSA] WARNING: cloudflared exited without printing a tunnel URL — check your internet connection.", flush=True)
 
     t = threading.Thread(target=_watch, daemon=True)
     t.start()
