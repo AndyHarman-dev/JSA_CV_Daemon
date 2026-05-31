@@ -19,6 +19,7 @@ export function JobDetail() {
   );
   const refetchAll = useStore((s) => s.refetchAll);
   const removeJob = useStore((s) => s.removeJob);
+  const selectJob = useStore((s) => s.selectJob);
 
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -33,8 +34,17 @@ export function JobDetail() {
 
   if (selectedId === undefined || job === undefined) {
     return (
-      <div className="flex flex-1 items-center justify-center text-gray-400 text-lg select-none">
-        ← Select a job
+      <div className="flex flex-col flex-1 p-4">
+        <button
+          type="button"
+          onClick={() => selectJob(undefined)}
+          className="md:hidden flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 mb-4 -ml-1"
+        >
+          ← Back
+        </button>
+        <div className="flex flex-1 items-center justify-center text-gray-400 text-lg select-none">
+          ← Select a job
+        </div>
       </div>
     );
   }
@@ -122,7 +132,15 @@ export function JobDetail() {
   const showRetry = job.state === "failed";
 
   return (
-    <div className="flex flex-col gap-4 p-6 overflow-y-auto">
+    <div className="flex flex-col gap-4 p-4 md:p-6 overflow-y-auto">
+      {/* Mobile back button */}
+      <button
+        type="button"
+        onClick={() => selectJob(undefined)}
+        className="md:hidden flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 mb-1 -ml-1"
+      >
+        ← Back
+      </button>
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <h2 className="text-xl font-bold text-gray-900">
