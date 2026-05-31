@@ -15,11 +15,14 @@ import logging
 import subprocess
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError, parse_reply
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root containing .claude/agents/
 
 
 class ClaudeCliError(RuntimeError):
@@ -46,6 +49,7 @@ class ClaudeCliBackend(AgentBackend):
     """
 
     name = "claude-cli"
+    RESEARCH_TIMEOUT = 300.0  # web search + multiple fetches can exceed the 120s message-turn default
 
     def __init__(self, timeout: float = 120.0) -> None:
         self._timeout = timeout
@@ -54,26 +58,28 @@ class ClaudeCliBackend(AgentBackend):
     # Internal subprocess runner (runs in a thread via asyncio.to_thread)
     # ------------------------------------------------------------------
 
-    def _run(self, cmd: list[str], context: str = "") -> str:
+    def _run(self, cmd: list[str], context: str = "", cwd: Path | None = None, timeout: float | None = None) -> str:
         """Run a claude CLI command and return its stdout.
 
-        Raises AgentTimeout if the process exceeds self._timeout seconds.
+        Raises AgentTimeout if the process exceeds the effective timeout.
         Raises ClaudeSessionExpiredError if the subprocess exits non-zero with
         empty stdout and stderr contains "No conversation found".
         Raises ClaudeCliError if the subprocess exits non-zero with empty stdout
         for any other reason.
         stderr is logged at WARNING but never mixed into the returned string.
         """
+        eff_timeout = timeout if timeout is not None else self._timeout
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                timeout=self._timeout,
+                timeout=eff_timeout,
                 stdin=subprocess.DEVNULL,
+                cwd=str(cwd) if cwd is not None else None,
             )
         except subprocess.TimeoutExpired as exc:
             raise AgentTimeout(
-                f"claude CLI timed out after {self._timeout}s"
+                f"claude CLI timed out after {eff_timeout}s"
             ) from exc
 
         if result.returncode != 0:
@@ -221,3 +227,22 @@ class ClaudeCliBackend(AgentBackend):
     async def end_session(self, handle: SessionHandle) -> None:
         """No-op: the subprocess has already exited when start_session/send_message returned."""
         pass
+
+    async def run_research(self, agent_name: str, query: str) -> str:
+        """One-shot, non-interactive research via a .claude/agents/ subagent.
+
+        Returns the agent's stdout raw — NO sentinel parsing. Runs from the JSA
+        project root so `claude` discovers .claude/agents/<agent_name>.md.
+        On any failure (ClaudeCliError / AgentTimeout) the caller MUST treat the
+        brief as unavailable and fall back to the NONE placeholder — research is
+        best-effort and never fails the job.
+        """
+        cmd = [
+            "claude",
+            "--agent", agent_name,
+            "--output-format", "text",
+            "-p", query,
+        ]
+        return await asyncio.to_thread(
+            self._run, cmd, f"research:{agent_name}", _PROJECT_ROOT, self.RESEARCH_TIMEOUT
+        )

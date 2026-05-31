@@ -139,8 +139,9 @@ async def run_stage(
                 {"role": "assistant", "content": reply.raw},
             ]
         else:
-            # Fresh session
-            initial_user_msg = _build_initial_user_msg(job)
+            # Fresh session — run research pre-step (claude-cli only; best-effort)
+            brief = await _gather_research(job, backend, stage)
+            initial_user_msg = _build_initial_user_msg(job, brief)
             handle, reply = await backend.start_session(system_prompt, initial_user_msg)
             # Accumulate all messages for this session (system, user, assistant reply)
             accumulated_messages = [
@@ -380,9 +381,16 @@ def _get_system_prompt(stage: Stage) -> str:
         return loader.read_prompt("cover_letter")
 
 
-def _build_initial_user_msg(job: Job) -> str:
-    """Build the initial user message for a fresh session."""
+def _build_initial_user_msg(job: Job, brief: str) -> str:
+    """Build the initial user message for a fresh session.
+
+    ``brief`` is either a populated research block ([INTEL_BRIEF] or [COMPANY_BRIEF])
+    or the NONE placeholder produced by ``_research_placeholder``.  It is always
+    injected first so the main agent sees it immediately and the resumed Message
+    history replays it verbatim (research runs at most once per stage).
+    """
     return (
+        f"{brief}\n\n"
         f"CV TEXT:\n{job.cv_text}\n\n"
         f"JOB DESCRIPTION:\n{job.jd}\n\n"
         f"TIER: {job.tier}"
@@ -487,3 +495,74 @@ async def _is_revision_resume(
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None
+
+
+def _research_placeholder(stage: Stage) -> str:
+    """Return a NONE placeholder brief for non-claude-cli backends or research failures."""
+    tag = "INTEL_BRIEF" if stage in (Stage.cv_adjust, Stage.revising_cv) else "COMPANY_BRIEF"
+    return (
+        f"[{tag}]\n"
+        f"NONE — no automated research available for this backend. "
+        f"Ask the user for company context; do NOT attempt to browse the web.\n"
+        f"[/{tag}]"
+    )
+
+
+def _research_spec(job: Job, stage: Stage) -> tuple[str, str, str]:
+    """Return (agent_name, query, open_tag) for the given stage."""
+    if stage == Stage.cv_adjust:
+        agent_name = "cv-research"
+        open_tag = "[INTEL_BRIEF]"
+        query = (
+            f"Company: {job.company}\n"
+            f"Role: {job.role}\n"
+            f"Job posting link: {job.link}\n"
+            f"Job description:\n{job.jd}"
+        )
+    else:  # cover_letter
+        agent_name = "cl-research"
+        open_tag = "[COMPANY_BRIEF]"
+        query = (
+            f"Company: {job.company}\n"
+            f"Role: {job.role}\n"
+            f"Job posting link: {job.link}"
+        )
+    return agent_name, query, open_tag
+
+
+async def _gather_research(job: Job, backend: AgentBackend, stage: Stage) -> str:
+    """Return a research brief block to inject into the initial user message.
+
+    claude-cli only: invokes the cv-research / cl-research subagent via
+    ``ClaudeCliBackend.run_research``.  Any other backend, or any research
+    failure, yields the NONE placeholder so the main prompt's single code path
+    falls back to asking the user directly.  Research is best-effort and never
+    fails the job.
+    """
+    from jsa.agents.claude_cli import ClaudeCliBackend  # local import avoids cycle
+
+    if not isinstance(backend, ClaudeCliBackend):
+        return _research_placeholder(stage)
+
+    agent_name, query, open_tag = _research_spec(job, stage)
+    try:
+        await bus.publish(
+            event_to_dict(LogEvent(
+                job_id=job.id, level="info", text=f"Researching ({agent_name})…"
+            ))
+        )
+        text = await backend.run_research(agent_name, query)
+        text = text.strip()
+        # Trust the agent's own tags if present; otherwise fall back to placeholder.
+        return text if open_tag in text else _research_placeholder(stage)
+    except Exception as exc:  # research is best-effort; never fail the job
+        logger.warning(
+            "research failed for job %s (%s): %s", job.id, agent_name, exc
+        )
+        await bus.publish(
+            event_to_dict(LogEvent(
+                job_id=job.id, level="warn",
+                text="Research unavailable; proceeding without brief."
+            ))
+        )
+        return _research_placeholder(stage)
