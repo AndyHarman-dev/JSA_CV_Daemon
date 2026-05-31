@@ -17,7 +17,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError, parse_reply
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,12 @@ class ClaudeCliBackend(AgentBackend):
         except ProtocolError as exc:
             if "no sentinel block" not in str(exc):
                 raise
+            # Before nudging, check whether the raw output indicates a usage/rate
+            # limit. If so, skip the nudge and surface a clear error immediately.
+            raw_lower = raw.lower()
+            _LIMIT_KEYWORDS = ("usage limit", "rate limit", "limit reached", "quota")
+            if any(kw in raw_lower for kw in _LIMIT_KEYWORDS):
+                raise AgentLimitReached(raw[:500])
             logger.warning(
                 "_parse_with_nudge: no sentinel block in reply — sending nudge and retrying once (session=%s)",
                 session_id,

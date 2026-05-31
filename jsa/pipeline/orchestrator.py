@@ -9,7 +9,7 @@ from typing import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jsa.agents.base import AgentBackend
+from jsa.agents.base import AgentBackend, AgentLimitReached
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
 from jsa.events.bus import bus
@@ -192,6 +192,27 @@ class Orchestrator:
         except PausedForInput:
             # Job successfully parked — not an error
             pass
+
+        except AgentLimitReached as exc:
+            logger.warning("_run_one: job %s hit backend limit: %s", job_id, exc)
+            human_msg = "Backend limit reached — switch backends or wait for quota reset"
+            try:
+                async with self._db_session_factory() as err_session:
+                    await err_session.rollback()
+                    await repo.mark_failed(err_session, job_id, human_msg)
+                # Publish after commit so the UI fetches consistent data
+                await bus.publish(
+                    event_to_dict(LogEvent(job_id=job_id, level="error", text=human_msg))
+                )
+                await bus.publish(
+                    event_to_dict(ErrorEvent(job_id=job_id, message=human_msg))
+                )
+            except Exception as inner_exc:
+                logger.error(
+                    "_run_one: failed to mark job %s as failed: %s",
+                    job_id,
+                    inner_exc,
+                )
 
         except Exception as exc:
             logger.exception("_run_one: job %s failed: %s", job_id, exc)

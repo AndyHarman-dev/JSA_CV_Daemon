@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 
-from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.protocol import parse_reply
 
 
@@ -115,6 +115,10 @@ class AnthropicAPIBackend(AgentBackend):
             raise AgentTimeout(
                 f"Anthropic API timed out after {self._timeout}s"
             ) from None
+        except anthropic.RateLimitError as exc:
+            raise AgentLimitReached(
+                f"Anthropic API rate limit reached: {exc}"
+            ) from exc
         finally:
             await client.close()
         return response.content[0].text

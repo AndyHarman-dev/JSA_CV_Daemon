@@ -9,6 +9,14 @@ class AgentTimeout(Exception):
     """Raised when a backend times out waiting for the sentinel from the agent."""
 
 
+class AgentLimitReached(RuntimeError):
+    """Raised when a backend hits its usage/rate limit.
+
+    The raw output snippet from the backend is passed as the message so callers
+    can log it for diagnosis.
+    """
+
+
 @dataclass(frozen=True)
 class AgentReply:
     raw: str                                    # full text returned by the model
