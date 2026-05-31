@@ -28,7 +28,8 @@ export function connectWS(): void {
   const store = useStore.getState();
   store.setWsStatus("connecting");
 
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
   socket = ws;
 
   ws.onopen = () => {
