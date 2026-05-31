@@ -144,6 +144,8 @@ See ARCH.md — Python/FastAPI backend + React/Vite frontend; sentinel-based age
 
 - [x] Phase DEV-1: `--dev-tunnel` flag with cloudflared integration — Add a `--dev-tunnel` boolean CLI flag. When set: (1) `create_app()` in `server.py` relaxes CORS from `localhost:*` regex to `allow_origins=["*"]`; (2) the CLI spawns `cloudflared tunnel --url http://localhost:<port>` as a background subprocess after the server starts; (3) parse cloudflared's stderr for the `trycloudflare.com` URL and print it prominently (e.g. `[JSA] Tunnel URL: https://...trycloudflare.com`); (4) if `cloudflared` is not on PATH, print a friendly error and abort. The bind address stays `127.0.0.1` — cloudflared connects from the same machine and doesn't need `0.0.0.0`. No DB, pipeline, or auth changes.
 
+- [x] Phase M-1: Mobile-responsive UI — Three-file change. (1) `App.tsx`: on mobile (< md) show only one panel at a time — JobList when nothing selected, JobDetail when a job is selected; on desktop keep the existing w-80 sidebar + flex-1 main layout. (2) `JobDetail.tsx`: add a `← Back` button at the top visible only on mobile (md:hidden) that calls selectJob(undefined); change p-6 padding to p-4 md:p-6. (3) `Header.tsx`: hide count badges on mobile (hidden md:flex); shorten app title to "JSA" on mobile, full name on desktop.
+
 ## Change log
 2026-05-27 — Rewrote plan for bugfix wave 2. Removed all completed phases (1–12, BF-1–3). Added BF-4 (start_session nudge-retry), BF-5 (LogEvent publishing), BF-6 (Cancel button for running jobs), BF-7 (Gemini pty stuck).
 2026-05-28 — Added BF-8: duplicate open FollowUp UNIQUE constraint crash on multi-turn NEED_INPUT and failed-job reset.
