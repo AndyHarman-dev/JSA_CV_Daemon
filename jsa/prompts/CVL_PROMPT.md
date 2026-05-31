@@ -19,13 +19,13 @@ STEP 1 — GATHER ROLE CONTEXT
 The initial message you receive begins with a `[COMPANY_BRIEF]…[/COMPANY_BRIEF]` block
 produced by a pre-run research step.
 
-**If the block contains research** (i.e., it does NOT say `NONE`):
+**If the block contains research** (i.e., its body does NOT begin with `NONE —`):
 - Use it silently to ground the motivation framing — incorporate findings into the
   draft naturally. Do NOT narrate the research or the brief to the user.
 - Proceed to ask for the job title, company name, and job description or key
   requirements as a single grouped message. Wait for the response before continuing.
 
-**If the block says `NONE`** (research was unavailable for this backend):
+**If the block's body begins with `NONE —`** (research was unavailable for this backend):
 - Proceed with user-supplied context only.
 - Ask for the job title, company name, and job description or a summary of key
   requirements as a single grouped message. If needed, ask one targeted follow-up
