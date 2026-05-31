@@ -1,7 +1,6 @@
 """DocxRenderer: Markdown -> ATS-friendly DOCX via python-docx."""
 
 import asyncio
-import re
 from pathlib import Path
 
 from docx import Document
@@ -114,7 +113,9 @@ class DocxRenderer(Renderer):
                 continue
 
             # Contact line — the first non-blank line after H1
-            if expect_contact:
+            # Guard: if the candidate line is a heading, do not treat it as a
+            # contact line — fall through to the heading handlers below.
+            if expect_contact and not stripped.startswith("#"):
                 p = document.add_paragraph()
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 pf = p.paragraph_format
@@ -130,6 +131,10 @@ class DocxRenderer(Renderer):
                 last_paragraph = p
                 expect_contact = False
                 continue
+            # If we skipped the contact block because the line is a heading,
+            # clear the flag so it does not persist past this line.
+            if expect_contact and stripped.startswith("#"):
+                expect_contact = False
 
             # Horizontal rule — add bottom border to preceding paragraph, no blank paragraph
             if stripped in ("---", "***"):
@@ -187,8 +192,7 @@ class DocxRenderer(Renderer):
                 for run in p.runs:
                     run.font.name = "Calibri"
                     run.font.size = Pt(10.5)
-                    if run.font.color.type is not None:
-                        run.font.color.rgb = RGBColor(0, 0, 0)
+                    run.font.color.rgb = RGBColor(0, 0, 0)
                 last_paragraph = p
                 continue
 
