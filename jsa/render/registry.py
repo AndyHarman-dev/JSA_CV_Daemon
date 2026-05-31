@@ -1,10 +1,12 @@
 """Renderer registry: renderer_for(name) -> Renderer."""
 
 from jsa.render.base import Renderer
+from jsa.render.docx_render import DocxRenderer
 from jsa.render.weasy import WeasyPrintRenderer
 
 _REGISTRY: dict[str, type[Renderer]] = {
     "weasyprint": WeasyPrintRenderer,
+    "docx": DocxRenderer,
 }
 
 

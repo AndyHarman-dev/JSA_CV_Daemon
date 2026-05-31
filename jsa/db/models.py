@@ -82,6 +82,7 @@ class Document(Base):
     version: Mapped[int] = mapped_column(Integer)
     markdown: Mapped[str] = mapped_column(Text)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on approval
+    docx_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on approval
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     job: Mapped[Job] = relationship(back_populates="documents")
 

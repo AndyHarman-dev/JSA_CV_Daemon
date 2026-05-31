@@ -35,6 +35,11 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # docx_path added in BF-20.
+        try:
+            await conn.execute(text("ALTER TABLE documents ADD COLUMN docx_path TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------
