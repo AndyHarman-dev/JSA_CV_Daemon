@@ -509,7 +509,11 @@ def _research_placeholder(stage: Stage) -> str:
 
 
 def _research_spec(job: Job, stage: Stage) -> tuple[str, str, str]:
-    """Return (agent_name, query, open_tag) for the given stage."""
+    """Return (agent_name, query, open_tag) for the given stage.
+
+    Only ``cv_adjust`` and ``cover_letter`` are valid inputs — ``_gather_research``
+    is never called for revision stages, but this guard makes that contract explicit.
+    """
     if stage == Stage.cv_adjust:
         agent_name = "cv-research"
         open_tag = "[INTEL_BRIEF]"
@@ -519,13 +523,18 @@ def _research_spec(job: Job, stage: Stage) -> tuple[str, str, str]:
             f"Job posting link: {job.link}\n"
             f"Job description:\n{job.jd}"
         )
-    else:  # cover_letter
+    elif stage == Stage.cover_letter:
         agent_name = "cl-research"
         open_tag = "[COMPANY_BRIEF]"
         query = (
             f"Company: {job.company}\n"
             f"Role: {job.role}\n"
             f"Job posting link: {job.link}"
+        )
+    else:
+        raise ValueError(
+            f"_research_spec called with unexpected stage {stage!r}; "
+            "only cv_adjust and cover_letter are supported."
         )
     return agent_name, query, open_tag
 
