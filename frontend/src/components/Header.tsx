@@ -73,7 +73,10 @@ export function Header() {
     <header className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200 flex-shrink-0 gap-4">
       {/* Left: App name + backend */}
       <div className="flex items-center gap-3 flex-shrink-0">
-        <span className="font-bold text-gray-800 text-sm tracking-tight">
+        <span className="font-bold text-gray-800 text-sm tracking-tight md:hidden">
+          JSA
+        </span>
+        <span className="font-bold text-gray-800 text-sm tracking-tight hidden md:inline">
           JSA — Job Search Assistant
         </span>
         {backendState.status === "loading" && (
@@ -88,7 +91,7 @@ export function Header() {
       </div>
 
       {/* Center: Aggregate counts */}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="hidden md:flex items-center gap-2 flex-wrap">
         <CountBadge
           label="Running"
           count={running}

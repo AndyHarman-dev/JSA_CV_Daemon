@@ -1,12 +1,13 @@
 /**
- * Tests for Phase BF-6: Cancel button in JobDetail.
+ * Tests for the Delete button in JobDetail (originally Phase BF-6: Cancel button;
+ * updated in BF-12 to reflect that Cancel was replaced by a hard Delete action).
  *
  * Covers:
- * 1. Cancel button shown for running job
- * 2. Cancel button NOT shown for non-running states (pending, failed, review, approved)
- * 3. Dismiss button still shown alongside Cancel for running job
- * 4. handleCancel calls api.cancel with the correct job id
- * 5. cancelError displayed on api.cancel rejection
+ * 1. Delete button shown for running job
+ * 2. Delete button NOT shown only for "approved" state; shown for all other states
+ * 3. Dismiss button still shown alongside Delete for running job
+ * 4. handleDelete calls api.deleteJob with the correct job id
+ * 5. deleteError displayed on api.deleteJob rejection
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -31,6 +32,7 @@ vi.mock("../api", () => ({
       state: "running",
       current_stage: null,
       error: null,
+      retry_count: 0,
       updated_at: "2026-01-01T00:00:00Z",
       created_at: "2026-01-01T00:00:00Z",
       follow_ups: [],
@@ -44,13 +46,17 @@ vi.mock("../api", () => ({
     getJobs: vi.fn().mockResolvedValue([]),
     dismiss: vi.fn().mockResolvedValue({}),
     reset: vi.fn().mockResolvedValue({}),
-    cancel: vi.fn().mockResolvedValue({}),
+    deleteJob: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 
 // scrollIntoView is not implemented in jsdom
 beforeAll(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
+  // handleDelete is gated by window.confirm — default jsdom returns false which
+  // causes the handler to bail out before calling api.deleteJob.  Stub it to
+  // return true so click tests exercise the real code path.
+  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 // ---------------------------------------------------------------------------
@@ -67,6 +73,7 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     state: "running",
     current_stage: null,
     error: null,
+    retry_count: 0,
     updated_at: "2026-01-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -81,49 +88,56 @@ beforeEach(() => {
   });
   // Clear call counts and reset implementations before each test
   vi.clearAllMocks();
-  vi.mocked(api.cancel).mockResolvedValue({} as never);
+  vi.mocked(api.deleteJob).mockResolvedValue({ ok: true } as never);
   vi.mocked(api.dismiss).mockResolvedValue({} as never);
   vi.mocked(api.reset).mockResolvedValue({} as never);
   vi.mocked(api.getJobs).mockResolvedValue([]);
+  // Restore confirm stub after clearAllMocks (clearAllMocks resets spy return values)
+  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 // ===========================================================================
-// 1. Cancel button shown for running job
+// 1. Delete button shown for running job
 // ===========================================================================
-describe("JobDetail — Cancel button visibility for running job", () => {
-  it('renders "Cancel" button when state is "running"', () => {
+describe("JobDetail — Delete button visibility for running job", () => {
+  it('renders "Delete" button when state is "running"', () => {
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    expect(screen.getByRole("button", { name: /^Cancel$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Delete$/ })).toBeInTheDocument();
   });
 });
 
 // ===========================================================================
-// 2. Cancel button NOT shown for non-running states
+// 2. Delete button visibility across non-approved states
+//
+// The component shows Delete for ALL states except "approved" (showCancel =
+// job.state !== "approved").  So the old "Cancel NOT shown for pending/failed/
+// review" expectation is now inverted — Delete IS shown for those states.
+// Only "approved" hides the button.
 // ===========================================================================
-describe("JobDetail — Cancel button hidden for non-running states", () => {
-  it('does NOT render "Cancel" button when state is "pending"', () => {
+describe("JobDetail — Delete button visibility across states", () => {
+  it('renders "Delete" button when state is "pending"', () => {
     const job = makeJob({ id: "j1", state: "pending" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    expect(screen.queryByRole("button", { name: /^Cancel$/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Delete$/ })).toBeInTheDocument();
   });
 
-  it('does NOT render "Cancel" button when state is "failed"', () => {
+  it('renders "Delete" button when state is "failed"', () => {
     const job = makeJob({ id: "j1", state: "failed" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    expect(screen.queryByRole("button", { name: /^Cancel$/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Delete$/ })).toBeInTheDocument();
   });
 
-  it('does NOT render "Cancel" button when state is "review"', async () => {
+  it('renders "Delete" button when state is "review"', async () => {
     const job = makeJob({ id: "j1", state: "review" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
@@ -131,84 +145,84 @@ describe("JobDetail — Cancel button hidden for non-running states", () => {
 
     // review state mounts ReviewPane — wait for initial renders to settle
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: /^Cancel$/ })).toBeNull();
+      expect(screen.getByRole("button", { name: /^Delete$/ })).toBeInTheDocument();
     });
   });
 
-  it('does NOT render "Cancel" button when state is "approved"', async () => {
+  it('does NOT render "Delete" button when state is "approved"', async () => {
     const job = makeJob({ id: "j1", state: "approved" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: /^Cancel$/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Delete$/ })).toBeNull();
     });
   });
 });
 
 // ===========================================================================
-// 3. Dismiss button still shown alongside Cancel for running job
+// 3. Dismiss button still shown alongside Delete for running job
 // ===========================================================================
-describe("JobDetail — Dismiss coexists with Cancel for running job", () => {
-  it('renders both "Cancel" and "Dismiss" buttons when state is "running"', () => {
+describe("JobDetail — Dismiss coexists with Delete for running job", () => {
+  it('renders both "Delete" and "Dismiss" buttons when state is "running"', () => {
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    expect(screen.getByRole("button", { name: /^Cancel$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Delete$/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Dismiss$/ })).toBeInTheDocument();
   });
 });
 
 // ===========================================================================
-// 4. handleCancel calls api.cancel with the correct job id
+// 4. handleDelete calls api.deleteJob with the correct job id
 // ===========================================================================
-describe("JobDetail — handleCancel calls api.cancel", () => {
-  it("calls api.cancel with the job id when Cancel is clicked", async () => {
+describe("JobDetail — handleDelete calls api.deleteJob", () => {
+  it("calls api.deleteJob with the job id when Delete is clicked", async () => {
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    const cancelBtn = screen.getByRole("button", { name: /^Cancel$/ });
-    fireEvent.click(cancelBtn);
+    const deleteBtn = screen.getByRole("button", { name: /^Delete$/ });
+    fireEvent.click(deleteBtn);
 
     await waitFor(() => {
-      expect(vi.mocked(api.cancel)).toHaveBeenCalledWith("j1");
+      expect(vi.mocked(api.deleteJob)).toHaveBeenCalledWith("j1");
     });
   });
 
-  it("calls api.cancel exactly once per click", async () => {
+  it("calls api.deleteJob exactly once per click", async () => {
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    const cancelBtn = screen.getByRole("button", { name: /^Cancel$/ });
-    fireEvent.click(cancelBtn);
+    const deleteBtn = screen.getByRole("button", { name: /^Delete$/ });
+    fireEvent.click(deleteBtn);
 
     await waitFor(() => {
-      expect(vi.mocked(api.cancel)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(api.deleteJob)).toHaveBeenCalledTimes(1);
     });
   });
 });
 
 // ===========================================================================
-// 5. cancelError displayed on api.cancel rejection
+// 5. deleteError displayed on api.deleteJob rejection
 // ===========================================================================
-describe("JobDetail — cancelError display on failure", () => {
-  it("shows error text when api.cancel rejects", async () => {
-    vi.mocked(api.cancel).mockRejectedValue(new Error("HTTP 400: not running"));
+describe("JobDetail — deleteError display on failure", () => {
+  it("shows error text when api.deleteJob rejects", async () => {
+    vi.mocked(api.deleteJob).mockRejectedValue(new Error("HTTP 400: not running"));
 
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    const cancelBtn = screen.getByRole("button", { name: /^Cancel$/ });
-    fireEvent.click(cancelBtn);
+    const deleteBtn = screen.getByRole("button", { name: /^Delete$/ });
+    fireEvent.click(deleteBtn);
 
     await waitFor(() => {
       expect(screen.getByText("HTTP 400: not running")).toBeInTheDocument();
@@ -216,15 +230,15 @@ describe("JobDetail — cancelError display on failure", () => {
   });
 
   it("error text is displayed with red styling (text-red-600 class)", async () => {
-    vi.mocked(api.cancel).mockRejectedValue(new Error("HTTP 400: not running"));
+    vi.mocked(api.deleteJob).mockRejectedValue(new Error("HTTP 400: not running"));
 
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    const cancelBtn = screen.getByRole("button", { name: /^Cancel$/ });
-    fireEvent.click(cancelBtn);
+    const deleteBtn = screen.getByRole("button", { name: /^Delete$/ });
+    fireEvent.click(deleteBtn);
 
     await waitFor(() => {
       const errorEl = screen.getByText("HTTP 400: not running");
@@ -232,19 +246,19 @@ describe("JobDetail — cancelError display on failure", () => {
     });
   });
 
-  it("does not show cancel error when api.cancel succeeds", async () => {
-    vi.mocked(api.cancel).mockResolvedValue({} as never);
+  it("does not show delete error when api.deleteJob succeeds", async () => {
+    vi.mocked(api.deleteJob).mockResolvedValue({ ok: true } as never);
 
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
 
-    const cancelBtn = screen.getByRole("button", { name: /^Cancel$/ });
-    fireEvent.click(cancelBtn);
+    const deleteBtn = screen.getByRole("button", { name: /^Delete$/ });
+    fireEvent.click(deleteBtn);
 
     await waitFor(() => {
-      expect(vi.mocked(api.cancel)).toHaveBeenCalled();
+      expect(vi.mocked(api.deleteJob)).toHaveBeenCalled();
     });
 
     // No error text should be in the DOM

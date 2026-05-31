@@ -7,7 +7,7 @@ interface Store {
   selectedId: string | undefined;
   wsStatus: "connecting" | "open" | "closed";
   upsertJob(j: JobDTO): void;
-  selectJob(id: string): void;
+  selectJob(id: string | undefined): void;
   setWsStatus(s: Store["wsStatus"]): void;
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
@@ -25,7 +25,7 @@ export const useStore = create<Store>((set, get) => ({
     }));
   },
 
-  selectJob(id: string) {
+  selectJob(id: string | undefined) {
     set({ selectedId: id });
   },
 
