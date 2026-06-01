@@ -52,14 +52,11 @@ export function ReviewPane({ jobId }: Props) {
         const cvDoc = job.documents.find((d) => d.stage === "cv_adjust");
         const clDoc = job.documents.find((d) => d.stage === "cover_letter");
         const initialLinks: ExportLinks = {};
+        // Paths stored in DB are absolute; extract last two segments (slug/filename)
+        // to form the relpath consumed by GET /api/files/<relpath>.
+        const toRel = (abs: string) => abs.replace(/^.*?([^/]+\/[^/]+)$/, "$1");
         // Seed PDF link if pdf_path exists on both cv and cl docs
         if (cvDoc?.pdf_path && clDoc?.pdf_path) {
-          // Paths stored in DB are absolute; extract relative portion by stripping
-          // everything up to and including the first slug segment.
-          // We build the /api/files/<relpath> URL from the path as stored, using
-          // the filename only — the backend route resolves relpath under output_dir.
-          // Since absolute paths have a slug directory, we use the last two segments.
-          const toRel = (abs: string) => abs.replace(/^.*?([^/]+\/[^/]+)$/, "$1");
           initialLinks["pdf"] = {
             cv_path: toRel(cvDoc.pdf_path),
             cl_path: toRel(clDoc.pdf_path),
@@ -67,7 +64,6 @@ export function ReviewPane({ jobId }: Props) {
         }
         // Seed DOCX link if docx_path exists
         if (cvDoc?.docx_path && clDoc?.docx_path) {
-          const toRel = (abs: string) => abs.replace(/^.*?([^/]+\/[^/]+)$/, "$1");
           initialLinks["docx"] = {
             cv_path: toRel(cvDoc.docx_path),
             cl_path: toRel(clDoc.docx_path),
