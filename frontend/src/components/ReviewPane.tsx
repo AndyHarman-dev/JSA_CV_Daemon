@@ -5,6 +5,15 @@ import type { JobState } from "../types";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { ChatBox } from "./ChatBox";
 
+type ExportFormat = "pdf" | "docx";
+
+interface ExportedPaths {
+  cv_path: string;
+  cl_path: string;
+}
+
+type ExportLinks = Partial<Record<ExportFormat, ExportedPaths>>;
+
 interface Props {
   jobId: string;
 }
@@ -26,6 +35,12 @@ export function ReviewPane({ jobId }: Props) {
   const [clDoc, setClDoc] = useState<DocState>(emptyDoc);
   const [approving, setApproving] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
+
+  // Export state
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("pdf");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportLinks, setExportLinks] = useState<ExportLinks>({});
 
   useEffect(() => {
     setCvDoc(emptyDoc);
@@ -69,6 +84,23 @@ export function ReviewPane({ jobId }: Props) {
       cancelled = true;
     };
   }, [jobId]);
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const result = await api.exportJob(jobId, exportFormat);
+      // Accumulate download links — each format stores cv + cl paths independently
+      setExportLinks((prev) => ({
+        ...prev,
+        [exportFormat]: { cv_path: result.cv_path, cl_path: result.cl_path },
+      }));
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function handleApprove() {
     setApproving(true);
@@ -129,8 +161,93 @@ export function ReviewPane({ jobId }: Props) {
 
       {/* Actions */}
       {state === "approved" ? (
-        <div className="rounded border border-green-300 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
-          ✓ Approved
+        <div className="flex flex-col gap-3">
+          <div className="rounded border border-green-300 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
+            Approved
+          </div>
+
+          {/* Format toggle + Export button */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex rounded border border-gray-300 overflow-hidden text-sm font-medium">
+              <button
+                type="button"
+                className={`px-3 py-1.5 transition-colors ${
+                  exportFormat === "pdf"
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-700 hover:bg-gray-50"
+                }`}
+                onClick={() => setExportFormat("pdf")}
+                disabled={exporting}
+              >
+                PDF
+              </button>
+              <button
+                type="button"
+                className={`px-3 py-1.5 border-l border-gray-300 transition-colors ${
+                  exportFormat === "docx"
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-700 hover:bg-gray-50"
+                }`}
+                onClick={() => setExportFormat("docx")}
+                disabled={exporting}
+              >
+                DOCX
+              </button>
+            </div>
+            <button
+              type="button"
+              className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={exporting}
+              onClick={() => {
+                handleExport().catch((err: unknown) => {
+                  console.error("ReviewPane export error:", err);
+                });
+              }}
+            >
+              {exporting ? (
+                <span className="flex items-center gap-2">
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Exporting…
+                </span>
+              ) : (
+                "Export & Download"
+              )}
+            </button>
+          </div>
+
+          {/* Export error */}
+          {exportError && (
+            <p className="text-sm text-red-600">{exportError}</p>
+          )}
+
+          {/* Accumulated download links — one row per exported format */}
+          {(["pdf", "docx"] as ExportFormat[]).map((fmt) => {
+            const links = exportLinks[fmt];
+            if (!links) return null;
+            return (
+              <div key={fmt} className="flex flex-col gap-1 text-sm">
+                <span className="font-medium text-gray-700 uppercase text-xs tracking-wider">
+                  {fmt}
+                </span>
+                <div className="flex gap-4">
+                  <a
+                    href={`/api/files/${links.cv_path}`}
+                    download
+                    className="text-blue-600 hover:underline"
+                  >
+                    Download CV
+                  </a>
+                  <a
+                    href={`/api/files/${links.cl_path}`}
+                    download
+                    className="text-blue-600 hover:underline"
+                  >
+                    Download Cover Letter
+                  </a>
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="flex flex-col gap-3">

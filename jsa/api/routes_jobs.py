@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -42,6 +44,7 @@ def _doc_to_dict(doc: Document) -> dict:
         "version": doc.version,
         "markdown": doc.markdown,
         "pdf_path": doc.pdf_path,
+        "docx_path": doc.docx_path,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
     }
 
@@ -102,6 +105,10 @@ class AnswerBody(BaseModel):
 class ReviseBody(BaseModel):
     target: str  # "cv" | "cl"
     text: str
+
+
+class ExportBody(BaseModel):
+    format: str  # "pdf" | "docx"
 
 
 # ---------------------------------------------------------------------------
@@ -546,3 +553,124 @@ async def get_document(
             doc = docs[0]
 
         return {"markdown": doc.markdown, "version": doc.version}
+
+
+@router.post("/api/jobs/{job_id}/export")
+async def export_job(request: Request, job_id: str, body: ExportBody):
+    """Re-render approved job documents in the requested format and return file paths.
+
+    Requires job.state == approved (409 if not).
+    Re-runnable: calling again with the same format overwrites the output file.
+    Does NOT call repo.checkpoint / transition — state stays approved (terminal).
+    """
+    if body.format not in ("pdf", "docx"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"format must be 'pdf' or 'docx', got {body.format!r}",
+        )
+
+    sf = _session_factory(request)
+    settings = request.app.state.settings
+
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.approved:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'approved'",
+            )
+
+        cv_docs = await repo.get_documents(session, job_id, stage=Stage.cv_adjust)
+        cl_docs = await repo.get_documents(session, job_id, stage=Stage.cover_letter)
+
+        if not cv_docs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} has no cv_adjust document",
+            )
+        if not cl_docs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} has no cover_letter document",
+            )
+
+        cv_doc = cv_docs[0]
+        cl_doc = cl_docs[0]
+
+        # Compute output paths — same slug convention as approve
+        slug = f"{_slugify(job.company)}_{_slugify(job.role)}_{job.id[:8]}"
+        ext = "pdf" if body.format == "pdf" else "docx"
+        cv_out = settings.output_dir / slug / f"cv.{ext}"
+        cl_out = settings.output_dir / slug / f"cover_letter.{ext}"
+
+        # Capture IDs and markdown before closing session
+        cv_markdown = cv_doc.markdown
+        cl_markdown = cl_doc.markdown
+        cv_doc_id = cv_doc.id
+        cl_doc_id = cl_doc.id
+
+    # Select the renderer — "pdf" maps to "weasyprint"; "docx" maps to "docx"
+    renderer_key = "weasyprint" if body.format == "pdf" else "docx"
+    renderer = renderer_for(renderer_key)
+
+    # Render outside the session — both renderers use asyncio.to_thread internally
+    await renderer.render(cv_markdown, cv_out)
+    await renderer.render(cl_markdown, cl_out)
+
+    # Update the path columns in a single DB transaction
+    async with sf() as session:
+        cv_result = await session.execute(
+            select(Document).where(Document.id == cv_doc_id)
+        )
+        cv_doc = cv_result.scalar_one()
+        cl_result = await session.execute(
+            select(Document).where(Document.id == cl_doc_id)
+        )
+        cl_doc = cl_result.scalar_one()
+
+        if body.format == "pdf":
+            cv_doc.pdf_path = str(cv_out)
+            cl_doc.pdf_path = str(cl_out)
+        else:
+            cv_doc.docx_path = str(cv_out)
+            cl_doc.docx_path = str(cl_out)
+
+        session.add(cv_doc)
+        session.add(cl_doc)
+        await session.commit()
+
+    # Return relative paths (relative to output_dir) so the frontend can build
+    # a /api/files/<relpath> URL that the file-serving route resolves safely.
+    cv_rel = str(cv_out.relative_to(settings.output_dir))
+    cl_rel = str(cl_out.relative_to(settings.output_dir))
+
+    return {"cv_path": cv_rel, "cl_path": cl_rel}
+
+
+@router.get("/api/files/{relpath:path}")
+async def serve_output_file(request: Request, relpath: str):
+    """Serve a file from output_dir by relative path.
+
+    Safety: resolves the full path and verifies it is inside output_dir before
+    serving. Returns 404 if the file does not exist or is outside the directory.
+    """
+    settings = request.app.state.settings
+    output_dir: Path = settings.output_dir.resolve()
+
+    try:
+        full_path = (output_dir / relpath).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    # Ensure the resolved path is inside the output directory (path traversal guard)
+    try:
+        full_path.relative_to(output_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path outside output directory")
+
+    if not full_path.exists() or not full_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {relpath!r}")
+
+    return FileResponse(str(full_path))

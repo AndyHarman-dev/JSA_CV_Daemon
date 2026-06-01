@@ -37,6 +37,7 @@ export interface DocumentDTO {
   version: number;
   markdown: string;
   pdf_path: string | null;
+  docx_path: string | null;
 }
 
 export type WSEvent =

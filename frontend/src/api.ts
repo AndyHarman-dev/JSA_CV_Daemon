@@ -76,6 +76,20 @@ export const api = {
     return apiFetch<{ markdown: string; version: number }>(url);
   },
 
+  exportJob(
+    id: string,
+    format: "pdf" | "docx"
+  ): Promise<{ cv_path: string; cl_path: string }> {
+    return apiFetch<{ cv_path: string; cl_path: string }>(
+      `/api/jobs/${encodeURIComponent(id)}/export`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format }),
+      }
+    );
+  },
+
   health(): Promise<{ ok: boolean }> {
     return apiFetch<{ ok: boolean }>("/api/health");
   },
