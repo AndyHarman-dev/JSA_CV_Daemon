@@ -33,6 +33,8 @@ loops over the chain on limit; `DocxRenderer` + export endpoint decouple renderi
 - `python-docx` only (no pandoc/pypandoc system dependency).
 - BF-20 and BF-21 are independent of BF-18/19 — can be implemented in parallel if desired.
 
+- [x] Phase SA-2: Gemini research backend — Add `run_research` to `GeminiCliBackend` so Gemini jobs get a real research brief instead of the NONE placeholder. See below for full spec.
+
 ## Open questions
 - None. All design decisions resolved.
 

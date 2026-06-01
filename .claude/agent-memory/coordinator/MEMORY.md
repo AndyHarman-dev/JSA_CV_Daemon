@@ -21,3 +21,4 @@
 - [Phase SA-1 research subagents](project_jsa_phase_sa1.md) — run_research not on ABC; cwd only for research; bare model alias in agent files; _research_spec needs explicit elif+raise; test file was untracked until fix commit
 - [BF-18/20 gotchas](project_jsa_phase_bf18_bf20.md) — AgentLimitReached is RuntimeError; keyword check only on ProtocolError path; contact-line guard needs two checks (skip + reset flag); python-docx already present; docx_path infrastructure-only until BF-21
 - [BF-19/21 gotchas](project_jsa_phase_bf19_bf21.md) — _wrap_factory inspect.signature shim; delete ALL FollowUps on revision rewind; BackendSwitchedEvent has no visual UI yet; toRel must be hoisted; renderer key is "weasyprint" not "pdf"
+- [Phase SA-2 Gemini research](project_jsa_phase_sa2.md) — inline prompt (no --agent); hasattr duck-typing in _gather_research; RESEARCH_TIMEOUT via _run timeout param; test monkeypatch pattern

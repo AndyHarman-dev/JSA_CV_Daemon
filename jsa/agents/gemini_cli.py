@@ -276,6 +276,7 @@ class GeminiCliBackend(AgentBackend):
         cmd = [
             "gemini",
             "--skip-trust",
+            "-y",   # auto-approve all tools (search/fetch); without this, stdin=DEVNULL hangs
             "-p", f"{system_prompt}\n\n{query}",
             "-o", "json",
         ]
