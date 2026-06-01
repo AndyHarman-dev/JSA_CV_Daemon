@@ -791,7 +791,232 @@ Note the integer-with-default ALTER is separate from the existing `for col in (.
 - **Atomicity:** `soft_reset_job` and `nuclear_reset_job` each own a single `commit()` covering all their deletes + the `transition()` + field updates, satisfying the CLAUDE.md "single atomic transaction per state change" rule.
 - **Open question (none blocking):** none. The design is fully specified; dismissed-reset is explicitly scoped out.
 
+## Research Subagent Architecture (Option A)
+
+### Problem and goal
+Both stage prompts currently tell the *main* agent to web-search / web-fetch inline (CDADJUST Phase 1 fetches the company + job-posting URLs; CVL Step 1 searches for company info). Under `claude-cli`, every such tool use triggers an interactive permission dialog. The fix is to split the web work into a dedicated **research subagent** declared in `.claude/agents/` (tools pre-authorized via YAML frontmatter, so no dialog), which produces a compact text **brief**. The brief is injected into the main stage agent's initial user message; the main agent then only does the interactive Q&A — it no longer browses the web.
+
+Design summary:
+- Research runs as a **silent pre-step inside `run_stage`**, only on the fresh-session branch of `cv_adjust` / `cover_letter`. It is **not** a DB-visible pipeline stage: no new `JobState`, no new `Stage`, no `transition()` call, no `Message`/`Document`/`FollowUp` rows of its own. The job stays `running` throughout.
+- The brief rides inside the fresh `initial_user_msg`, which is already persisted as the user `Message` row by `_handle_*`. On park/resume/crash, `_load_history` replays that row verbatim — the brief survives for free, and research is **never re-run** on resume.
+- Research is **claude-cli-specific** (only that backend reads `.claude/agents/`). For all other backends the brief block is a placeholder telling the main agent to ask the user directly. The main prompt therefore has a single code path that degrades gracefully.
+
+### 1. New `.claude/agents/` files
+
+Two files at the project root, same format as the existing `architect.md` etc. Both are **one-shot** and **emit plain text with NO sentinel grammar** — this is a deliberate exception to the CLAUDE.md sentinel mandate, which governs only the main stage prompts. `run_research` returns their stdout raw and unparsed; emitting `<<<FINAL>>>` here would leak sentinel text into the brief block and corrupt the main agent's `parse_reply`.
+
+**`.claude/agents/cv-research.md`** — frontmatter:
+```yaml
+---
+name: cv-research
+description: One-shot CV-tailoring research. Given a company, role, job link, and JD, fetches the company site and the job posting and returns a compact Intel Brief. No conversation, no questions.
+tools: WebSearch, WebFetch
+model: sonnet
+---
+```
+System-prompt body instructs: fetch the company website and the job-posting link if present; web-search the company name otherwise; extract product/stack/values, required-vs-nice-to-have skills, seniority signals, recurring keywords, and a likely ATS-platform guess. Emit **exactly** the brief below and nothing else (no preamble, no sentinels, ≤ ~250 words):
+```
+[INTEL_BRIEF]
+Company: <name, stage, product in one line>
+Role signals: <seniority, key required skills, recurring keywords>
+Culture signals: <2–3 adjectives/phrases in the company's own language>
+Stack match: <which parts of the JD's stack are emphasized>
+ATS signal: <likely ATS platform + matching note (Workday/Eightfold semantic vs iCIMS/Taleo exact-frequency)>
+Sources: <URLs actually fetched, or "none reachable">
+[/INTEL_BRIEF]
+```
+This brief is the externalized form of the `<intel_brief>` template currently embedded in `PROMPT_CDADJUST.md` Phase 1.
+
+**`.claude/agents/cl-research.md`** — frontmatter:
+```yaml
+---
+name: cl-research
+description: One-shot cover-letter research. Given a company, role, and job link, finds mission/values/recent-news to ground a motivation paragraph. No conversation, no questions.
+tools: WebSearch, WebFetch
+model: sonnet
+---
+```
+System-prompt body instructs: web-search / fetch to find what the company does, its mission and values, and 1–2 recent newsworthy initiatives usable to make a motivation paragraph concrete. Emit **exactly** (≤ ~200 words, no sentinels, no preamble):
+```
+[COMPANY_BRIEF]
+What they do: <one to two sentences>
+Mission / values: <stated mission or values, in their own words>
+Recent / notable: <1–2 recent initiatives or news items, or "none found">
+Motivation hooks: <2–3 concrete angles a candidate could cite>
+Sources: <URLs actually fetched, or "none reachable">
+[/COMPANY_BRIEF]
+```
+
+### 2. `ClaudeCliBackend` changes (`jsa/agents/claude_cli.py`)
+
+**Module-level project root** (computed once at import, not configurable for v1):
+```python
+from pathlib import Path
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root containing .claude/agents/
+```
+
+**`cwd` is opt-in, not blanket.** Add a `cwd` parameter to `_run` and pass it **only** from `run_research`. The existing `start_session` / `send_message` / `_parse_with_nudge` calls keep `cwd=None` (current behavior). Rationale: only `run_research` (`--agent`) needs `.claude/agents/`; running the main CV/CL turns from the repo root would pull this repo's `CLAUDE.md` / `.claude/` into their context as noise and would be a behavior change to working code.
+```python
+def _run(self, cmd: list[str], context: str = "", cwd: Path | None = None) -> str:
+    ...
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        timeout=self._timeout,
+        stdin=subprocess.DEVNULL,
+        cwd=str(cwd) if cwd is not None else None,   # NEW: opt-in working dir
+    )
+    ...
+```
+
+**`_run` gains a `timeout` param alongside `cwd`** so research can use a longer budget through the single chokepoint (web search + multiple fetches can exceed the 120s message-turn default). Final `_run` signature:
+```python
+def _run(self, cmd, context="", cwd=None, timeout=None):
+    eff_timeout = timeout if timeout is not None else self._timeout
+    result = subprocess.run(cmd, capture_output=True, timeout=eff_timeout,
+                            stdin=subprocess.DEVNULL,
+                            cwd=str(cwd) if cwd else None)
+    ...
+```
+
+**New `run_research` method** (NOT on the `AgentBackend` ABC — claude-cli-specific; do not pollute the base class). This is the single canonical form — do not introduce a separate `_run_research_sync` helper:
+```python
+RESEARCH_TIMEOUT = 300.0  # web search + multiple fetches can exceed the 120s message-turn default
+
+async def run_research(self, agent_name: str, query: str) -> str:
+    """One-shot, non-interactive research via a .claude/agents/ subagent.
+
+    Returns the agent's stdout raw — NO sentinel parsing. Runs from the JSA
+    project root so `claude` discovers .claude/agents/<agent_name>.md.
+    On any failure (ClaudeCliError / AgentTimeout) the caller MUST treat the
+    brief as unavailable and fall back to the NONE placeholder — research is
+    best-effort and never fails the job.
+    """
+    cmd = [
+        "claude",
+        "--agent", agent_name,
+        "--output-format", "text",
+        "-p", query,
+    ]
+    return await asyncio.to_thread(
+        self._run, cmd, f"research:{agent_name}", _PROJECT_ROOT, self.RESEARCH_TIMEOUT
+    )
+```
+The command builds: `claude --agent <agent_name> --output-format text -p <query>`. No `--system-prompt` (the agent file supplies it), no `--session-id` (one-shot). Model comes from the agent frontmatter (`model: sonnet`).
+
+### 3. `stages.py` changes — research pre-step
+
+The research call goes **only** in the fresh-session branch (current lines 141–150, where `history` is empty) of the `elif stage in (Stage.cv_adjust, Stage.cover_letter):` block. Never on the resume branch (lines 131–140), never on `revising_*`. New code:
+
+```python
+else:
+    # Fresh session
+    brief = await _gather_research(job, backend, stage)   # NEW
+    initial_user_msg = _build_initial_user_msg(job, brief) # signature change: + brief
+    handle, reply = await backend.start_session(system_prompt, initial_user_msg)
+    accumulated_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": initial_user_msg},
+        {"role": "assistant", "content": reply.raw},
+    ]
+```
+
+**New helper `_gather_research`:**
+```python
+async def _gather_research(job: Job, backend: AgentBackend, stage: Stage) -> str:
+    """Return a brief block to inject into the initial user message.
+
+    claude-cli only: invokes the cv-research / cl-research subagent. Any other
+    backend, or any research failure, yields the NONE placeholder so the main
+    prompt's single code path falls back to asking the user directly.
+    """
+    from jsa.agents.claude_cli import ClaudeCliBackend  # local import avoids cycle
+    if not isinstance(backend, ClaudeCliBackend):
+        return _research_placeholder(stage)
+    agent_name, query, open_tag = _research_spec(job, stage)
+    try:
+        await bus.publish(event_to_dict(LogEvent(
+            job_id=job.id, level="info", text=f"Researching ({agent_name})…")))
+        text = await backend.run_research(agent_name, query)
+        text = text.strip()
+        # Trust the agent's own tags if present; otherwise wrap defensively.
+        return text if open_tag in text else _research_placeholder(stage)
+    except Exception as exc:  # research is best-effort; never fail the job
+        logger.warning("research failed for job %s (%s): %s", job.id, agent_name, exc)
+        await bus.publish(event_to_dict(LogEvent(
+            job_id=job.id, level="warn", text=f"Research unavailable; proceeding without brief.")))
+        return _research_placeholder(stage)
+```
+
+**Query / tag per stage** (`_research_spec`):
+- `cv_adjust` → agent `"cv-research"`, tag `"[INTEL_BRIEF]"`, query built from `company, role, link, jd`:
+  ```
+  Company: {job.company}
+  Role: {job.role}
+  Job posting link: {job.link}
+  Job description:
+  {job.jd}
+  ```
+- `cover_letter` → agent `"cl-research"`, tag `"[COMPANY_BRIEF]"`, query built from `company, role, link` (no JD needed — focus is mission/values/news):
+  ```
+  Company: {job.company}
+  Role: {job.role}
+  Job posting link: {job.link}
+  ```
+
+**Placeholder (`_research_placeholder`):**
+```python
+def _research_placeholder(stage: Stage) -> str:
+    tag = "INTEL_BRIEF" if stage in (Stage.cv_adjust, Stage.revising_cv) else "COMPANY_BRIEF"
+    return (f"[{tag}]\n"
+            f"NONE — no automated research available for this backend. "
+            f"Ask the user for company context; do NOT attempt to browse the web.\n"
+            f"[/{tag}]")
+```
+
+**Injection into `_build_initial_user_msg`** (signature change confirmed safe — `grep -rn "_build_initial_user_msg" jsa/ tests/` shows exactly one caller, `stages.py:143`, and the definition; no test calls it directly):
+```python
+def _build_initial_user_msg(job: Job, brief: str) -> str:
+    return (
+        f"{brief}\n\n"
+        f"CV TEXT:\n{job.cv_text}\n\n"
+        f"JOB DESCRIPTION:\n{job.jd}\n\n"
+        f"TIER: {job.tier}"
+    )
+```
+The brief leads the message so the main agent sees it first. Because the brief is embedded in this persisted user `Message`, the resume/crash paths replay it unchanged and research is performed at most once per stage.
+
+### 4. Prompt changes (specification only — files are user-edited)
+
+CLAUDE.md states prompt files are edited externally and "never programmatically overwritten." The edits below are a **spec**; whoever owns the prompt files applies them. The research subagent files (§1) carry the externalized search instructions.
+
+**`PROMPT_CDADJUST.md` — Phase 1 ("Intelligence Gathering"):**
+- Remove the instructions to ask for / fetch the company website and job-posting URLs and to perform web fetches.
+- Replace with: "The initial message begins with an `[INTEL_BRIEF]…[/INTEL_BRIEF]` block. **If it contains research,** summarize it back to the user and ask 'Does this look accurate? Any corrections before I proceed?' **If it says `NONE`,** ask the user the company-context questions directly (company kind/stage/industry, and any details they can share) — do **not** attempt to browse the web yourself."
+- The `<intel_brief>` template moves out to `cv-research.md` as its output spec; the prompt now consumes the brief rather than producing it.
+- Phases 2–3 and all sentinel/output-format rules are **unchanged**.
+
+**`CVL_PROMPT.md` — Step 1 ("Gather Role Context"):**
+- Remove the "use web search to find what the company does…" instruction.
+- Replace with: "The initial message begins with a `[COMPANY_BRIEF]…[/COMPANY_BRIEF]` block. **If it contains research,** use it to ground the motivation framing (do not narrate it to the user). **If it says `NONE`,** proceed with the user-supplied context only and, if needed, ask one targeted question — do **not** attempt to browse the web yourself."
+- Steps 2–5, the draft/iterate flow, and all sentinel rules are **unchanged**.
+
+### 5. Non-claude-cli fallback (gemini-cli, anthropic)
+
+No prompt variant, no in-prompt conditional. `stages.py` always injects a brief block; for non-claude-cli backends it is the `NONE` placeholder. The single-path prompt (§4) then asks the user directly. Documented limitation: **automated web research is claude-cli-only in v1.** Gemini-cli and anthropic backends fall back to user-supplied company context (the original behavior, minus inline browsing).
+
+### 6. Testing approach for this feature
+- `tests/backend/test_research.py`:
+  - `_gather_research` with a non-`ClaudeCliBackend` (use `FakeAgentBackend`) → returns the `NONE` placeholder containing the correct tag per stage.
+  - `_gather_research` when `run_research` raises → returns placeholder (best-effort, no job failure).
+  - `_build_initial_user_msg(job, brief)` places the brief first and preserves CV/JD/tier.
+  - `run_stage` fresh `cv_adjust` with a fake backend: assert the persisted user `Message` for the fresh turn contains the `[INTEL_BRIEF]` block (the `NONE` placeholder, since the fake is not a `ClaudeCliBackend`).
+  - `run_stage` resume branch (`history` non-empty): assert the new user `Message` written on resume is the follow-up *answer* only and does **not** contain a fresh brief block — i.e. `_gather_research` is entered only on the empty-history branch. (No spy needed: a non-`ClaudeCliBackend` fake never reaches `run_research`; the assertion is on message content, not a call counter.)
+- `ClaudeCliBackend.run_research` exact-command + `cwd`/`timeout` assertions belong in unit tests that monkeypatch `subprocess.run` (or `_run`), mirroring existing claude_cli tests. A real-network test goes under `tests/backend/integration/` marked `@pytest.mark.integration`, skipped in CI.
+- The `FakeAgentBackend` does **not** gain `run_research` (it is not on the ABC); the `isinstance` check routes all fakes to the placeholder, which is the intended fallback path under test.
+
 ## Change log
+2026-05-31 — Research Subagent Architecture (Option A). Externalized inline web search/fetch into two one-shot `.claude/agents/` subagents (`cv-research.md` → `[INTEL_BRIEF]`, `cl-research.md` → `[COMPANY_BRIEF]`) with `tools: WebSearch, WebFetch` frontmatter so no permission dialog fires; they emit plain text with NO sentinels (deliberate exception to the sentinel mandate). New `ClaudeCliBackend.run_research(agent_name, query) -> str` (raw, unparsed) builds `claude --agent <name> --output-format text -p <query>`; `_run` gains opt-in `cwd` (and `timeout`) params, passed only from `run_research` with `_PROJECT_ROOT` (computed at import) and a longer `RESEARCH_TIMEOUT=300s` — main-stage calls keep `cwd=None` (zero regression). `run_research` is intentionally OFF the `AgentBackend` ABC (claude-cli-specific). `stages.py`: new `_gather_research` fires only on the fresh-session branch of `cv_adjust`/`cover_letter` (never on resume or `revising_*`), `isinstance`-gates on `ClaudeCliBackend`, falls back to a `NONE` placeholder for other backends and on any research error (best-effort, never fails the job); `_build_initial_user_msg(job, brief)` injects the brief first so it persists in the user Message and replays for free on resume — research runs at most once per stage, no new state/stage/transition. Prompt-edit spec: PROMPT_CDADJUST Phase 1 and CVL Step 1 stop browsing and instead consume the `[INTEL_BRIEF]`/`[COMPANY_BRIEF]` block (single path; if `NONE`, ask the user). Limitation: automated web research is claude-cli-only in v1.
 2026-05-29 — BF-15 Smart Retry. Two-tier reset: soft (rewind failed stage, `retry_count 0→1`) vs nuclear (full wipe, restart from `pending`, `retry_count→0`). Added `Job.retry_count` (+`ALTER TABLE` migration in `init_db`). `mark_failed` now preserves `current_stage` on the failed job (deliberate direct-attribute exception to the no-direct-set rule) so soft reset can discriminate which stage failed; the `failed` state now carries the "stage that failed" via the nullable `current_stage`. Added `failed → cv_done` to the allowed-transitions table (used only by soft reset when the cover-letter stage failed; does not make failed jobs runnable). New repo helpers `soft_reset_job` / `nuclear_reset_job`; `upsert_job` reuses `nuclear_reset_job` (CSV re-import of failed jobs is always nuclear). `reset_job` route branches on `retry_count` for `failed` (dismissed path unchanged) and now publishes a `StatusChangedEvent`. `_handle_final` resets `retry_count` to 0 on every successful FINAL (including revisions). `retry_count` exposed in all job API responses. Frontend: in-UI nuclear confirmation modal in `JobDetail.tsx` (first retry no dialog; second+ retry confirms first).
 2026-05-23 — Initial architecture document. Establishes Python + FastAPI backend, React + Vite frontend, SQLite persistence, sentinel-based follow-up protocol, park-as-task-exit concurrency, post-approval-only PDF rendering.
 2026-05-24 — Phase 4 implementation decision: `SessionHandle` is implemented as a concrete `@dataclass` base class (not a `Protocol`). Backends subclass it and attach process/connection state as additional fields. `FakeSessionHandle` subclasses it for tests. This diverges from the `Protocol` annotation in the spec above; `Protocol` style is left in the conceptual description for documentation clarity but is not the runtime type. All backends in Phases 5 and 11 must subclass `SessionHandle`.

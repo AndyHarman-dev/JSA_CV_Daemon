@@ -2,7 +2,7 @@
 name: reviewer
 description: Read-only code reviewer. Reviews all changes since the phase baseline tag using git diff, then provides structured feedback on correctness, style, test quality, and architectural alignment. Does not modify any files.
 tools: Read, Bash, Glob, Grep
-model: sonnet
+model: haiku
 color: orange
 permissionMode: acceptEdits
 ---

@@ -2,7 +2,7 @@
 name: tester
 description: Test specialist. Sets up test infrastructure if the project has none, writes unit tests for the current phase's implementation, runs the test suite, and reports results. Responsible for test coverage of all new code.
 tools: Read, Write, Edit, Bash, Glob, Grep
-model: sonnet
+model: haiku
 color: yellow
 permissionMode: acceptEdits
 ---

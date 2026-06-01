@@ -18,3 +18,5 @@
 - [BF-17 CV format rules](project_jsa_phase_bf17.md) — drop profession title from header; unconditional --- separators; tighten CSS (0.75in/10.5pt/1.3 LH) for ≤2 pages
 - [DEV-1 --dev-tunnel flag](project_jsa_dev1_tunnel.md) — cloudflared quick tunnel; pipe-drain gotcha: no break after URL found or OS buffer deadlocks cloudflared
 - [Phase M-1 mobile UI](project_jsa_phase_m1.md) — single-panel nav via selectedId; Back button must be in placeholder too; selectJob widened to string|undefined; cancel_bf6 tests were stale
+- [Phase SA-1 research subagents](project_jsa_phase_sa1.md) — run_research not on ABC; cwd only for research; bare model alias in agent files; _research_spec needs explicit elif+raise; test file was untracked until fix commit
+- [BF-18/20 gotchas](project_jsa_phase_bf18_bf20.md) — AgentLimitReached is RuntimeError; keyword check only on ProtocolError path; contact-line guard needs two checks (skip + reset flag); python-docx already present; docx_path infrastructure-only until BF-21
