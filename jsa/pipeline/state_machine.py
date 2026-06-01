@@ -48,13 +48,14 @@ def transition(job, new_state: JobState, new_stage: Stage | None = None) -> None
     else:
         if new_stage is not None:
             raise InvalidTransition(f"State {new_state} must have current_stage=None, got {new_stage}")
-    # running → cv_done: valid when current stage is cv_adjust (normal path) OR
-    # cover_letter/revising_cl (backend-switch restart: rewind to cv_done so the
-    # new backend re-runs cover_letter from a clean checkpoint).
+    # running → cv_done: valid when current stage is cv_adjust (normal completion) OR
+    # cover_letter (backend-switch restart: rewind to cv_done so the new backend
+    # re-runs cover_letter from a clean checkpoint).
+    # running(revising_*) → cv_done is NOT valid; revisions rewind to review instead.
     if job.state == JobState.running and new_state == JobState.cv_done:
-        if job.current_stage not in (Stage.cv_adjust, Stage.cover_letter, Stage.revising_cl):
+        if job.current_stage not in (Stage.cv_adjust, Stage.cover_letter):
             raise InvalidTransition(
-                f"Can only reach cv_done from running(cv_adjust/cover_letter/revising_cl), got running({job.current_stage})"
+                f"Can only reach cv_done from running(cv_adjust/cover_letter), got running({job.current_stage})"
             )
     # running → cl_done only valid when current stage is cover_letter
     if job.state == JobState.running and new_state == JobState.cl_done:

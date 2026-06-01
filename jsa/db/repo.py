@@ -261,9 +261,9 @@ async def backend_switch_reset(
     failed one) and writes backend_name in the same atomic commit.
 
     failed_stage mapping:
-      cv_adjust / revising_cv / None → rewind to pending (delete all Messages)
-      cover_letter / revising_cl     → rewind to cv_done (delete CL Messages only)
-      revising_cv / revising_cl      → rewind to review (delete revision Messages only)
+      revising_cv / revising_cl → rewind to review  (delete revision Messages+FollowUps)
+      cover_letter              → rewind to cv_done (delete CL Messages only)
+      cv_adjust / None          → rewind to pending (delete all Messages)
 
     Revision stages rewind to review (not cv_done/pending) so the unconsumed
     RevisionRequest is still in place and the orchestrator re-dispatches the
@@ -277,7 +277,13 @@ async def backend_switch_reset(
     job.backend_name = new_backend_name
 
     if failed_stage in (Stage.revising_cv, Stage.revising_cl):
-        # Delete only revision-stage Messages and open FollowUps for this revision.
+        # Delete revision-stage Messages and ALL FollowUps for this revision.
+        # Important: delete answered FollowUps too, not just open ones.
+        # _is_revision_resume checks for answered FollowUps with answered_at >
+        # rev_req.created_at; leaving them causes the resume path to run with
+        # empty history (Messages were deleted) → silent divergence on new backend.
+        # Deleting all FollowUps ensures _is_revision_resume returns False and
+        # the revision restarts fresh on the new backend.
         await session.execute(
             delete(Message).where(
                 Message.job_id == job.id,
@@ -288,7 +294,6 @@ async def backend_switch_reset(
             delete(FollowUp).where(
                 FollowUp.job_id == job.id,
                 FollowUp.stage == failed_stage,
-                FollowUp.answered_at.is_(None),
             )
         )
         # Clear the relevant session ID
