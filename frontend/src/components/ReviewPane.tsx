@@ -42,6 +42,47 @@ export function ReviewPane({ jobId }: Props) {
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportLinks, setExportLinks] = useState<ExportLinks>({});
 
+  // Seed initial PDF links from the approved job's existing document paths
+  useEffect(() => {
+    if (state !== "approved") return;
+    let cancelled = false;
+    api.getJob(jobId)
+      .then((job) => {
+        if (cancelled) return;
+        const cvDoc = job.documents.find((d) => d.stage === "cv_adjust");
+        const clDoc = job.documents.find((d) => d.stage === "cover_letter");
+        const initialLinks: ExportLinks = {};
+        // Seed PDF link if pdf_path exists on both cv and cl docs
+        if (cvDoc?.pdf_path && clDoc?.pdf_path) {
+          // Paths stored in DB are absolute; extract relative portion by stripping
+          // everything up to and including the first slug segment.
+          // We build the /api/files/<relpath> URL from the path as stored, using
+          // the filename only — the backend route resolves relpath under output_dir.
+          // Since absolute paths have a slug directory, we use the last two segments.
+          const toRel = (abs: string) => abs.replace(/^.*?([^/]+\/[^/]+)$/, "$1");
+          initialLinks["pdf"] = {
+            cv_path: toRel(cvDoc.pdf_path),
+            cl_path: toRel(clDoc.pdf_path),
+          };
+        }
+        // Seed DOCX link if docx_path exists
+        if (cvDoc?.docx_path && clDoc?.docx_path) {
+          const toRel = (abs: string) => abs.replace(/^.*?([^/]+\/[^/]+)$/, "$1");
+          initialLinks["docx"] = {
+            cv_path: toRel(cvDoc.docx_path),
+            cl_path: toRel(clDoc.docx_path),
+          };
+        }
+        if (Object.keys(initialLinks).length > 0) {
+          setExportLinks((prev) => ({ ...initialLinks, ...prev }));
+        }
+      })
+      .catch(() => {
+        // Best-effort: if we can't seed initial links, the user can still export
+      });
+    return () => { cancelled = true; };
+  }, [jobId, state]);
+
   useEffect(() => {
     setCvDoc(emptyDoc);
     setClDoc(emptyDoc);
@@ -85,6 +126,15 @@ export function ReviewPane({ jobId }: Props) {
     };
   }, [jobId]);
 
+  function triggerDownload(relPath: string): void {
+    const a = document.createElement("a");
+    a.href = `/api/files/${relPath}`;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   async function handleExport() {
     setExporting(true);
     setExportError(null);
@@ -95,6 +145,9 @@ export function ReviewPane({ jobId }: Props) {
         ...prev,
         [exportFormat]: { cv_path: result.cv_path, cl_path: result.cl_path },
       }));
+      // Trigger browser downloads immediately for both files
+      triggerDownload(result.cv_path);
+      triggerDownload(result.cl_path);
     } catch (err) {
       setExportError(err instanceof Error ? err.message : String(err));
     } finally {
