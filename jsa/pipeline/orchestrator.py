@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime
 from typing import Callable
@@ -13,7 +14,13 @@ from jsa.agents.base import AgentBackend, AgentLimitReached
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
 from jsa.events.bus import bus
-from jsa.events.schema import ErrorEvent, LogEvent, StatusChangedEvent, event_to_dict
+from jsa.events.schema import (
+    BackendSwitchedEvent,
+    ErrorEvent,
+    LogEvent,
+    StatusChangedEvent,
+    event_to_dict,
+)
 from jsa.pipeline import stages
 from jsa.pipeline.stages import PausedForInput
 from jsa.pipeline.state_machine import transition
@@ -43,6 +50,33 @@ def _next_stage_for(job: Job) -> Stage:
     raise ValueError(f"Job {job.id} is in unexpected state {job.state} for dispatch")
 
 
+def _wrap_factory(backend_factory: Callable) -> Callable[[str], AgentBackend]:
+    """Normalise backend_factory to always accept a backend name string.
+
+    Legacy (zero-arg) factories are wrapped so the same code path works for
+    both pre-BF-19 callers (tests) and the new name-parameterised form.
+    """
+    try:
+        sig = inspect.signature(backend_factory)
+        n_positional = sum(
+            1
+            for p in sig.parameters.values()
+            if p.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and p.default is inspect.Parameter.empty
+        )
+    except (ValueError, TypeError):
+        n_positional = 0
+
+    if n_positional == 0:
+        # Legacy zero-arg factory — wrap it to accept (and ignore) the name arg
+        return lambda name: backend_factory()
+    # New-style: factory(name: str) -> AgentBackend
+    return backend_factory
+
+
 class Orchestrator:
     """Dispatcher loop that manages concurrent pipeline stages.
 
@@ -50,20 +84,23 @@ class Orchestrator:
         sem: Semaphore limiting parallel agent sessions to max_parallel.
         wakeup: Event set by kick() to wake the run() loop.
         _db_session_factory: Callable that returns a new async SQLAlchemy session.
-        _backend_factory: Callable that returns a fresh AgentBackend instance.
+        _backend_factory: Callable(name: str) -> AgentBackend — instantiates a backend by name.
+        _backends: Ordered list of backend names forming the fallback chain (BF-19).
         _stopping: Flag to signal graceful shutdown.
     """
 
     def __init__(
         self,
         db_session_factory: Callable[[], AsyncSession],
-        backend_factory: Callable[[], AgentBackend],
+        backend_factory: Callable,
+        backends: list[str] | None = None,
         max_parallel: int = 5,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
         self.wakeup = asyncio.Event()
         self._db_session_factory = db_session_factory
-        self._backend_factory = backend_factory
+        self._backend_factory = _wrap_factory(backend_factory)
+        self._backends = backends if backends is not None else ["claude-cli"]
         self._stopping = False
         self._tasks: set[asyncio.Task] = set()
 
@@ -186,7 +223,16 @@ class Orchestrator:
                     )
                     return
 
-                backend = self._backend_factory()
+                # Per-job backend selection (BF-19):
+                # Use job.backend_name if already set; otherwise assign backends[0].
+                if job.backend_name is None:
+                    job.backend_name = self._backends[0]
+                    job.updated_at = datetime.utcnow()
+                    session.add(job)
+                    await session.commit()
+
+                active_backend_name = job.backend_name
+                backend = self._backend_factory(active_backend_name)
                 await stages.run_stage(job, backend, stage, session)
 
         except PausedForInput:
@@ -195,24 +241,7 @@ class Orchestrator:
 
         except AgentLimitReached as exc:
             logger.warning("_run_one: job %s hit backend limit: %s", job_id, exc)
-            human_msg = "Backend limit reached — switch backends or wait for quota reset"
-            try:
-                async with self._db_session_factory() as err_session:
-                    await err_session.rollback()
-                    await repo.mark_failed(err_session, job_id, human_msg)
-                # Publish after commit so the UI fetches consistent data
-                await bus.publish(
-                    event_to_dict(LogEvent(job_id=job_id, level="error", text=human_msg))
-                )
-                await bus.publish(
-                    event_to_dict(ErrorEvent(job_id=job_id, message=human_msg))
-                )
-            except Exception as inner_exc:
-                logger.error(
-                    "_run_one: failed to mark job %s as failed: %s",
-                    job_id,
-                    inner_exc,
-                )
+            await self._handle_limit_reached(job_id, exc)
 
         except Exception as exc:
             logger.exception("_run_one: job %s failed: %s", job_id, exc)
@@ -237,3 +266,75 @@ class Orchestrator:
         finally:
             self.sem.release()
             self.kick()
+
+    async def _handle_limit_reached(self, job_id: str, exc: AgentLimitReached) -> None:
+        """Handle AgentLimitReached: switch to next backend or mark failed (BF-19).
+
+        If a next backend exists in the chain:
+        1. Persist job.backend_name = next backend.
+        2. Delete failed stage's Message rows (so next dispatch starts fresh).
+        3. Reset job state to the stage's start checkpoint.
+        4. Emit BackendSwitchedEvent.
+        The finally block in _run_one calls kick() which re-triggers dispatch.
+
+        If chain is exhausted: mark the job failed with a human-readable message.
+        """
+        try:
+            async with self._db_session_factory() as session:
+                job = await repo.get_job(session, job_id)
+                if job is None:
+                    logger.error("_handle_limit_reached: job %s not found", job_id)
+                    return
+
+                current_backend = job.backend_name or self._backends[0]
+                failed_stage = job.current_stage  # capture before any transition
+
+                # Find the next backend in the chain
+                try:
+                    current_idx = self._backends.index(current_backend)
+                except ValueError:
+                    current_idx = -1
+
+                next_idx = current_idx + 1
+                if next_idx < len(self._backends):
+                    # Switch to next backend
+                    next_backend = self._backends[next_idx]
+                    await repo.backend_switch_reset(session, job, next_backend, failed_stage)
+
+                    switch_msg = (
+                        f"Backend limit reached — switching from "
+                        f"{current_backend} to {next_backend}"
+                    )
+                    logger.info("_handle_limit_reached: job %s: %s", job_id, switch_msg)
+
+                    await bus.publish(
+                        event_to_dict(LogEvent(job_id=job_id, level="warn", text=switch_msg))
+                    )
+                    await bus.publish(
+                        event_to_dict(
+                            BackendSwitchedEvent(
+                                job_id=job_id,
+                                from_backend=current_backend,
+                                to_backend=next_backend,
+                            )
+                        )
+                    )
+                else:
+                    # Chain exhausted — mark failed
+                    human_msg = (
+                        "Backend limit reached — switch backends or wait for quota reset"
+                    )
+                    await repo.mark_failed(session, job_id, human_msg)
+                    await bus.publish(
+                        event_to_dict(LogEvent(job_id=job_id, level="error", text=human_msg))
+                    )
+                    await bus.publish(
+                        event_to_dict(ErrorEvent(job_id=job_id, message=human_msg))
+                    )
+
+        except Exception as inner_exc:
+            logger.error(
+                "_handle_limit_reached: failed to handle limit for job %s: %s",
+                job_id,
+                inner_exc,
+            )

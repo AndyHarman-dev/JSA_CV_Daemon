@@ -40,6 +40,11 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE documents ADD COLUMN docx_path TEXT"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # backend_name added in BF-19: tracks the active backend per job.
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN backend_name TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

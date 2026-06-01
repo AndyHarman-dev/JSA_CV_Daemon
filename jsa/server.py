@@ -52,16 +52,17 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
         app.state.engine = engine
         app.state.session_factory = session_factory
 
-        def _backend_factory():
-            if settings.backend == "anthropic":
+        def _backend_factory(name: str):
+            """Instantiate a backend by name, forwarding the appropriate settings."""
+            if name == "anthropic":
                 return backend_for(
                     "anthropic",
                     model=settings.model,
                     timeout=settings.anthropic_timeout,
                 )
-            return backend_for(settings.backend, timeout=settings.agent_timeout)
+            return backend_for(name, timeout=settings.agent_timeout)
 
-        orchestrator = Orchestrator(session_factory, _backend_factory)
+        orchestrator = Orchestrator(session_factory, _backend_factory, settings.backends)
         app.state.orchestrator = orchestrator
         asyncio.create_task(orchestrator.run())
 

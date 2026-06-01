@@ -47,7 +47,8 @@ export type WSEvent =
   | { type: "log"; job_id: string; level: "info" | "warn" | "error"; text: string }
   | { type: "error"; job_id: string; message: string }
   | { type: "approved"; job_id: string; cv_pdf_path: string; cl_pdf_path: string }
-  | { type: "job_removed"; job_id: string };
+  | { type: "job_removed"; job_id: string }
+  | { type: "backend_switched"; job_id: string; from_backend: string; to_backend: string };
 
 export interface FullJobDTO extends JobDTO {
   follow_ups: FollowUpDTO[];

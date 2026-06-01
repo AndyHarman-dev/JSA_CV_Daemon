@@ -58,6 +58,15 @@ class JobRemovedEvent:
     job_id: str = ""
 
 
+@dataclass
+class BackendSwitchedEvent:
+    """Emitted when a job's backend is switched due to AgentLimitReached (BF-19)."""
+    type: Literal["backend_switched"] = "backend_switched"
+    job_id: str = ""
+    from_backend: str = ""
+    to_backend: str = ""
+
+
 def event_to_dict(event) -> dict:
     """Convert any event dataclass to a JSON-serialisable dict."""
     return dataclasses.asdict(event)

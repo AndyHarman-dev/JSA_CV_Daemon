@@ -249,6 +249,105 @@ async def nuclear_reset_job(session: AsyncSession, job: Job) -> None:
     await session.commit()
 
 
+async def backend_switch_reset(
+    session: AsyncSession,
+    job: Job,
+    new_backend_name: str,
+    failed_stage: "Stage",
+) -> None:
+    """Reset job state after AgentLimitReached so the new backend starts fresh (BF-19).
+
+    Strategy mirrors soft_reset_job but is invoked from a running job (not a
+    failed one) and writes backend_name in the same atomic commit.
+
+    failed_stage mapping:
+      cv_adjust / revising_cv / None → rewind to pending (delete all Messages)
+      cover_letter / revising_cl     → rewind to cv_done (delete CL Messages only)
+      revising_cv / revising_cl      → rewind to review (delete revision Messages only)
+
+    Revision stages rewind to review (not cv_done/pending) so the unconsumed
+    RevisionRequest is still in place and the orchestrator re-dispatches the
+    revision on the new backend.
+
+    Session IDs for the failed stage are cleared so run_stage takes the
+    fresh-session branch on the next dispatch.
+    """
+    from jsa.pipeline.state_machine import transition, set_current_stage
+
+    job.backend_name = new_backend_name
+
+    if failed_stage in (Stage.revising_cv, Stage.revising_cl):
+        # Delete only revision-stage Messages and open FollowUps for this revision.
+        await session.execute(
+            delete(Message).where(
+                Message.job_id == job.id,
+                Message.stage == failed_stage,
+            )
+        )
+        await session.execute(
+            delete(FollowUp).where(
+                FollowUp.job_id == job.id,
+                FollowUp.stage == failed_stage,
+                FollowUp.answered_at.is_(None),
+            )
+        )
+        # Clear the relevant session ID
+        if failed_stage == Stage.revising_cv:
+            job.cv_session_id = None
+        else:
+            job.cl_session_id = None
+        job.session_external_id = None
+        # Transition running → review. current_stage is currently revising_*/
+        # we must clear it before transition then restore so orchestrator picks up
+        # the unconsumed RevisionRequest.
+        # transition() sets current_stage=None for review (correct — review jobs
+        # with an unconsumed RevisionRequest get current_stage set by the API route).
+        # But we actually need current_stage set to revising_* so list_runnable_jobs
+        # dispatches via the revision path. Use set_current_stage after transition.
+        # Actually, looking at list_runnable_jobs: it dispatches state==review jobs
+        # when unconsumed RevisionRequest exists; _next_stage_for returns job.current_stage.
+        # So we must preserve current_stage. Use set_current_stage after transition.
+        transition(job, JobState.review, None)
+        set_current_stage(job, failed_stage)  # restore revising_* so orchestrator re-dispatches
+
+    elif failed_stage == Stage.cover_letter:
+        # Delete cover_letter Messages and open FollowUps — keep cv_adjust Messages.
+        await session.execute(
+            delete(Message).where(
+                Message.job_id == job.id,
+                Message.stage == Stage.cover_letter,
+            )
+        )
+        await session.execute(
+            delete(FollowUp).where(
+                FollowUp.job_id == job.id,
+                FollowUp.stage == Stage.cover_letter,
+                FollowUp.answered_at.is_(None),
+            )
+        )
+        job.cl_session_id = None
+        job.session_external_id = None
+        # running(cover_letter) → cv_done (guard extended in state_machine for BF-19)
+        transition(job, JobState.cv_done, None)
+
+    else:
+        # cv_adjust, or None (failure before any stage started) → rewind to pending
+        await session.execute(delete(Message).where(Message.job_id == job.id))
+        await session.execute(delete(FollowUp).where(
+            FollowUp.job_id == job.id,
+            FollowUp.answered_at.is_(None),
+        ))
+        job.cv_session_id = None
+        job.cl_session_id = None
+        job.session_external_id = None
+        # running(cv_adjust) → pending
+        transition(job, JobState.pending, None)
+
+    job.updated_at = datetime.utcnow()
+    session.add(job)
+    await session.commit()
+
+
 async def checkpoint(
     session: AsyncSession,
     job: Job,

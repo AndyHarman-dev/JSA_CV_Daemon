@@ -15,6 +15,7 @@ async def config(request: Request):
     settings = request.app.state.settings
     return {
         "backend": settings.backend,
+        "backends": settings.backends,
         "output_dir": str(settings.output_dir),
         "db_path": str(settings.db_path),
         "port": settings.port,

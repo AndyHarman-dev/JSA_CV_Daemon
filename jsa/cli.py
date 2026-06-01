@@ -25,7 +25,7 @@ from jsa.server import create_app
 
 app = typer.Typer(help="JSA — Job Search Assistant")
 
-_VALID_BACKENDS = {"claude-cli", "gemini-cli", "anthropic"}
+_VALID_BACKENDS = {"claude-cli", "gemini-cli", "anthropic"}  # kept for fast validation before registry import
 
 
 def _start_tunnel(port: int) -> None:
@@ -85,7 +85,8 @@ def main(
         readable=True,
     ),
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory for generated PDFs"),
-    backend: Optional[str] = typer.Option(None, "--backend", help="AI backend: claude-cli | gemini-cli | anthropic"),
+    backend: Optional[str] = typer.Option(None, "--backend", help="AI backend (single): claude-cli | gemini-cli | anthropic (backward-compat alias for --backends)"),
+    backends: Optional[str] = typer.Option(None, "--backends", help="Comma-separated ordered backend chain, e.g. claude-cli,gemini-cli"),
     db: Optional[Path] = typer.Option(None, "--db", help="SQLite database path"),
     port: Optional[int] = typer.Option(None, "--port", help="Port for the local web server"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser on start", is_flag=True),
@@ -106,7 +107,21 @@ def main(
     overrides: dict = {}
     if out is not None:
         overrides["output_dir"] = out
-    if backend is not None:
+
+    # --backends takes precedence over --backend; --backend is a single-item alias
+    if backends is not None:
+        parsed_backends = [b.strip() for b in backends.split(",") if b.strip()]
+        invalid = [b for b in parsed_backends if b not in _VALID_BACKENDS]
+        if invalid:
+            typer.echo(
+                f"Error: --backends contains unknown backend(s) {invalid}. "
+                f"Must be one of {sorted(_VALID_BACKENDS)}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        overrides["backends"] = parsed_backends
+        overrides["backend"] = parsed_backends[0]  # keep backend in sync for /api/config
+    elif backend is not None:
         if backend not in _VALID_BACKENDS:
             typer.echo(
                 f"Error: --backend must be one of {sorted(_VALID_BACKENDS)}, got: {backend!r}",
@@ -114,6 +129,8 @@ def main(
             )
             raise typer.Exit(code=1)
         overrides["backend"] = backend
+        overrides["backends"] = [backend]
+
     if db is not None:
         overrides["db_path"] = db
     if port is not None:

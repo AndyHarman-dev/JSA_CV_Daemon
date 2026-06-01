@@ -54,6 +54,15 @@ export const useStore = create<Store>((set, get) => ({
           console.error("refetchAll failed:", err);
         });
         break;
+      case "backend_switched":
+        // Refetch so the UI reflects the new backend assignment and log the switch.
+        console.info(
+          `[JSA] Backend switched for job ${e.job_id}: ${e.from_backend} → ${e.to_backend}`
+        );
+        store.refetchAll().catch((err: unknown) => {
+          console.error("refetchAll failed:", err);
+        });
+        break;
       case "log":
         break;
       case "error":

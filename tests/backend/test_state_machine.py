@@ -243,17 +243,22 @@ class TestForbiddenTransitions:
 # ---------------------------------------------------------------------------
 
 class TestStageCompatibility:
-    """running(cv_adjust) → cv_done allowed; running(cover_letter) → cv_done raises."""
+    """running(cv_adjust) → cv_done allowed; running(revising_cv) → cv_done raises.
+
+    BF-19: running(cover_letter) → cv_done is now also allowed (backend-switch restart
+    rewinds a mid-cover_letter job back to cv_done so the new backend starts fresh).
+    """
 
     def test_running_cv_adjust_to_cv_done_allowed(self):
         job = make_job(JobState.running, Stage.cv_adjust)
         transition(job, JobState.cv_done)
         assert job.state == JobState.cv_done
 
-    def test_running_cover_letter_to_cv_done_raises(self):
+    def test_running_cover_letter_to_cv_done_allowed_for_backend_switch(self):
+        """BF-19: backend-switch restart from cover_letter stage → rewind to cv_done."""
         job = make_job(JobState.running, Stage.cover_letter)
-        with pytest.raises(InvalidTransition, match="cv_done"):
-            transition(job, JobState.cv_done)
+        transition(job, JobState.cv_done)
+        assert job.state == JobState.cv_done
 
     def test_running_revising_cv_to_cv_done_raises(self):
         job = make_job(JobState.running, Stage.revising_cv)

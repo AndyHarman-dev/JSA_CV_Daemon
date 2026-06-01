@@ -47,6 +47,7 @@ class Job(Base):
     session_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # backend resume token
     cv_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cv_adjust stage
     cl_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cover_letter stage
+    backend_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # active backend for this job (BF-19)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

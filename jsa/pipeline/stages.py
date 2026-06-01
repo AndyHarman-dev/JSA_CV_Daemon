@@ -71,11 +71,20 @@ async def run_stage(
     if stage in (Stage.revising_cv, Stage.revising_cl):
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
         revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
+        # revision_session_id may be None after a backend switch (BF-19): the new backend
+        # will restore from history only (AnthropicAPIBackend ignores external_id; CLI
+        # backends receive None and start a new session backed by the history array).
+        # Only raise if both session ID and Message history are absent, which indicates
+        # a job that predates BF-9 (not a backend switch).
         if revision_session_id is None:
-            raise ValueError(
-                f"Cannot resume revision for {stage.value}: per-stage session ID was not "
-                f"recorded (job predates BF-9 fix). Reset the job to re-run from scratch."
-            )
+            original_stage_check = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
+            history_check = await _load_history(session, job.id, original_stage_check)
+            if not history_check:
+                raise ValueError(
+                    f"Cannot resume revision for {stage.value}: per-stage session ID was not "
+                    f"recorded and no history available (job predates BF-9 fix). "
+                    f"Reset the job to re-run from scratch."
+                )
 
         # Fetch the unconsumed RevisionRequest — needed for its instruction (fresh path)
         # and its created_at (discriminator).
