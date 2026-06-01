@@ -551,15 +551,13 @@ def _research_spec(job: Job, stage: Stage) -> tuple[str, str, str]:
 async def _gather_research(job: Job, backend: AgentBackend, stage: Stage) -> str:
     """Return a research brief block to inject into the initial user message.
 
-    claude-cli only: invokes the cv-research / cl-research subagent via
-    ``ClaudeCliBackend.run_research``.  Any other backend, or any research
-    failure, yields the NONE placeholder so the main prompt's single code path
-    falls back to asking the user directly.  Research is best-effort and never
-    fails the job.
+    Any backend that implements ``run_research`` (e.g. ClaudeCliBackend,
+    GeminiCliBackend) will have it invoked here.  Any backend without
+    ``run_research``, or any research failure, yields the NONE placeholder so
+    the main prompt's single code path falls back to asking the user directly.
+    Research is best-effort and never fails the job.
     """
-    from jsa.agents.claude_cli import ClaudeCliBackend  # local import avoids cycle
-
-    if not isinstance(backend, ClaudeCliBackend):
+    if not hasattr(backend, "run_research"):
         return _research_placeholder(stage)
 
     agent_name, query, open_tag = _research_spec(job, stage)

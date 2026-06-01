@@ -51,6 +51,7 @@ class GeminiCliBackend(AgentBackend):
     """
 
     name = "gemini-cli"
+    RESEARCH_TIMEOUT = 300.0  # web search + multiple fetches can exceed the 120s message-turn default
 
     def __init__(self, timeout: float = 120.0) -> None:
         self._timeout = timeout
@@ -59,29 +60,33 @@ class GeminiCliBackend(AgentBackend):
     # Internal subprocess runner (runs in a thread via asyncio.to_thread)
     # ------------------------------------------------------------------
 
-    def _run(self, cmd: list[str], context: str = "") -> dict:
+    def _run(self, cmd: list[str], context: str = "", timeout: float | None = None) -> dict:
         """Run a gemini CLI command with -o json. Returns the parsed JSON dict.
 
         The caller extracts data["response"] for the reply text and
         data.get("session_id") if needed.
 
-        Raises AgentTimeout if the process exceeds self._timeout seconds.
+        timeout overrides self._timeout when provided (e.g. for research calls
+        that may take longer than a normal message turn).
+
+        Raises AgentTimeout if the process exceeds the effective timeout.
         Raises GeminiSessionExpiredError if the subprocess exits non-zero with
         empty stdout and stderr contains text suggesting the session is unknown.
         Raises GeminiCliError if the subprocess exits non-zero with empty stdout
         for any other reason, or if the JSON output cannot be parsed.
         stderr is logged at WARNING on nonzero exit, at DEBUG otherwise.
         """
+        eff_timeout = timeout if timeout is not None else self._timeout
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                timeout=self._timeout,
+                timeout=eff_timeout,
                 stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired as exc:
             raise AgentTimeout(
-                f"gemini CLI timed out after {self._timeout}s"
+                f"gemini CLI timed out after {eff_timeout}s"
             ) from exc
 
         ctx = f" [{context}]" if context else ""
@@ -248,3 +253,31 @@ class GeminiCliBackend(AgentBackend):
     async def end_session(self, handle: SessionHandle) -> None:
         """No-op: the subprocess has already exited when start_session/send_message returned."""
         pass
+
+    async def run_research(self, agent_name: str, query: str) -> str:
+        """One-shot, non-interactive research via inline system prompt + Gemini's built-in search tools.
+
+        Loads the Gemini-specific research prompt for agent_name, combines it with query,
+        and runs gemini in -p mode. Returns data["response"] raw — NO sentinel parsing.
+        Uses RESEARCH_TIMEOUT. On any failure the caller must fall back to the NONE placeholder.
+        """
+        from pathlib import Path
+
+        _PROMPT_MAP = {
+            "cv-research": "GEMINI_CV_RESEARCH.md",
+            "cl-research": "GEMINI_CL_RESEARCH.md",
+        }
+        if agent_name not in _PROMPT_MAP:
+            raise ValueError(f"Unknown research agent: {agent_name!r}")
+
+        prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
+        system_prompt = (prompts_dir / _PROMPT_MAP[agent_name]).read_text(encoding="utf-8")
+
+        cmd = [
+            "gemini",
+            "--skip-trust",
+            "-p", f"{system_prompt}\n\n{query}",
+            "-o", "json",
+        ]
+        data = await asyncio.to_thread(self._run, cmd, f"research:{agent_name}", self.RESEARCH_TIMEOUT)
+        return data["response"]

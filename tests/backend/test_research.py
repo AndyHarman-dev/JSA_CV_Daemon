@@ -131,7 +131,7 @@ def _needs_input_reply(question: str = "What is your target role?") -> AgentRepl
 
 
 class TestGatherResearchFakeBackend:
-    """_gather_research routes non-ClaudeCliBackend to the NONE placeholder."""
+    """_gather_research routes backends without run_research to the NONE placeholder."""
 
     async def test_cv_adjust_returns_intel_brief_tag(self):
         """FakeAgentBackend + cv_adjust stage → result contains [INTEL_BRIEF]."""
@@ -612,3 +612,129 @@ class TestResearchPlaceholder:
         """revising_cl is treated like cover_letter for placeholder tags."""
         result = _research_placeholder(Stage.revising_cl)
         assert "[COMPANY_BRIEF]" in result
+
+
+# ---------------------------------------------------------------------------
+# Test SA-2: _gather_research dispatches to GeminiCliBackend.run_research
+# ---------------------------------------------------------------------------
+
+
+class TestGatherResearchGeminiBackend:
+    """_gather_research dispatches to GeminiCliBackend.run_research when it returns a valid brief."""
+
+    async def test_cv_adjust_returns_real_brief(self, monkeypatch):
+        """GeminiCliBackend.run_research returns valid brief → _gather_research returns it (not NONE)."""
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        job = _make_job()
+        backend = GeminiCliBackend()
+
+        async def _fake_research(self, agent_name, query):
+            return "[INTEL_BRIEF]\nCompany: Acme\n[/INTEL_BRIEF]"
+
+        monkeypatch.setattr(GeminiCliBackend, "run_research", _fake_research)
+        result = await _gather_research(job, backend, Stage.cv_adjust)
+        assert "[INTEL_BRIEF]" in result
+        assert "NONE" not in result
+
+    async def test_cover_letter_returns_real_brief(self, monkeypatch):
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        job = _make_job()
+        backend = GeminiCliBackend()
+
+        async def _fake_research(self, agent_name, query):
+            return "[COMPANY_BRIEF]\nWhat they do: Makes widgets\n[/COMPANY_BRIEF]"
+
+        monkeypatch.setattr(GeminiCliBackend, "run_research", _fake_research)
+        result = await _gather_research(job, backend, Stage.cover_letter)
+        assert "[COMPANY_BRIEF]" in result
+        assert "NONE" not in result
+
+    async def test_run_research_failure_returns_placeholder(self, monkeypatch):
+        """If GeminiCliBackend.run_research raises, _gather_research returns placeholder."""
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        job = _make_job()
+        backend = GeminiCliBackend()
+
+        async def _raise(self, agent_name, query):
+            raise RuntimeError("gemini quota exceeded")
+
+        monkeypatch.setattr(GeminiCliBackend, "run_research", _raise)
+        result = await _gather_research(job, backend, Stage.cv_adjust)
+        assert "[INTEL_BRIEF]" in result
+        assert "NONE" in result
+
+    async def test_run_research_missing_tag_returns_placeholder(self, monkeypatch):
+        """If run_research returns text without the expected open_tag, fall back to placeholder."""
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        job = _make_job()
+        backend = GeminiCliBackend()
+
+        async def _no_tag(self, agent_name, query):
+            return "Some research output without the expected tag"
+
+        monkeypatch.setattr(GeminiCliBackend, "run_research", _no_tag)
+        result = await _gather_research(job, backend, Stage.cv_adjust)
+        assert "[INTEL_BRIEF]" in result
+        assert "NONE" in result
+
+
+# ---------------------------------------------------------------------------
+# Test SA-2: GeminiCliBackend.run_research command construction
+# ---------------------------------------------------------------------------
+
+
+class TestGeminiRunResearch:
+    """GeminiCliBackend.run_research command construction and response extraction."""
+
+    async def test_cv_research_calls_gemini_with_prompt(self, monkeypatch):
+        """run_research for cv-research embeds the system prompt and query in -p."""
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        backend = GeminiCliBackend()
+        captured_cmd = []
+
+        def _fake_run(cmd, context="", timeout=None):
+            captured_cmd.extend(cmd)
+            return {"response": "[INTEL_BRIEF]\nCompany: Acme\n[/INTEL_BRIEF]"}
+
+        monkeypatch.setattr(backend, "_run", _fake_run)
+        result = await backend.run_research("cv-research", "Company: Acme\nRole: Engineer")
+
+        assert "gemini" in captured_cmd
+        assert "--skip-trust" in captured_cmd
+        assert "-p" in captured_cmd
+        assert "-o" in captured_cmd
+        assert "json" in captured_cmd
+        assert result == "[INTEL_BRIEF]\nCompany: Acme\n[/INTEL_BRIEF]"
+
+    async def test_cl_research_calls_gemini_with_prompt(self, monkeypatch):
+        """run_research for cl-research returns data["response"]."""
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        backend = GeminiCliBackend()
+
+        def _fake_run(cmd, context="", timeout=None):
+            return {"response": "[COMPANY_BRIEF]\nWhat they do: Makes widgets\n[/COMPANY_BRIEF]"}
+
+        monkeypatch.setattr(backend, "_run", _fake_run)
+        result = await backend.run_research("cl-research", "Company: Acme\nRole: Engineer")
+        assert result == "[COMPANY_BRIEF]\nWhat they do: Makes widgets\n[/COMPANY_BRIEF]"
+
+    async def test_run_research_uses_research_timeout(self, monkeypatch):
+        """run_research passes RESEARCH_TIMEOUT (300s), not the default session timeout."""
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        backend = GeminiCliBackend(timeout=10.0)  # short session timeout
+        captured_timeout = []
+
+        def _fake_run(cmd, context="", timeout=None):
+            captured_timeout.append(timeout)
+            return {"response": "[INTEL_BRIEF]\nfoo\n[/INTEL_BRIEF]"}
+
+        monkeypatch.setattr(backend, "_run", _fake_run)
+        await backend.run_research("cv-research", "query")
+        assert captured_timeout[0] == GeminiCliBackend.RESEARCH_TIMEOUT
+
+    async def test_run_research_unknown_agent_raises(self):
+        """run_research raises ValueError for unknown agent names."""
+        from jsa.agents.gemini_cli import GeminiCliBackend
+        backend = GeminiCliBackend()
+        with pytest.raises(ValueError, match="Unknown research agent"):
+            await backend.run_research("unknown-agent", "query")
