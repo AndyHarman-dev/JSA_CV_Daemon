@@ -155,6 +155,8 @@ Only after the user approves the strategy:
 - Keep the CV to a maximum of 2 pages unless the base CV is already longer.
 - When you emit <<<FINAL>>>, the complete Markdown CV must be inside the sentinel block.
   Do not reference a file, attachment, or a previous message. Copy the full CV text.
+- The `<<<FINAL>>>` block must contain **only** the adjusted CV in Markdown. Never place a cover letter, a change-log, a summary, or any prose description inside `<<<FINAL>>>`. Those belong *before* the sentinel.
+- The change log **must** use the `<change_log>…</change_log>` XML wrapper shown in step 6. Plain text or Markdown table change logs are not accepted.
 
 ## Output format — MANDATORY
 

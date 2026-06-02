@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -84,6 +85,42 @@ async def _render_for_review(session: AsyncSession, job: Job, output_dir: Path) 
     session.add(cv_doc)
     session.add(cl_doc)
     await session.commit()
+
+
+def _validate_cv_content(content: str) -> None:
+    """Validate that a cv_adjust FINAL block contains actual CV content.
+
+    Called before any DB write for Stage.cv_adjust and Stage.revising_cv.
+    Raises ValueError (→ job marked failed, user can retry) when the content
+    clearly is not a CV:
+    - Too short to be any reasonable CV
+    - Missing all markdown structural markers that a CV would have
+
+    We check structural markers (headings, separators) rather than specific
+    content patterns, to avoid fragile keyword matching.
+    """
+    MIN_CV_CHARS = 300
+
+    if len(content) < MIN_CV_CHARS:
+        raise ValueError(
+            f"cv_adjust produced content that is too short ({len(content)} chars; "
+            f"minimum is {MIN_CV_CHARS}). The agent may have emitted a summary or "
+            "description instead of the adjusted CV. Retry the job to re-run."
+        )
+
+    # A valid CV must contain at least one markdown structural marker.
+    # Cover letters and plain-text change-log summaries typically have none.
+    has_heading = bool(re.search(r"^#{1,3} ", content, re.MULTILINE))
+    has_separator = bool(re.search(r"^---\s*$", content, re.MULTILINE))
+    has_bold_name = bool(re.search(r"^\*\*[A-Z]", content, re.MULTILINE))
+
+    if not (has_heading or has_separator or has_bold_name):
+        raise ValueError(
+            "cv_adjust produced content without expected CV structure "
+            "(no markdown headings, '---' separators, or bold name header). "
+            "The agent may have emitted a cover letter or plain-text summary "
+            "instead of the adjusted CV. Retry the job to re-run."
+        )
 
 
 async def run_stage(
@@ -355,6 +392,12 @@ async def _handle_final(
     # A successful FINAL means any soft retry worked — reset the retry counter.
     # checkpoint() calls session.add(job) + commit, so this persists atomically.
     job.retry_count = 0
+
+    # Validate cv_adjust output before writing anything to the DB.
+    # If the model emitted a cover letter or a change-log instead of a CV,
+    # this raises ValueError → propagates to _run_one → job marked failed.
+    if stage in (Stage.cv_adjust, Stage.revising_cv):
+        _validate_cv_content(reply.content)
 
     # Determine document stage (revision docs stored under original stage)
     if stage == Stage.revising_cv:
