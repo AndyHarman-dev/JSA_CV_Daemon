@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +18,7 @@ from jsa.events.bus import bus
 from jsa.events.schema import ApprovedEvent, StatusChangedEvent, JobRemovedEvent, event_to_dict
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
+from jsa.util import slugify as _slugify
 
 router = APIRouter()
 
@@ -30,10 +30,6 @@ router = APIRouter()
 
 def _session_factory(request: Request):
     return request.app.state.session_factory
-
-
-def _slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
 
 
 def _doc_to_dict(doc: Document) -> dict:

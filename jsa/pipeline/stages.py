@@ -8,18 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select
-
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
 from jsa.render.registry import renderer_for
 from jsa.db import repo
+from jsa.util import slugify as _slugify
 from jsa.db.models import (
     FollowUp,
     Job,
@@ -48,10 +46,6 @@ class PausedForInput(Exception):
     The job's state has already been checkpointed before this is raised.
     The orchestrator catches this silently — it is control flow, not an error.
     """
-
-
-def _slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
 
 
 async def _render_for_review(session: AsyncSession, job: Job, output_dir: Path) -> None:
