@@ -6,8 +6,11 @@ Handles both fresh sessions (pending/cv_done) and resumed sessions
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.render.registry import renderer_for
 from jsa.db import repo
 from jsa.db.models import (
     FollowUp,
@@ -46,11 +50,54 @@ class PausedForInput(Exception):
     """
 
 
+def _slugify(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+
+
+async def _render_for_review(session: AsyncSession, job: Job, output_dir: Path) -> None:
+    """Render both PDF and DOCX for all review documents and persist paths."""
+    cv_docs = await repo.get_documents(session, job.id, Stage.cv_adjust)
+    cl_docs = await repo.get_documents(session, job.id, Stage.cover_letter)
+    if not cv_docs or not cl_docs:
+        return
+
+    cv_doc = cv_docs[0]  # version-desc, so [0] is latest
+    cl_doc = cl_docs[0]
+
+    slug = f"{_slugify(job.company)}_{_slugify(job.role)}_{job.id[:8]}"
+    out = output_dir / slug
+    out.mkdir(parents=True, exist_ok=True)
+
+    cv_pdf  = out / "cv.pdf"
+    cv_docx = out / "cv.docx"
+    cl_pdf  = out / "cover_letter.pdf"
+    cl_docx = out / "cover_letter.docx"
+
+    pdf_r  = renderer_for("weasyprint")
+    docx_r = renderer_for("docx")
+
+    await asyncio.gather(
+        pdf_r.render(cv_doc.markdown, cv_pdf),
+        docx_r.render(cv_doc.markdown, cv_docx),
+        pdf_r.render(cl_doc.markdown, cl_pdf),
+        docx_r.render(cl_doc.markdown, cl_docx),
+    )
+
+    cv_doc.pdf_path  = str(cv_pdf)
+    cv_doc.docx_path = str(cv_docx)
+    cl_doc.pdf_path  = str(cl_pdf)
+    cl_doc.docx_path = str(cl_docx)
+    session.add(cv_doc)
+    session.add(cl_doc)
+    await session.commit()
+
+
 async def run_stage(
     job: Job,
     backend: AgentBackend,
     stage: Stage,
     session: AsyncSession,
+    output_dir: Path | None = None,
 ) -> None:
     """Run one pipeline stage to completion or park.
 
@@ -217,6 +264,7 @@ async def run_stage(
         stage=stage,
         reply=reply,
         accumulated_messages=accumulated_messages,
+        output_dir=output_dir,
     )
 
     await bus.publish(
@@ -307,6 +355,7 @@ async def _handle_final(
     stage: Stage,
     reply: AgentReply,
     accumulated_messages: list[dict],
+    output_dir: Path | None = None,
 ) -> None:
     """Finalize the stage: compute next state, version document, write checkpoint."""
     # A successful FINAL means any soft retry worked — reset the retry counter.
@@ -354,6 +403,8 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        if output_dir is not None:
+            await _render_for_review(session, job, output_dir)
     elif stage in (Stage.revising_cv, Stage.revising_cl):
         # Mark the RevisionRequest consumed (within same transaction as the checkpoint commit)
         await session.execute(
@@ -373,6 +424,8 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        if output_dir is not None:
+            await _render_for_review(session, job, output_dir)
 
     await backend.end_session(handle)
 

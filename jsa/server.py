@@ -62,7 +62,7 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
                 )
             return backend_for(name, timeout=settings.agent_timeout)
 
-        orchestrator = Orchestrator(session_factory, _backend_factory, settings.backends)
+        orchestrator = Orchestrator(session_factory, _backend_factory, settings.backends, output_dir=settings.output_dir)
         app.state.orchestrator = orchestrator
         asyncio.create_task(orchestrator.run())
 

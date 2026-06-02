@@ -198,9 +198,8 @@ async def answer_follow_up(request: Request, job_id: str, body: AnswerBody):
 
 @router.post("/api/jobs/{job_id}/approve")
 async def approve_job(request: Request, job_id: str):
-    """Approve a job in review state: render PDFs and transition to approved."""
+    """Approve a job in review state: transition to approved (rendering already done by pipeline)."""
     sf = _session_factory(request)
-    settings = request.app.state.settings
 
     async with sf() as session:
         job = await repo.get_job(session, job_id)
@@ -230,57 +229,24 @@ async def approve_job(request: Request, job_id: str):
         cv_doc = cv_docs[0]   # get_documents returns version desc order
         cl_doc = cl_docs[0]
 
-        # Compute output paths
-        slug = f"{_slugify(job.company)}_{_slugify(job.role)}_{job.id[:8]}"
-        cv_pdf = settings.output_dir / slug / "cv.pdf"
-        cl_pdf = settings.output_dir / slug / "cover_letter.pdf"
+        # Capture pdf paths before checkpoint() expires the ORM objects
+        cv_pdf_path = cv_doc.pdf_path or ""
+        cl_pdf_path = cl_doc.pdf_path or ""
 
-        # Capture IDs and markdown before closing session
-        cv_markdown = cv_doc.markdown
-        cl_markdown = cl_doc.markdown
-        cv_doc_id = cv_doc.id
-        cl_doc_id = cl_doc.id
-
-    # Render PDFs outside the session (async-safe, uses asyncio.to_thread internally)
-    renderer = renderer_for("weasyprint")
-    await renderer.render(cv_markdown, cv_pdf)
-    await renderer.render(cl_markdown, cl_pdf)
-
-    # Write PDF paths + transition in a single transaction
-    async with sf() as session:
-        job = await repo.get_job(session, job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-
-        # Re-fetch documents to update pdf_path
-        cv_result = await session.execute(
-            select(Document).where(Document.id == cv_doc_id)
-        )
-        cv_doc = cv_result.scalar_one()
-        cl_result = await session.execute(
-            select(Document).where(Document.id == cl_doc_id)
-        )
-        cl_doc = cl_result.scalar_one()
-
-        cv_doc.pdf_path = str(cv_pdf)
-        cl_doc.pdf_path = str(cl_pdf)
-        session.add(cv_doc)
-        session.add(cl_doc)
-
-        # Use repo.checkpoint to transition state atomically — includes commit
+        # Transition to approved atomically
         await repo.checkpoint(session, job, JobState.approved, new_stage=None)
 
     await bus.publish(
         event_to_dict(
             ApprovedEvent(
                 job_id=job_id,
-                cv_pdf_path=str(cv_pdf),
-                cl_pdf_path=str(cl_pdf),
+                cv_pdf_path=cv_pdf_path,
+                cl_pdf_path=cl_pdf_path,
             )
         )
     )
 
-    return {"cv_pdf_path": str(cv_pdf), "cl_pdf_path": str(cl_pdf)}
+    return {"cv_pdf_path": cv_pdf_path, "cl_pdf_path": cl_pdf_path}
 
 
 @router.post("/api/jobs/{job_id}/revise")
@@ -576,10 +542,10 @@ async def export_job(request: Request, job_id: str, body: ExportBody):
         job = await repo.get_job(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        if job.state != JobState.approved:
+        if job.state not in (JobState.review, JobState.approved):
             raise HTTPException(
                 status_code=409,
-                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'approved'",
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'review' or 'approved'",
             )
 
         cv_docs = await repo.get_documents(session, job_id, stage=Stage.cv_adjust)

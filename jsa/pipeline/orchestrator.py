@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,12 +96,14 @@ class Orchestrator:
         backend_factory: Callable,
         backends: list[str] | None = None,
         max_parallel: int = 5,
+        output_dir: Path | None = None,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
         self.wakeup = asyncio.Event()
         self._db_session_factory = db_session_factory
         self._backend_factory = _wrap_factory(backend_factory)
         self._backends = backends if backends is not None else ["claude-cli"]
+        self._output_dir = output_dir
         self._stopping = False
         self._tasks: set[asyncio.Task] = set()
 
@@ -233,7 +236,7 @@ class Orchestrator:
 
                 active_backend_name = job.backend_name
                 backend = self._backend_factory(active_backend_name)
-                await stages.run_stage(job, backend, stage, session)
+                await stages.run_stage(job, backend, stage, session, output_dir=self._output_dir)
 
         except PausedForInput:
             # Job successfully parked — not an error
