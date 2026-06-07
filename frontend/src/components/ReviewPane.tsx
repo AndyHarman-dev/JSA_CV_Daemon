@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { JobState } from "../types";
@@ -33,6 +33,20 @@ export function ReviewPane({ jobId }: Props) {
   const [pathsLoading, setPathsLoading] = useState(true);
   const [approving, setApproving] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const downloadRef = useRef<HTMLDivElement>(null);
+
+  // Close the download menu when clicking outside of it.
+  useEffect(() => {
+    if (!showDownloadMenu) return;
+    function onMouseDown(e: MouseEvent) {
+      if (downloadRef.current && !downloadRef.current.contains(e.target as Node)) {
+        setShowDownloadMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [showDownloadMenu]);
 
   // Fetch document paths whenever jobId or state changes.
   // By the time state === "review", the pipeline has already rendered both formats.
@@ -82,6 +96,18 @@ export function ReviewPane({ jobId }: Props) {
     } finally {
       setApproving(false);
     }
+  }
+
+  /** Programmatically download a rendered file, then close the menu. */
+  function downloadFormat(url: string | null) {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setShowDownloadMenu(false);
   }
 
   const activePaths = activeTab === "cv" ? cvPaths : clPaths;
@@ -134,26 +160,50 @@ export function ReviewPane({ jobId }: Props) {
         </div>
       )}
 
-      {/* Download links — shown for both review and approved states */}
+      {/* Download button + format popup — shown for both review and approved states */}
       {!pathsLoading && (activePaths.pdfUrl || activePaths.docxUrl) && (
-        <div className="flex flex-wrap gap-2">
-          {activePaths.pdfUrl && (
-            <a
-              href={activePaths.pdfUrl}
-              download
-              className="inline-flex items-center gap-1.5 rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              ↓ PDF
-            </a>
-          )}
-          {activePaths.docxUrl && (
-            <a
-              href={activePaths.docxUrl}
-              download
-              className="inline-flex items-center gap-1.5 rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              ↓ DOCX
-            </a>
+        <div className="relative self-start" ref={downloadRef}>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+            onClick={() => setShowDownloadMenu((open) => !open)}
+          >
+            ↓ Download
+          </button>
+          {showDownloadMenu && (
+            <div className="absolute left-0 top-full z-10 mt-1 w-44 rounded border border-gray-200 bg-white p-1 shadow-lg">
+              <div className="flex items-center justify-between px-2 py-1">
+                <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                  Choose format
+                </span>
+                <button
+                  type="button"
+                  className="rounded px-1 text-gray-400 hover:text-gray-700"
+                  aria-label="Close"
+                  onClick={() => setShowDownloadMenu(false)}
+                >
+                  ✕
+                </button>
+              </div>
+              {activePaths.pdfUrl && (
+                <button
+                  type="button"
+                  className="block w-full rounded px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  onClick={() => downloadFormat(activePaths.pdfUrl)}
+                >
+                  PDF
+                </button>
+              )}
+              {activePaths.docxUrl && (
+                <button
+                  type="button"
+                  className="block w-full rounded px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  onClick={() => downloadFormat(activePaths.docxUrl)}
+                >
+                  DOCX
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

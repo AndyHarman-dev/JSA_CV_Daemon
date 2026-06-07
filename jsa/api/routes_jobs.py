@@ -635,4 +635,6 @@ async def serve_output_file(request: Request, relpath: str):
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {relpath!r}")
 
-    return FileResponse(str(full_path))
+    # Serve inline so the frontend's preview <iframe> renders PDFs in place.
+    # Forced downloads are handled client-side via the anchor `download` attribute.
+    return FileResponse(str(full_path), content_disposition_type="inline")
