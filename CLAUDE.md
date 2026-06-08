@@ -73,7 +73,7 @@ New backends are registered in `jsa/agents/registry.py` by adding an entry to th
 
 ## Renderer invocation
 
-`WeasyPrintRenderer` (and any other `Renderer` implementation) is called **only when the user approves a job** via `POST /api/jobs/{id}/approve`. Never call the renderer speculatively or for preview — the frontend renders Markdown in-browser for previews.
+Renderers (`WeasyPrintRenderer` for PDF, `DocxRenderer` for DOCX) are invoked by `_render_for_review` (`jsa/pipeline/stages.py`) when a job **enters `review`** — on cover-letter completion and on every revision completion — rendering both CV and cover letter to **both PDF and DOCX**. The frontend preview is a PDF `<iframe>` fed by `GET /api/files/{relpath}` (served `Content-Disposition: inline`), not in-browser Markdown. `POST /api/jobs/{id}/approve` does **no** rendering — it only transitions `review → approved`. An approved job may be re-rendered on demand via `POST /api/jobs/{id}/export`. Do not move rendering back onto `approve`, and do not treat the review-entry pre-render as a bug. See ARCH.md → "Renderer runs on review entry (pre-render)".
 
 ---
 

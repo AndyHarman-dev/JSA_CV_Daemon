@@ -143,7 +143,7 @@ Pure(-ish) functions: each takes a `Job` + a constructed `AgentBackend` and runs
 Allowed transitions table + `transition(job, new_state)` guard. Invalid transitions raise; the orchestrator catches and marks `failed`.
 
 ### `jsa.render.base`
-`Renderer` ABC. Default impl is `WeasyPrintRenderer`. Renderer is invoked **only on approval** — never speculatively.
+`Renderer` ABC. Default impl is `WeasyPrintRenderer` (PDF); a `DocxRenderer` (key `"docx"`) renders the same Markdown to DOCX. Renderers are invoked when a job **enters `review`** — both formats are pre-rendered for both documents (see "Renderer runs on review entry") — and again on `POST /api/jobs/{id}/export` for an approved job. `approve` itself does **no** rendering.
 
 ### `jsa.events.bus`
 Tiny in-process pub/sub. WS endpoints register a per-connection `asyncio.Queue`; the bus broadcasts every event to all queues. No persistence on the bus — events are derived from DB state, so a reconnecting client refetches `/api/jobs` and is up to date.
@@ -166,8 +166,8 @@ pending
   → agent returns FINAL → markdown stored in Document(stage=cv), state=cv_done
   → [next worker slot, state=running, stage=cover_letter]
   → CL agent session, returns FINAL → Document(stage=cl), state=cl_done
-  → state=review (auto)
-  → user clicks Approve → renderer produces 2 PDFs → state=approved
+  → state=review (auto) → renderer pre-renders CV+CL as PDF *and* DOCX for in-app preview
+  → user clicks Approve → state=approved (no rendering — already done on review entry)
 ```
 
 ### Follow-up path (park & resume)
@@ -246,8 +246,12 @@ or
 ### Crash-recovery rule
 On server startup: every job with `state == running` is reverted to the last completed stage (`pending` → still pending; if it had a `cv` Document, → `cv_done`; if it had both, → `cl_done`). Jobs in `awaiting_input` stay put — their question is already in the DB. Jobs in `review` / `approved` / `failed` are untouched.
 
-### Renderer is post-approval only
-The renderer runs only when the user clicks Approve. Mid-pipeline previews are rendered Markdown in the browser (no PDF generation overhead). This keeps weasyprint's heavy dependencies off the hot path and prevents wasted work on documents that get revised.
+### Renderer runs on review entry (pre-render), not on approval
+**Superseded (BF-22).** The original design rendered only on Approve and previewed Markdown in-browser; that is no longer the case.
+
+When a job enters `review` — both on first completion of the cover-letter stage and on completion of **every** revision — `_render_for_review` (`pipeline/stages.py`) renders the latest CV and cover-letter Markdown to **both PDF and DOCX** and persists the four paths on the `Document` rows. The browser preview is a **PDF `<iframe>`** whose source is `GET /api/files/{relpath}` served with `Content-Disposition: inline`; there is no in-browser Markdown rendering of the final documents. `approve` performs **no** rendering — it only transitions `review → approved` and returns the already-rendered PDF paths. An approved job can be re-rendered on demand via `POST /api/jobs/{id}/export`.
+
+Trade-off: pre-rendering gives a true-to-output PDF preview at review time, at the cost of re-rendering all four files on each revision (the original "avoid wasted work on revised docs" rationale no longer holds). weasyprint's heavy dependencies are still off the per-turn agent hot path — rendering happens once per review entry, not per pipeline message.
 
 ### Single-process, single-user
 No auth, no multi-user, no remote deployment. Localhost only. The frontend bundle is served statically from FastAPI. CORS is wide-open for `http://localhost:*`.
@@ -256,7 +260,7 @@ No auth, no multi-user, no remote deployment. Localhost only. The frontend bundl
 - **Concurrency cap:** exactly 5 simultaneous agent sessions. Hard cap on tokens / network is the user's responsibility (API key quota).
 - **Not multi-user.** No accounts, sessions, RBAC.
 - **No prompt editing in-app.** Prompts are files on disk; the user edits them in any editor.
-- **No live PDF preview.** PDFs are produced on approval, not continuously.
+- **No continuous PDF preview.** PDFs and DOCX are rendered once when a job enters `review`, re-rendered on each revision and on explicit `/export` — not continuously as the user edits/reviews.
 - **No queue beyond runnable + awaiting_input.** No priorities, no scheduling windows, no retries with backoff (failure → `failed`; user must manually reset).
 - **No tier-C "skip altogether" yet.** Configurable later; v1 always runs both stages for all tiers.
 - **Platform:** macOS + Linux. Windows untested; weasyprint on Windows is painful.
@@ -339,7 +343,8 @@ class Document(Base):
     stage: Mapped[Stage] = mapped_column(SAEnum(Stage))
     version: Mapped[int] = mapped_column(Integer)
     markdown: Mapped[str] = mapped_column(Text)
-    pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on approval
+    pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)   # set on review entry (pre-render)
+    docx_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on review entry (pre-render)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     job: Mapped[Job] = relationship(back_populates="documents")
 
@@ -389,10 +394,12 @@ Indices and invariants:
 | GET    | `/api/jobs`                     | `?state=`                                   | `Job[]` (summary)                      |
 | GET    | `/api/jobs/{id}`                | —                                           | `Job` (full, with documents + messages)|
 | POST   | `/api/jobs/{id}/answer`         | `{follow_up_id, text}`                      | `Job` (now in runnable queue)          |
-| POST   | `/api/jobs/{id}/approve`        | —                                           | `{cv_pdf_path, cl_pdf_path}`           |
+| POST   | `/api/jobs/{id}/approve`        | —                                           | `{cv_pdf_path, cl_pdf_path}` (no render; paths from review pre-render)|
+| POST   | `/api/jobs/{id}/export`         | `{format: "pdf"|"docx"}`                    | `{cv_path, cl_path}` (re-renders; `approved` only, 409 otherwise)|
 | POST   | `/api/jobs/{id}/revise`         | `{target: "cv"|"cl", text}`                 | `Job` (state still `review`)           |
 | POST   | `/api/jobs/{id}/reset`          | —                                           | `Job` (state=`pending`)                |
 | GET    | `/api/jobs/{id}/document/{stage}`| `?version=`                                | `{markdown, version}`                  |
+| GET    | `/api/files/{relpath}`          | —                                           | file bytes, `Content-Disposition: inline` (output-dir-scoped; used by the preview iframe)|
 
 ### WebSocket
 Single endpoint `GET /ws`. Server pushes events; clients send only ping. Envelope:
@@ -558,9 +565,9 @@ Component tree:
   │   │   ├── <StatusBadge />
   │   │   ├── <StageTimeline />         pending → cv → cl → review → approved
   │   │   ├── <ReviewPane />            visible when state ∈ {review, approved}
-  │   │   │   ├── <MarkdownPreview kind="cv" />
-  │   │   │   ├── <MarkdownPreview kind="cl" />
-  │   │   │   ├── <ApproveButton />
+  │   │   │   ├── CV / Cover Letter tabs → PDF <iframe> preview (src = /api/files/...)
+  │   │   │   ├── Download button → format popup (PDF | DOCX) for the active tab's doc
+  │   │   │   ├── <ApproveButton />     (review only)
   │   │   │   └── <ChatBox kind="revise" />
   │   │   ├── <FollowUpPane />          visible when state == awaiting_input
   │   │   │   └── <ChatBox kind="answer" />
@@ -1016,6 +1023,7 @@ No prompt variant, no in-prompt conditional. `stages.py` always injects a brief 
 - The `FakeAgentBackend` does **not** gain `run_research` (it is not on the ABC); the `isinstance` check routes all fakes to the placeholder, which is the intended fallback path under test.
 
 ## Change log
+2026-06-07 — BF-22 Pre-render on review entry + PDF preview pane (reverses "renderer post-approval only"). `_render_for_review` (`pipeline/stages.py`) now renders the latest CV and cover-letter Markdown to **both PDF and DOCX** when a job enters `review` — fired on cover-letter completion (stage → review) and on every revision completion (`revising_* → review`) — and persists `pdf_path`/`docx_path` on both `Document` rows. `approve` no longer renders; it only transitions `review → approved` and returns the already-rendered paths. New `DocxRenderer` (registry key `"docx"`). New `POST /api/jobs/{id}/export {format}` re-renders an approved job on demand (`409` unless `approved`; state stays terminal). New `GET /api/files/{relpath}` serves output-dir-scoped files; served with `Content-Disposition: inline` so the frontend preview `<iframe>` renders PDFs in place (forced downloads are client-side via the anchor `download` attribute). `ReviewPane` replaced its in-browser Markdown previews with CV/CL-tabbed PDF `<iframe>` previews plus a Download button → format-picker popup (PDF | DOCX) for the active tab, present in both `review` and `approved`. Doc-only correction; reflects code already shipped in commits 80a9fd7 (BF-22) and the inline-serving/download-popup follow-up.
 2026-05-31 — Research Subagent Architecture (Option A). Externalized inline web search/fetch into two one-shot `.claude/agents/` subagents (`cv-research.md` → `[INTEL_BRIEF]`, `cl-research.md` → `[COMPANY_BRIEF]`) with `tools: WebSearch, WebFetch` frontmatter so no permission dialog fires; they emit plain text with NO sentinels (deliberate exception to the sentinel mandate). New `ClaudeCliBackend.run_research(agent_name, query) -> str` (raw, unparsed) builds `claude --agent <name> --output-format text -p <query>`; `_run` gains opt-in `cwd` (and `timeout`) params, passed only from `run_research` with `_PROJECT_ROOT` (computed at import) and a longer `RESEARCH_TIMEOUT=300s` — main-stage calls keep `cwd=None` (zero regression). `run_research` is intentionally OFF the `AgentBackend` ABC (claude-cli-specific). `stages.py`: new `_gather_research` fires only on the fresh-session branch of `cv_adjust`/`cover_letter` (never on resume or `revising_*`), `isinstance`-gates on `ClaudeCliBackend`, falls back to a `NONE` placeholder for other backends and on any research error (best-effort, never fails the job); `_build_initial_user_msg(job, brief)` injects the brief first so it persists in the user Message and replays for free on resume — research runs at most once per stage, no new state/stage/transition. Prompt-edit spec: PROMPT_CDADJUST Phase 1 and CVL Step 1 stop browsing and instead consume the `[INTEL_BRIEF]`/`[COMPANY_BRIEF]` block (single path; if `NONE`, ask the user). Limitation: automated web research is claude-cli-only in v1.
 2026-05-29 — BF-15 Smart Retry. Two-tier reset: soft (rewind failed stage, `retry_count 0→1`) vs nuclear (full wipe, restart from `pending`, `retry_count→0`). Added `Job.retry_count` (+`ALTER TABLE` migration in `init_db`). `mark_failed` now preserves `current_stage` on the failed job (deliberate direct-attribute exception to the no-direct-set rule) so soft reset can discriminate which stage failed; the `failed` state now carries the "stage that failed" via the nullable `current_stage`. Added `failed → cv_done` to the allowed-transitions table (used only by soft reset when the cover-letter stage failed; does not make failed jobs runnable). New repo helpers `soft_reset_job` / `nuclear_reset_job`; `upsert_job` reuses `nuclear_reset_job` (CSV re-import of failed jobs is always nuclear). `reset_job` route branches on `retry_count` for `failed` (dismissed path unchanged) and now publishes a `StatusChangedEvent`. `_handle_final` resets `retry_count` to 0 on every successful FINAL (including revisions). `retry_count` exposed in all job API responses. Frontend: in-UI nuclear confirmation modal in `JobDetail.tsx` (first retry no dialog; second+ retry confirms first).
 2026-05-23 — Initial architecture document. Establishes Python + FastAPI backend, React + Vite frontend, SQLite persistence, sentinel-based follow-up protocol, park-as-task-exit concurrency, post-approval-only PDF rendering.
