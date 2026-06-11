@@ -91,6 +91,7 @@ def main(
     port: Optional[int] = typer.Option(None, "--port", help="Port for the local web server"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser on start", is_flag=True),
     dev_tunnel: bool = typer.Option(False, "--dev-tunnel", help="Start a cloudflared quick tunnel for remote/phone access. WARNING: exposes the unauthenticated API publicly — dev use only."),
+    dev_auto: bool = typer.Option(False, "--dev-auto", help="Dev-only: auto-answer NEED_INPUT gates via DEV_ANSWERS.json pattern matching.", is_flag=True),
 ) -> None:
     """Run JSA: process a CSV of job listings with a CV file."""
     # Validate --csv extension
@@ -137,8 +138,13 @@ def main(
         overrides["port"] = port
     if no_browser:
         overrides["no_browser"] = True
+    if dev_auto:
+        overrides["dev_autoanswer"] = True
 
     settings = Settings(**overrides)
+    # Resolve to absolute path now so file-serving works regardless of where
+    # the user's shell CWD is when they restart (e.g. after cd frontend && npm run build).
+    settings.output_dir = settings.output_dir.resolve()
 
     # Configure application logging so pipeline errors appear in the console.
     # uvicorn's own log_level="info" only covers uvicorn-internal loggers; JSA

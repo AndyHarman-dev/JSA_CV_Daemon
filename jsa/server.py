@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse as _FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from jsa.config import Settings
@@ -66,10 +67,18 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
         app.state.orchestrator = orchestrator
         asyncio.create_task(orchestrator.run())
 
+        if settings.dev_autoanswer:
+            from jsa.dev.autoresponder import DevAutoResponder  # noqa: PLC0415
+            responder = DevAutoResponder(session_factory, orchestrator, settings.dev_answers_path)
+            app.state.dev_autoresponder = responder
+            asyncio.create_task(responder.run())
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         if hasattr(app.state, "orchestrator"):
             app.state.orchestrator._stopping = True
+        if hasattr(app.state, "dev_autoresponder"):
+            app.state.dev_autoresponder._stopping = True
         if hasattr(app.state, "engine"):
             await app.state.engine.dispose()
 
@@ -77,9 +86,20 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(ws_router)
 
-    # Serve built frontend bundle if present
+    # Serve built frontend bundle if present.
+    # index.html gets a custom no-cache route so browsers always fetch fresh HTML
+    # after a rebuild; hashed JS/CSS assets still benefit from long-lived caching.
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists() and (static_dir / "index.html").exists():
+        _index_path = str(static_dir / "index.html")
+
+        @app.get("/")
+        async def _serve_index() -> _FileResponse:
+            return _FileResponse(
+                _index_path,
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
+
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
     return app

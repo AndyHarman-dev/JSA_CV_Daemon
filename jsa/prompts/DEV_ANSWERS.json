@@ -1,0 +1,12 @@
+{
+  "default": "Yes, that looks accurate. Please proceed.",
+  "rules": [
+    { "match": "does the strategy look accurate",      "answer": "Yes, the strategy looks accurate. Proceed." },
+    { "match": "motivation",                           "answer": "My motivation is the team's mission and the chance to ship impactful work." },
+    { "match": "confirm the key skills",               "answer": "Yes, those key skills are accurate. Proceed." },
+    { "match": "is there anything you would like to add", "answer": "No, nothing to add. Please proceed." },
+    { "match": "would you like to adjust",             "answer": "No adjustments needed. Please proceed." },
+    { "match": "does this look correct",               "answer": "Yes, that looks correct. Proceed." },
+    { "match": "anything unusual",                     "answer": "No, nothing unusual. Please proceed." }
+  ]
+}

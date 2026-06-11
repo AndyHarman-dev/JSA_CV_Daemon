@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     model: str = "claude-haiku-4-5"       # Anthropic model ID, overridable via JSA_MODEL
     anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT
     agent_timeout: float = 300.0         # Timeout for CLI backends (claude-cli, gemini-cli), via JSA_AGENT_TIMEOUT
+    dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
+    dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
 
     @field_validator("backends", mode="before")
     @classmethod
