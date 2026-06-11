@@ -61,6 +61,8 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
                     model=settings.model,
                     timeout=settings.anthropic_timeout,
                 )
+            if name == "claude-cli":
+                return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
             return backend_for(name, timeout=settings.agent_timeout)
 
         orchestrator = Orchestrator(session_factory, _backend_factory, settings.backends, output_dir=settings.output_dir)

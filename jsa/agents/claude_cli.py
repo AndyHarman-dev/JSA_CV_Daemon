@@ -51,7 +51,8 @@ class ClaudeCliBackend(AgentBackend):
     name = "claude-cli"
     RESEARCH_TIMEOUT = 300.0  # web search + multiple fetches can exceed the 120s message-turn default
 
-    def __init__(self, timeout: float = 120.0) -> None:
+    def __init__(self, model: str = "claude-haiku-4-5", timeout: float = 120.0) -> None:
+        self._model = model
         self._timeout = timeout
 
     # ------------------------------------------------------------------
@@ -171,6 +172,7 @@ class ClaudeCliBackend(AgentBackend):
         cmd = [
             "claude",
             "--output-format", "text",
+            "--model", self._model,
             "--system-prompt", system_prompt,
             "--session-id", session_id,
             "-p", initial_user_msg,

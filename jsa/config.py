@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     db_path: Path = Path.home() / ".jsa" / "jsa.sqlite"
     port: int = 8765
     no_browser: bool = False
-    model: str = "claude-haiku-4-5"       # Anthropic model ID, overridable via JSA_MODEL
+    model: str = "claude-haiku-4-5"       # Claude model ID for claude-cli and anthropic backends; overridable via JSA_MODEL
     anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT
     agent_timeout: float = 300.0         # Timeout for CLI backends (claude-cli, gemini-cli), via JSA_AGENT_TIMEOUT
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
