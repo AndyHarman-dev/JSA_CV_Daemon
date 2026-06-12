@@ -14,6 +14,8 @@ class JobState(str, enum.Enum):
     pending = "pending"
     running = "running"
     awaiting_input = "awaiting_input"
+    fit_done = "fit_done"        # fit assessment passed; ready for cv_adjust
+    unfit = "unfit"              # fit assessment flagged a mismatch; parked for user decision
     cv_done = "cv_done"
     cl_done = "cl_done"
     review = "review"
@@ -23,6 +25,7 @@ class JobState(str, enum.Enum):
 
 
 class Stage(str, enum.Enum):
+    fit_assessment = "fit_assessment"
     cv_adjust = "cv_adjust"
     cover_letter = "cover_letter"
     revising_cv = "revising_cv"
@@ -48,6 +51,7 @@ class Job(Base):
     cv_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cv_adjust stage
     cl_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cover_letter stage
     backend_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # active backend for this job (BF-19)
+    fit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # agent's reason when state==unfit
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

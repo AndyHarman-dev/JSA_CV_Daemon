@@ -64,6 +64,20 @@ describe("JobList", () => {
     expect(screen.getByText("Corp — Lead")).toBeInTheDocument();
   });
 
+  it("shows an unfit job under the Needs Review section", () => {
+    const job = makeJob({ id: "j1", state: "unfit", company: "Bad Robot", role: "Principal" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    // "Needs Review" appears as both the group header (h2) and the StatusBadge.
+    const header = screen
+      .getAllByText("Needs Review")
+      .find((el) => el.tagName === "H2");
+    expect(header).toBeDefined();
+    expect(screen.getByText("Bad Robot — Principal")).toBeInTheDocument();
+  });
+
   it("shows an awaiting_input job under the Inbox section", () => {
     const job = makeJob({
       id: "j1",

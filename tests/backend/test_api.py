@@ -328,6 +328,40 @@ class TestResetJob:
         assert resp.status_code == 400
 
 
+class TestIgnoreFit:
+    async def _seed_unfit(self, db, reason="Unrelated field."):
+        await _insert_job(db, state=JobState.unfit)
+        async with db() as session:
+            job = await repo.get_job(session, "aabbccdd00112233")
+            job.fit_reason = reason
+            await session.commit()
+
+    async def test_fit_reason_in_serializer(self, client, db):
+        await self._seed_unfit(db, reason="CV is for a nurse; role is backend.")
+        resp = await client.get("/api/jobs/aabbccdd00112233")
+        assert resp.status_code == 200
+        assert resp.json()["fit_reason"] == "CV is for a nurse; role is backend."
+
+    async def test_ignore_fit_transitions_to_fit_done(self, client, db):
+        await self._seed_unfit(db)
+        resp = await client.post("/api/jobs/aabbccdd00112233/ignore-fit")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["state"] == "fit_done"
+        assert data["fit_reason"] is None
+
+    async def test_ignore_fit_non_unfit_returns_400(self, client, db):
+        await _insert_job(db)  # state=pending
+        resp = await client.post("/api/jobs/aabbccdd00112233/ignore-fit")
+        assert resp.status_code == 400
+
+    async def test_dismiss_from_unfit(self, client, db):
+        await self._seed_unfit(db)
+        resp = await client.post("/api/jobs/aabbccdd00112233/dismiss")
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "dismissed"
+
+
 class TestGetDocument:
     async def test_get_document_not_found(self, client, db):
         """A job with no documents should return 404 for the document endpoint."""

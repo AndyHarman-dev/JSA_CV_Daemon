@@ -78,9 +78,10 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
 
     Runnable conditions:
     1. state == pending
-    2. state == cv_done
-    3. state == awaiting_input AND has a FollowUp with answered_at IS NOT NULL for current_stage
-    4. state == review AND has an unconsumed RevisionRequest (consumed_at IS NULL)
+    2. state == fit_done (fit check passed/ignored → run cv_adjust)
+    3. state == cv_done
+    4. state == awaiting_input AND has a FollowUp with answered_at IS NOT NULL for current_stage
+    5. state == review AND has an unconsumed RevisionRequest (consumed_at IS NULL)
     """
     # Condition 3: awaiting_input with an answered follow-up for the current stage
     answered_followup = (
@@ -122,6 +123,7 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
         .where(
             or_(
                 Job.state == JobState.pending,
+                Job.state == JobState.fit_done,
                 Job.state == JobState.cv_done,
                 (Job.state == JobState.awaiting_input) & answered_followup & no_open_followup,
                 (Job.state == JobState.review) & unconsumed_revision,

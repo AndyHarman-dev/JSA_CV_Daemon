@@ -7,6 +7,16 @@
     { "match": "is there anything you would like to add", "answer": "No, nothing to add. Please proceed." },
     { "match": "would you like to adjust",             "answer": "No adjustments needed. Please proceed." },
     { "match": "does this look correct",               "answer": "Yes, that looks correct. Proceed." },
-    { "match": "anything unusual",                     "answer": "No, nothing unusual. Please proceed." }
+    { "match": "anything unusual",                     "answer": "No, nothing unusual. Please proceed." },
+    { "match": "what specifically about the role or studio appeals to you",   "answer": "My motivation is the team's mission and the chance to ship impactful work." },
+    { "match": "appeals to you",   "answer": "My motivation is the team's mission and the chance to ship impactful work." },
+    { "match": "draws you",   "answer": "My motivation is the team's mission and the chance to ship impactful work." },
+    { "match": "writing style preference",   "answer": "Keep it formal, proceed." },
+    { "match": "style preference",   "answer": "Keep it formal, proceed." },
+    { "match": "your voice",   "answer": "Keep it formal, proceed." },
+    { "match": "your tone",   "answer": "Keep it formal, proceed." },
+    { "match": "your writing style",   "answer": "Keep it formal, proceed." },
+    { "match": "your preferred writing style",   "answer": "Keep it formal, proceed." },
+    { "match": "writing",   "answer": "Keep it formal, proceed." }
   ]
 }

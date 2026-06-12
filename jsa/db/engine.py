@@ -45,6 +45,11 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN backend_name TEXT"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # fit_reason: agent's reason when the fit-assessment stage parks a job as unfit.
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN fit_reason TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

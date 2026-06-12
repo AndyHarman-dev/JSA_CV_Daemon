@@ -5,6 +5,7 @@ import { StatusBadge } from "./StatusBadge";
 import { StageTimeline } from "./StageTimeline";
 import { FollowUpPane } from "./FollowUpPane";
 import { ReviewPane } from "./ReviewPane";
+import { UnfitModal } from "./UnfitModal";
 
 const TIER_CLASSES: Record<string, string> = {
   A: "bg-green-100 text-green-700",
@@ -284,6 +285,7 @@ export function JobDetail() {
         <ReviewPane jobId={job.id} />
       )}
 
+      {job.state === "unfit" && <UnfitModal job={job} />}
     </div>
   );
 }

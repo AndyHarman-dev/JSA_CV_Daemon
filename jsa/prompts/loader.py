@@ -8,15 +8,16 @@ _PROMPTS_DIR = Path(__file__).parent
 _NAME_TO_FILE: dict[str, str] = {
     "cv_adjust": "PROMPT_CDADJUST.md",
     "cover_letter": "CVL_PROMPT.md",
+    "fit_assessment": "PROMPT_FIT_ASSESSMENT.md",
 }
 
 
-def read_prompt(name: Literal["cv_adjust", "cover_letter"]) -> str:
+def read_prompt(name: Literal["cv_adjust", "cover_letter", "fit_assessment"]) -> str:
     """Read a prompt file from disk and return its contents as a string.
 
     No caching — always reads from disk so user edits are picked up immediately.
 
-    Raises KeyError if name is not one of 'cv_adjust' or 'cover_letter'.
+    Raises KeyError if name is not a registered prompt name.
     """
     filename = _NAME_TO_FILE[name]  # raises KeyError on invalid name
     return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")

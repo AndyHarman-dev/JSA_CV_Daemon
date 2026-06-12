@@ -116,6 +116,19 @@ def _final_reply(content: str = "# Adjusted CV\n\nThis is the adjusted CV.") -> 
     )
 
 
+_CL_CONTENT = (
+    "Dear Hiring Manager,\n\n"
+    "I am writing to express my strong interest in the role. Over the past several years "
+    "I have built deep expertise directly relevant to this position, and I am confident "
+    "my background aligns well with what your team is looking for.\n\n"
+    "Sincerely,\nCandidate Name"
+)
+
+
+def _cl_final_reply() -> AgentReply:
+    return _final_reply(_CL_CONTENT)
+
+
 def _needs_input_reply(question: str = "What is your target role?") -> AgentReply:
     return AgentReply(
         raw=f"<<<NEED_INPUT>>>\n{question}\n<<<END>>>",
@@ -326,7 +339,7 @@ class TestRunStageFreshCvAdjustContainsIntelBrief:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply("# My Cover Letter")])
+        backend = FakeAgentBackend([_cl_final_reply()])
         await run_stage(job, backend, Stage.cover_letter, session)
 
         result = await session.execute(

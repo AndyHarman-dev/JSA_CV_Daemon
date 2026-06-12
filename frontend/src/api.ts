@@ -54,6 +54,12 @@ export const api = {
     });
   },
 
+  ignoreFit(id: string): Promise<FullJobDTO> {
+    return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}/ignore-fit`, {
+      method: "POST",
+    });
+  },
+
   cancel(id: string): Promise<FullJobDTO> {
     return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
       method: "POST",

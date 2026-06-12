@@ -26,6 +26,12 @@ function getActiveStepIndex(state: JobState, currentStage: Stage | null): number
       if (currentStage === "cv_adjust" || currentStage === "revising_cv") return 1;
       if (currentStage === "cover_letter" || currentStage === "revising_cl") return 3;
       return 1;
+    case "fit_done":
+      // Fit check passed; cv_adjust is up next but hasn't produced anything yet.
+      return 0;
+    case "unfit":
+      // Parked on the not-a-fit modal; nothing produced yet.
+      return 0;
     case "cv_done":
       return 2;
     case "cl_done":

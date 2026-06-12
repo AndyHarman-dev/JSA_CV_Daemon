@@ -12,6 +12,7 @@ from typing import Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.agents.base import AgentBackend, AgentLimitReached
+from jsa.agents.gemini_cli import GeminiSessionExpiredError
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
 from jsa.events.bus import bus
@@ -33,12 +34,15 @@ def _next_stage_for(job: Job) -> Stage:
     """Determine which stage to run for the given job.
 
     State / current_stage mapping:
-    - pending                     → cv_adjust (fresh)
+    - pending                     → fit_assessment (fresh)
+    - fit_done                    → cv_adjust (fresh; fit check passed or was ignored)
     - cv_done                     → cover_letter (fresh)
     - awaiting_input              → job.current_stage (resume)
     - review + unconsumed rev req → job.current_stage (revising_cv / revising_cl)
     """
     if job.state == JobState.pending:
+        return Stage.fit_assessment
+    if job.state == JobState.fit_done:
         return Stage.cv_adjust
     if job.state == JobState.cv_done:
         return Stage.cover_letter
@@ -127,7 +131,7 @@ class Orchestrator:
             self.wakeup.clear()
 
             async with self._db_session_factory() as session:
-                runnable = await repo.list_runnable_jobs(session)
+                runnable: list[Job] = await repo.list_runnable_jobs(session)
 
             for job in runnable:
                 # Acquire sem BEFORE committing the transition so the in-flight
@@ -246,6 +250,10 @@ class Orchestrator:
             logger.warning("_run_one: job %s hit backend limit: %s", job_id, exc)
             await self._handle_limit_reached(job_id, exc)
 
+        except GeminiSessionExpiredError as exc:
+            logger.warning("_run_one: job %s gemini session expired, attempting auto-recovery", job_id)
+            await self._handle_session_expired(job_id, exc)
+
         except Exception as exc:
             logger.exception("_run_one: job %s failed: %s", job_id, exc)
             try:
@@ -338,6 +346,43 @@ class Orchestrator:
         except Exception as inner_exc:
             logger.error(
                 "_handle_limit_reached: failed to handle limit for job %s: %s",
+                job_id,
+                inner_exc,
+            )
+
+    async def _handle_session_expired(self, job_id: str, exc: Exception) -> None:
+        """Auto-soft-reset once on Gemini session expiry; fail permanently on second try.
+
+        soft_reset_job sets retry_count=1. If session expires again on the retry,
+        retry_count>0 so we leave the job failed rather than looping.
+        """
+        try:
+            async with self._db_session_factory() as session:
+                await repo.mark_failed(session, job_id, str(exc))
+            async with self._db_session_factory() as session:
+                job = await repo.get_job(session, job_id)
+                if job is None:
+                    return
+                if job.retry_count == 0:
+                    logger.info(
+                        "_handle_session_expired: auto-soft-resetting job %s after session expiry",
+                        job_id,
+                    )
+                    await repo.soft_reset_job(session, job)
+                    await bus.publish(
+                        event_to_dict(
+                            LogEvent(
+                                job_id=job_id,
+                                level="warn",
+                                text="Gemini session expired — auto-retrying from scratch",
+                            )
+                        )
+                    )
+                    self.kick()
+                # retry_count > 0: already auto-recovered once — leave as failed
+        except Exception as inner_exc:
+            logger.error(
+                "_handle_session_expired: failed to handle session expiry for job %s: %s",
                 job_id,
                 inner_exc,
             )

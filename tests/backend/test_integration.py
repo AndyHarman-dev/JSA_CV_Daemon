@@ -111,6 +111,19 @@ def _final_reply(content: str = "# Document\nContent here.") -> AgentReply:
     )
 
 
+_CL_CONTENT = (
+    "Dear Hiring Manager,\n\n"
+    "I am writing to express my strong interest in the role. Over the past several years "
+    "I have built deep expertise directly relevant to this position, and I am confident "
+    "my background aligns well with what your team is looking for.\n\n"
+    "Sincerely,\nCandidate Name"
+)
+
+
+def _cl_final_reply() -> AgentReply:
+    return _final_reply(_CL_CONTENT)
+
+
 def _needs_input_reply(question: str = "What sector?") -> AgentReply:
     return AgentReply(
         raw=f"<<<NEED_INPUT>>>\n{question}\n<<<END>>>",
@@ -118,6 +131,11 @@ def _needs_input_reply(question: str = "What sector?") -> AgentReply:
         kind="needs_input",
         question=question,
     )
+
+
+def _fit_reply() -> AgentReply:
+    """A passing fit-assessment verdict — pending jobs run fit_assessment first."""
+    return AgentReply(raw="<<<FINAL>>>\nFIT\n<<<END>>>", content="FIT", kind="final")
 
 
 async def _poll_job_state(
@@ -316,9 +334,12 @@ class TestParkAndResume:
         """First run: NEED_INPUT reply causes job to land in awaiting_input."""
         job = await _insert_job(session_factory, job_id="ddee001100000001")
 
+        # fit_assessment runs first (FIT); cv_adjust then parks on NEED_INPUT.
+        # Shared instance so replies are consumed across both stages in order.
+        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What sector?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_needs_input_reply("What sector?")]),
+            backend_factory=lambda: backend,
         )
         await _run_orchestrator_until(
             orch, session_factory, [job.id], JobState.awaiting_input
@@ -332,11 +353,11 @@ class TestParkAndResume:
         """A FollowUp row containing the question must exist after parking."""
         job = await _insert_job(session_factory, job_id="ddee001100000002")
 
+        # fit_assessment runs first (FIT); cv_adjust then parks on NEED_INPUT.
+        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What sector?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend(
-                [_needs_input_reply("What sector?")]
-            ),
+            backend_factory=lambda: backend,
         )
         await _run_orchestrator_until(
             orch, session_factory, [job.id], JobState.awaiting_input
@@ -579,7 +600,7 @@ class TestCrashRecovery:
         # Now run the orchestrator — it should pick up cv_done and run cover_letter
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Cover Letter")]),
+            backend_factory=lambda: FakeAgentBackend([_cl_final_reply()]),
         )
         await _run_orchestrator_until(orch, session_factory, [job_id], JobState.review)
 

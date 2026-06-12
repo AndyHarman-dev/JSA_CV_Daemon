@@ -1,9 +1,9 @@
 export type JobState =
-  | "pending" | "running" | "awaiting_input" | "cv_done"
+  | "pending" | "running" | "awaiting_input" | "fit_done" | "unfit" | "cv_done"
   | "cl_done" | "review" | "approved" | "failed" | "dismissed";
 
 export type Stage =
-  | "cv_adjust" | "cover_letter" | "revising_cv" | "revising_cl";
+  | "fit_assessment" | "cv_adjust" | "cover_letter" | "revising_cv" | "revising_cl";
 
 export interface JobDTO {
   id: string;
@@ -14,6 +14,7 @@ export interface JobDTO {
   jd: string;
   state: JobState;
   current_stage: Stage | null;
+  fit_reason: string | null;
   error: string | null;
   retry_count: number;
   updated_at: string;

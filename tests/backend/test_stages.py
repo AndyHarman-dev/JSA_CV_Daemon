@@ -28,7 +28,7 @@ from jsa.db.models import (
     RevisionRequest,
     Stage,
 )
-from jsa.pipeline.stages import PausedForInput, run_stage
+from jsa.pipeline.stages import PausedForInput, _validate_cl_content, run_stage
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
 
@@ -198,7 +198,7 @@ class TestCoverLetterHappyPath:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply("# My Cover Letter")])
+        backend = FakeAgentBackend([_final_reply(_REAL_LETTER)])
         await run_stage(job, backend, Stage.cover_letter, session)
 
         refreshed = await repo.get_job(session, job.id)
@@ -213,7 +213,7 @@ class TestCoverLetterHappyPath:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply("# My Cover Letter")])
+        backend = FakeAgentBackend([_final_reply(_REAL_LETTER)])
         await run_stage(job, backend, Stage.cover_letter, session)
 
         docs = await repo.get_documents(session, job.id, stage=Stage.cover_letter)
@@ -229,7 +229,7 @@ class TestCoverLetterHappyPath:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply("# Cover Letter")])
+        backend = FakeAgentBackend([_final_reply(_REAL_LETTER)])
         await run_stage(job, backend, Stage.cover_letter, session)
 
         result = await session.execute(
@@ -562,3 +562,84 @@ class TestDocumentVersioning:
         assert versions == [1, 2]
         latest = max(docs_v2, key=lambda d: d.version)
         assert "CV v2" in latest.markdown
+
+
+# ---------------------------------------------------------------------------
+# _validate_cl_content unit tests
+# ---------------------------------------------------------------------------
+
+_REAL_LETTER = """\
+Dear Hiring Manager,
+
+I am writing to express my strong interest in the Developer Relations role at Rive. \
+Having spent the last four years building real-time graphics tooling with Unreal Engine's \
+Blueprint and native C++ layers, I am drawn to Rive's mission of making interactive \
+animation accessible to every developer on every platform.
+
+My work on Promise/Future async wrappers and UStructSynchronizer gave me a deep \
+appreciation for the gap between a powerful runtime and the tooling that lets \
+developers trust it. I would bring the same instinct to Rive's SDK and documentation \
+surface, turning edge-case discoveries into clear, reproducible examples.
+
+I would welcome the chance to discuss how my background aligns with what your team \
+is building. Thank you for your time.
+
+Sincerely,
+Andrei Kharlanchev
+"""
+
+
+class TestValidateClContent:
+    def test_real_letter_passes(self):
+        _validate_cl_content(_REAL_LETTER)  # must not raise
+
+    def test_too_short_raises(self):
+        with pytest.raises(ValueError, match="too short"):
+            _validate_cl_content("Short note.")
+
+    def test_summary_header_raises(self):
+        # Long enough (>150 chars) to reach pattern check rather than length check
+        bad = (
+            "Cover letter drafted for Jane Doe — Software Engineer at Acme.\n\n"
+            "Centerpiece: Strong Python background and five years of backend experience. "
+            "Motivation framed around Acme's mission. Tone/length adjustments offered."
+        )
+        with pytest.raises(ValueError, match="meta-commentary"):
+            _validate_cl_content(bad)
+
+    def test_parenthetical_reference_raises(self):
+        bad = (
+            "(Cover letter delivered above in Russian. Awaiting any revision requests — "
+            "tone, length, emphasis, or an English version. Happy to adjust on request. "
+            "Let me know what changes you would like to see before we finalise.)"
+        )
+        with pytest.raises(ValueError, match="meta-commentary"):
+            _validate_cl_content(bad)
+
+    def test_delivered_above_raises(self):
+        bad = (
+            "The cover letter was delivered above. Here is a summary of the changes made "
+            "during this session. The opening paragraph was rewritten to lead with "
+            "motivation, and the achievements section was tightened to three bullet points."
+        )
+        with pytest.raises(ValueError, match="meta-commentary"):
+            _validate_cl_content(bad)
+
+    def test_awaiting_revision_raises(self):
+        bad = (
+            "Draft complete. Awaiting revision requests from the candidate before "
+            "finalising. The current version addresses all points raised in the brief "
+            "and mirrors the semi-formal tone specified in the style-capture step."
+        )
+        with pytest.raises(ValueError, match="meta-commentary"):
+            _validate_cl_content(bad)
+
+    def test_centerpiece_raises(self):
+        bad = (
+            "Centerpiece: Blueprint↔native-C++ tooling (Promise/Future, UStructSynchronizer).\n\n"
+            "Advocacy framed honestly as instinct (open-source repos + doc/lead work), "
+            "no fabricated tutorials/talks. Motivation reframed to point existing expertise "
+            "at the runtime. Offered tone/length adjustments."
+        )
+        with pytest.raises(ValueError, match="meta-commentary"):
+            _validate_cl_content(bad)

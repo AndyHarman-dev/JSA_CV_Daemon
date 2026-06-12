@@ -16,6 +16,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.protocol import ProtocolError
 from jsa.render.registry import renderer_for
 from jsa.db import repo
 from jsa.util import slugify as _slugify
@@ -123,6 +124,39 @@ def _validate_cv_content(content: str) -> None:
         )
 
 
+_BAD_CL_PATTERNS: list[tuple[str, str]] = [
+    (r"(?i)^cover letter\s+(drafted|written|delivered|prepared)\s+for\b", "starts with a summary header"),
+    (r"(?i)^\(cover letter\b", "starts with a parenthetical reference to the letter"),
+    (r"(?i)\bdelivered above\b", "references a previous turn"),
+    (r"(?i)\bawaiting\s+(any\s+)?(revision|change|feedback|request)", "contains an awaiting-revision meta-comment"),
+    (r"(?i)^centerpiece\s*:", "starts with a change-description 'Centerpiece:' marker"),
+]
+
+
+def _validate_cl_content(content: str) -> None:
+    """Validate that a cover_letter FINAL block contains actual letter content, not meta-commentary.
+
+    Parallel to _validate_cv_content for the CV stages. Raises ValueError if the model
+    emitted a summary, change-log, or reference comment instead of the letter text.
+    """
+    MIN_CL_CHARS = 150
+
+    if len(content) < MIN_CL_CHARS:
+        raise ValueError(
+            f"cover_letter produced content that is too short ({len(content)} chars; "
+            f"minimum is {MIN_CL_CHARS}). The agent may have emitted a summary or "
+            "reference comment instead of the cover letter. Retry the job to re-run."
+        )
+
+    for pattern, description in _BAD_CL_PATTERNS:
+        if re.search(pattern, content.strip(), re.MULTILINE):
+            raise ValueError(
+                f"cover_letter produced meta-commentary instead of actual letter content "
+                f"({description}). The agent may have emitted a summary or change-log "
+                "instead of the letter text. Retry the job to re-run."
+            )
+
+
 async def run_stage(
     job: Job,
     backend: AgentBackend,
@@ -145,6 +179,12 @@ async def run_stage(
     await bus.publish(
         event_to_dict(LogEvent(job_id=job.id, level="info", text=f"Starting stage: {stage.value}"))
     )
+
+    if stage == Stage.fit_assessment:
+        # One-shot pre-check: no resume path, no NEED_INPUT, no research. Handled
+        # entirely here (FIT → fit_done, anything else → unfit) and returns early.
+        await _run_fit_assessment(job, backend, session, system_prompt)
+        return
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
@@ -377,6 +417,136 @@ async def _handle_needs_input(
     )
 
 
+# ---------------------------------------------------------------------------
+# Fit assessment (one-shot pre-check before any CV work)
+# ---------------------------------------------------------------------------
+
+# Shown in the modal when the agent's verdict cannot be parsed (fail-to-modal).
+_FIT_FALLBACK_REASON = (
+    "The fit assessment did not return a clear verdict. Review this job manually "
+    "before continuing."
+)
+
+
+def _build_fit_user_msg(job: Job) -> str:
+    """Build the (single) user message for the fit-assessment stage.
+
+    Deliberately minimal — no research brief — so the pre-check stays cheap.
+    """
+    return (
+        f"COMPANY: {job.company}\n"
+        f"ROLE: {job.role}\n\n"
+        f"CV TEXT:\n{job.cv_text}\n\n"
+        f"JOB DESCRIPTION:\n{job.jd}"
+    )
+
+
+def _parse_fit_verdict(reply: AgentReply) -> tuple[bool, str | None]:
+    """Parse a fit-assessment reply into ``(is_fit, reason)``.
+
+    Contract: the FINAL payload's first line carries the verdict ``FIT`` or ``UNFIT``;
+    the rest is the reason. We match the verdict as a substring of the (uppercased)
+    first line so common decoration is tolerated — ``**FIT**``, ``Verdict: FIT``,
+    ``## UNFIT``, ``FIT ✅`` all classify correctly. ``UNFIT`` is checked first because
+    it contains ``FIT``.
+
+    Fail-to-modal — anything that is not a clear ``FIT`` returns ``is_fit=False`` with a
+    best-effort reason for the modal:
+    - ``UNFIT`` → the agent's reason (or a fallback if none given)
+    - a ``needs_input`` reply → the agent's question text
+    - no recognizable verdict → the raw content (so nothing is hidden from the user)
+    """
+    if reply.kind == "needs_input":
+        return False, (reply.question or "").strip() or _FIT_FALLBACK_REASON
+
+    content = (reply.content or "").strip()
+    lines = content.split("\n", 1)
+    first_line_upper = lines[0].upper()
+    rest = lines[1].strip() if len(lines) > 1 else ""
+
+    if "UNFIT" in first_line_upper:
+        # Reason = following lines, else the first line minus everything up to "UNFIT".
+        reason = rest or re.sub(r"(?is).*unfit[\s:.\-—*]*", "", lines[0]).strip()
+        return False, reason or _FIT_FALLBACK_REASON
+
+    if "FIT" in first_line_upper:
+        return True, None
+
+    # No recognizable verdict → fail to modal, surfacing whatever the agent produced.
+    return False, content or _FIT_FALLBACK_REASON
+
+
+async def _run_fit_assessment(
+    job: Job,
+    backend: AgentBackend,
+    session: AsyncSession,
+    system_prompt: str,
+) -> None:
+    """Run the one-shot fit-assessment stage and checkpoint the outcome.
+
+    Always a fresh session expecting a single FINAL with a FIT/UNFIT verdict; there
+    is no resume / awaiting_input path for this stage. FIT → ``fit_done`` (pipeline
+    continues to cv_adjust). Anything else → ``unfit`` (parked), storing the agent's
+    reason in ``job.fit_reason`` for the frontend modal.
+    """
+    initial_user_msg = _build_fit_user_msg(job)
+    job.retry_count = 0
+
+    try:
+        handle, reply = await backend.start_session(system_prompt, initial_user_msg)
+    except ProtocolError:
+        # A malformed / sentinel-less reply is "unparseable" → fail to the modal
+        # (closed), consistent with the verdict contract, rather than failing the job.
+        job.fit_reason = _FIT_FALLBACK_REASON
+        await checkpoint(session, job, JobState.unfit, None)
+        await _publish_fit_outcome(job, is_fit=False)
+        return
+
+    accumulated_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": initial_user_msg},
+        {"role": "assistant", "content": reply.raw},
+    ]
+    job.session_external_id = handle.external_id
+
+    is_fit, reason = _parse_fit_verdict(reply)
+    target_state = JobState.fit_done if is_fit else JobState.unfit
+    job.fit_reason = None if is_fit else reason
+
+    await checkpoint(
+        session,
+        job,
+        target_state,
+        None,
+        messages=accumulated_messages,
+    )
+    await backend.end_session(handle)
+    await _publish_fit_outcome(job, is_fit=is_fit)
+
+
+async def _publish_fit_outcome(job: Job, *, is_fit: bool) -> None:
+    """Publish the log + stage-complete + status-changed events for a fit outcome."""
+    target_state = JobState.fit_done if is_fit else JobState.unfit
+    await bus.publish(
+        event_to_dict(LogEvent(
+            job_id=job.id, level="info",
+            text=f"Stage fit_assessment: {'FIT' if is_fit else 'UNFIT'} → {target_state.value}",
+        ))
+    )
+    await bus.publish(
+        event_to_dict(StageCompleteEvent(job_id=job.id, stage="fit_assessment"))
+    )
+    await bus.publish(
+        event_to_dict(
+            StatusChangedEvent(
+                job_id=job.id,
+                from_state=JobState.running.value,
+                to_state=target_state.value,
+            )
+        )
+    )
+
+
 async def _handle_final(
     *,
     session: AsyncSession,
@@ -398,6 +568,8 @@ async def _handle_final(
     # this raises ValueError → propagates to _run_one → job marked failed.
     if stage in (Stage.cv_adjust, Stage.revising_cv):
         _validate_cv_content(reply.content)
+    if stage in (Stage.cover_letter, Stage.revising_cl):
+        _validate_cl_content(reply.content)
 
     # Determine document stage (revision docs stored under original stage)
     if stage == Stage.revising_cv:
@@ -474,6 +646,8 @@ async def _handle_final(
 
 def _get_system_prompt(stage: Stage) -> str:
     """Return the system prompt for the given stage."""
+    if stage == Stage.fit_assessment:
+        return loader.read_prompt("fit_assessment")
     if stage in (Stage.cv_adjust, Stage.revising_cv):
         return loader.read_prompt("cv_adjust")
     else:  # cover_letter or revising_cl

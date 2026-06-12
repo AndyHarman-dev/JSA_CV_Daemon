@@ -9,7 +9,8 @@ interface Group {
 
 const GROUPS: Group[] = [
   { label: "Inbox", states: ["awaiting_input"] },
-  { label: "Running", states: ["running", "pending", "cv_done", "cl_done"] },
+  { label: "Needs Review", states: ["unfit"] },
+  { label: "Running", states: ["running", "pending", "fit_done", "cv_done", "cl_done"] },
   { label: "Review", states: ["review"] },
   { label: "Done", states: ["approved"] },
   { label: "Failed", states: ["failed"] },

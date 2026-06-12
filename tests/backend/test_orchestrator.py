@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from jsa.agents.base import AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.gemini_cli import GeminiSessionExpiredError
 from jsa.db import repo
 from jsa.db.models import (
     Base,
@@ -103,6 +104,11 @@ def _needs_input_reply(question: str = "What is your target role?") -> AgentRepl
         kind="needs_input",
         question=question,
     )
+
+
+def _fit_reply() -> AgentReply:
+    """A passing fit-assessment verdict — pending jobs run fit_assessment first."""
+    return AgentReply(raw="<<<FINAL>>>\nFIT\n<<<END>>>", content="FIT", kind="final")
 
 
 async def _poll_job_state(
@@ -321,7 +327,8 @@ class TestPausedForInputSilent:
         """When agent returns needs_input, job goes to awaiting_input — not failed."""
         job = await _insert_job(session_factory)
 
-        backend = FakeAgentBackend([_needs_input_reply("What is your role?")])
+        # fit_assessment runs first (FIT), then cv_adjust parks on NEED_INPUT.
+        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What is your role?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend,
@@ -340,7 +347,8 @@ class TestPausedForInputSilent:
         """FollowUp row is inserted when job parks to awaiting_input."""
         job = await _insert_job(session_factory)
 
-        backend = FakeAgentBackend([_needs_input_reply("What is your role?")])
+        # fit_assessment runs first (FIT), then cv_adjust parks on NEED_INPUT.
+        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What is your role?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend,
@@ -462,7 +470,7 @@ class TestAwaitingInputResume:
         """A job in awaiting_input with unanswered FollowUp is NOT dispatched."""
         job = await _insert_job(session_factory)
 
-        backend_park = FakeAgentBackend([_needs_input_reply("What is your availability?")])
+        backend_park = FakeAgentBackend([_fit_reply(), _needs_input_reply("What is your availability?")])
         orch_park = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend_park,
@@ -490,3 +498,75 @@ class TestAwaitingInputResume:
         async with session_factory() as s:
             still_parked = await repo.get_job(s, job.id)
         assert still_parked.state == JobState.awaiting_input
+
+
+# ---------------------------------------------------------------------------
+# Test: Gemini session-expiry auto-recovery
+# ---------------------------------------------------------------------------
+
+
+class TestGeminiSessionExpiredAutoRecovery:
+    async def test_auto_resets_once_then_fails_permanently(self, session_factory):
+        """GeminiSessionExpiredError triggers one auto soft-reset; second expiry → failed.
+
+        A backend that always raises GeminiSessionExpiredError will cause:
+        - First run: job is pending (retry_count=0) → auto soft-reset → pending (retry_count=1)
+        - Second run: retry_count=1 > 0 → no further reset → job stays failed
+        """
+        call_count = [0]
+
+        class AlwaysExpiresBackend(FakeAgentBackend):
+            def __init__(self):
+                super().__init__([])
+
+            async def start_session(self, system_prompt, initial_user_msg):
+                call_count[0] += 1
+                raise GeminiSessionExpiredError(
+                    f"Gemini session not found (test call #{call_count[0]})"
+                )
+
+        job = await _insert_job(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=AlwaysExpiresBackend,
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+
+        assert refreshed.state == JobState.failed
+        # retry_count==1 proves the auto-recovery ran exactly once before giving up
+        assert refreshed.retry_count == 1
+        assert call_count[0] == 2
+
+    async def test_no_auto_reset_when_already_retried(self, session_factory):
+        """If retry_count is already >0, a GeminiSessionExpiredError marks the job failed immediately."""
+        job = await _insert_job(session_factory)
+
+        # Manually bump retry_count to simulate a previously auto-recovered job
+        async with session_factory() as s:
+            j = await repo.get_job(s, job.id)
+            j.retry_count = 1
+            await s.commit()
+
+        class AlwaysExpiresBackend(FakeAgentBackend):
+            def __init__(self):
+                super().__init__([])
+
+            async def start_session(self, system_prompt, initial_user_msg):
+                raise GeminiSessionExpiredError("Gemini session not found (test)")
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=AlwaysExpiresBackend,
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+
+        assert refreshed.state == JobState.failed
+        assert "session not found" in (refreshed.error or "").lower()

@@ -69,6 +69,18 @@ export function Header() {
   const done = countByStates(DONE_STATES);
   const failed = countByStates(FAILED_STATES);
 
+  async function nuclearReload() {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    window.location.href = `/?v=${Date.now()}`;
+  }
+
   return (
     <header className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200 flex-shrink-0 gap-4">
       {/* Left: App name + backend */}
@@ -119,10 +131,20 @@ export function Header() {
         />
       </div>
 
-      {/* Right: WS status */}
-      <div className="flex items-center gap-1.5 flex-shrink-0">
-        <div className={`w-2.5 h-2.5 rounded-full ${dot.color}`} />
-        <span className="text-xs text-gray-500">{dot.label}</span>
+      {/* Right: WS status + hard reload */}
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <div className="flex items-center gap-1.5">
+          <div className={`w-2.5 h-2.5 rounded-full ${dot.color}`} />
+          <span className="text-xs text-gray-500">{dot.label}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => { void nuclearReload(); }}
+          title="Hard reload — clears all browser caches and reloads"
+          className="text-base leading-none text-gray-400 hover:text-gray-700 transition-colors"
+        >
+          ↺
+        </button>
       </div>
     </header>
   );

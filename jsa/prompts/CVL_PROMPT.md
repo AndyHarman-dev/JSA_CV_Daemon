@@ -88,8 +88,13 @@ What would you like to change? If you're happy with the draft, reply 'finalize'.
 <<<END>>>
 
 Sub-case B — The user approves (says "finalize", "looks good", "done", "no changes", or equivalent):
-Emit <<<FINAL>>> with the complete, approved cover letter text inside the sentinel block.
-Copy the full letter text into the sentinel — do NOT write "see above", "draft delivered above", or any reference to a previous message.
+Output ONLY the complete cover letter text inside the <<<FINAL>>> block — nothing else.
+The <<<FINAL>>> block must begin immediately with the letter's salutation (e.g. "Dear [Name],") or
+the letter's first sentence. Do NOT write any preamble, summary, change description, "Centerpiece:",
+or commentary before or after the letter text inside the block.
+Do NOT write "see above", "draft delivered above", "cover letter drafted for", "delivered above",
+or any reference to a previous turn anywhere in this reply.
+Write the full letter from the salutation to the sign-off — exactly as it would appear when sent.
 End with <<<END>>>.
 </process>
 
@@ -104,8 +109,17 @@ End with <<<END>>>.
 ## HARD RULE — Final output content
 
 When you emit <<<FINAL>>>, the complete cover letter text MUST be inside the sentinel block.
-Never write "see above", "draft delivered above", or any reference to a previous turn.
-If the current reply is a finalisation of a previous draft, copy the full, approved letter text into <<<FINAL>>>.
+The block must open with the letter's salutation (e.g. "Dear [Name],") or the letter's first sentence —
+not a summary, description, or preamble of any kind.
+
+Forbidden inside <<<FINAL>>>:
+- "see above", "draft delivered above", "delivered above", or any reference to a previous turn
+- "Cover letter drafted for …", "Cover letter written for …", or any summary header
+- "Centerpiece:", change-log notes, or any description of what the letter does
+- Parenthetical post-notes like "(cover letter delivered above…)" or "(awaiting revision requests)"
+
+If the current reply is a finalisation of a previous draft, write the full letter text from salutation
+to sign-off directly inside <<<FINAL>>> — nothing before it, nothing after it inside the block.
 
 ## Output format — MANDATORY
 

@@ -67,6 +67,7 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "jd": job.jd,
         "state": job.state.value if job.state is not None else None,
         "current_stage": job.current_stage.value if job.current_stage is not None else None,
+        "fit_reason": job.fit_reason,
         "error": job.error,
         "retry_count": job.retry_count,
         "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -332,6 +333,51 @@ async def dismiss_job(request: Request, job_id: str):
             )
         )
     )
+
+    return job_dict
+
+
+@router.post("/api/jobs/{job_id}/ignore-fit")
+async def ignore_fit(request: Request, job_id: str):
+    """Override an unfit fit-assessment: unfit → fit_done, then resume the pipeline.
+
+    Mirrors the 'Ignore' button on the not-a-fit modal. Only valid while the job is
+    parked in `unfit`; transitions to `fit_done` (the same state a passed check lands
+    in) so the orchestrator dispatches cv_adjust next.
+    """
+    sf = _session_factory(request)
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.unfit:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'unfit'",
+            )
+
+        prev_state = job.state.value
+        job.fit_reason = None  # cleared once the user chooses to proceed
+        await repo.checkpoint(session, job, JobState.fit_done, new_stage=None)
+
+    # Re-fetch with relationships after checkpoint
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        job_dict = _job_to_dict(job, full=True)
+
+    await bus.publish(
+        event_to_dict(
+            StatusChangedEvent(
+                job_id=job_id,
+                from_state=prev_state,
+                to_state=JobState.fit_done.value,
+            )
+        )
+    )
+
+    request.app.state.orchestrator.kick()
 
     return job_dict
 
@@ -637,4 +683,7 @@ async def serve_output_file(request: Request, relpath: str):
 
     # Serve inline so the frontend's preview <iframe> renders PDFs in place.
     # Forced downloads are handled client-side via the anchor `download` attribute.
-    return FileResponse(str(full_path), content_disposition_type="inline")
+    # Explicit media_type prevents browsers from falling back to application/octet-stream
+    # (which always triggers a download regardless of Content-Disposition).
+    media_type = "application/pdf" if full_path.suffix.lower() == ".pdf" else None
+    return FileResponse(str(full_path), media_type=media_type, content_disposition_type="inline")

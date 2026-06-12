@@ -16,6 +16,8 @@ const STATE_CONFIG: Record<
     spinner: true,
   },
   awaiting_input: { label: "Needs Input", classes: "bg-yellow-100 text-yellow-700" },
+  fit_done: { label: "Assessed", classes: "bg-blue-100 text-blue-700" },
+  unfit: { label: "Needs Review", classes: "bg-amber-100 text-amber-800" },
   cv_done: { label: "CV Done", classes: "bg-teal-100 text-teal-700" },
   cl_done: { label: "CL Done", classes: "bg-teal-100 text-teal-700" },
   review: { label: "Review", classes: "bg-purple-100 text-purple-700" },

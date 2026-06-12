@@ -9,10 +9,15 @@ class InvalidTransition(Exception): ...
 ALLOWED = {
     JobState.pending:        {JobState.running, JobState.failed, JobState.dismissed},
     # running → pending: crash recovery OR backend-switch restart (cv_adjust limit hit)
+    # running → fit_done/unfit: fit-assessment outcomes (pass / flagged mismatch)
     # running → cv_done: backend-switch restart (cover_letter limit hit; rewind to cv_done)
     # running → review:  backend-switch restart (revision limit hit; rewind to review)
-    JobState.running:        {JobState.awaiting_input, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed, JobState.pending, JobState.dismissed},
+    JobState.running:        {JobState.awaiting_input, JobState.fit_done, JobState.unfit, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed, JobState.pending, JobState.dismissed},
     JobState.awaiting_input: {JobState.running, JobState.review, JobState.failed, JobState.dismissed},
+    # fit_done parallels cv_done: ready to be picked up for the next stage (cv_adjust).
+    JobState.fit_done:       {JobState.running, JobState.failed, JobState.dismissed},
+    # unfit is parked: Ignore → fit_done (proceed), Dismiss → dismissed.
+    JobState.unfit:          {JobState.fit_done, JobState.dismissed},
     JobState.cv_done:        {JobState.running, JobState.failed, JobState.dismissed},
     JobState.cl_done:        {JobState.review, JobState.failed, JobState.dismissed},
     JobState.review:         {JobState.running, JobState.awaiting_input, JobState.approved, JobState.failed, JobState.dismissed},
@@ -23,7 +28,7 @@ ALLOWED = {
 
 # Stage compatibility: which stages are valid for each state
 STAGE_FOR_STATE = {
-    JobState.running: {Stage.cv_adjust, Stage.cover_letter, Stage.revising_cv, Stage.revising_cl},
+    JobState.running: {Stage.fit_assessment, Stage.cv_adjust, Stage.cover_letter, Stage.revising_cv, Stage.revising_cl},
     JobState.awaiting_input: {Stage.cv_adjust, Stage.cover_letter, Stage.revising_cv, Stage.revising_cl},
     # All other states: current_stage must be None
 }

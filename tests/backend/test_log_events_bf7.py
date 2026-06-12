@@ -103,6 +103,19 @@ def _final_reply(content: str = "# Document\nContent here.") -> AgentReply:
     )
 
 
+_CL_CONTENT = (
+    "Dear Hiring Manager,\n\n"
+    "I am writing to express my strong interest in the role. Over the past several years "
+    "I have built deep expertise directly relevant to this position, and I am confident "
+    "my background aligns well with what your team is looking for.\n\n"
+    "Sincerely,\nCandidate Name"
+)
+
+
+def _cl_final_reply() -> AgentReply:
+    return _final_reply(_CL_CONTENT)
+
+
 def _needs_input_reply(question: str = "What is your target role?") -> AgentReply:
     return AgentReply(
         raw=f"<<<NEED_INPUT>>>\n{question}\n<<<END>>>",
@@ -349,8 +362,9 @@ class TestPointB_FailedToStartLogEvent:
             for e in calls
             if e.get("type") == "log" and "Failed to start" in e.get("text", "")
         ]
-        assert any("cv_adjust" in t for t in warn_texts), (
-            f"Expected 'cv_adjust' in warn log text. Got: {warn_texts}"
+        # The first stage dispatched for a pending job is fit_assessment.
+        assert any("fit_assessment" in t for t in warn_texts), (
+            f"Expected 'fit_assessment' in warn log text. Got: {warn_texts}"
         )
 
 
@@ -511,7 +525,7 @@ class TestPointD_StartingStageLogEvent:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply()])
+        backend = FakeAgentBackend([_cl_final_reply()])
 
         mock_pub = AsyncMock()
         with patch("jsa.events.bus.bus.publish", mock_pub):
@@ -590,7 +604,7 @@ class TestPointE_FinalReceivedLogEvent:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply()])
+        backend = FakeAgentBackend([_cl_final_reply()])
 
         mock_pub = AsyncMock()
         with patch("jsa.events.bus.bus.publish", mock_pub):
