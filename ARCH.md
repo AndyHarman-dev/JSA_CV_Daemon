@@ -128,8 +128,9 @@ Defines the sentinel grammar that all prompts MUST emit (see Key design decision
 
 ### `jsa.prompts.loader`
 ```python
-def read_prompt(name: Literal["cv_adjust", "cover_letter"]) -> str:
-    path = PROMPTS_DIR / {"cv_adjust": "PROMPT_CDADJUST.md", "cover_letter": "CVL_PROMPT.md"}[name]
+def read_prompt(name: Literal["cv_adjust", "cover_letter", "fit_assessment"]) -> str:
+    path = PROMPTS_DIR / {"cv_adjust": "PROMPT_CDADJUST.md", "cover_letter": "CVL_PROMPT.md",
+                          "fit_assessment": "PROMPT_FIT_ASSESSMENT.md"}[name]
     return path.read_text()  # no caching — always fresh
 ```
 
@@ -161,6 +162,9 @@ Thin routes. All long-running work happens in the orchestrator; routes only muta
 ### Per-job happy path
 ```
 pending
+  → [worker picks up, state=running, stage=fit_assessment]
+  → fit-assessment agent: one-shot FIT/UNFIT verdict on (cv_text, jd, role)
+  → FINAL "FIT" → state=fit_done   (UNFIT/unclear → state=unfit — see Fit-assessment gate)
   → [worker picks up, state=running, stage=cv_adjust]
   → CV-adjust agent session opens with system prompt + (cv_text, jd, tier, optional research notes)
   → agent returns FINAL → markdown stored in Document(stage=cv), state=cv_done
@@ -169,6 +173,27 @@ pending
   → state=review (auto) → renderer pre-renders CV+CL as PDF *and* DOCX for in-app preview
   → user clicks Approve → state=approved (no rendering — already done on review entry)
 ```
+
+### Fit-assessment gate (not-a-fit modal)
+A cheap pre-check runs before any CV work so the pipeline doesn't tailor documents for
+jobs the user is plainly unsuited to (unrelated field, large experience gap, seniority
+chasm). It is **always on** and has no resume/NEED_INPUT path — the agent always returns
+a single `<<<FINAL>>>` whose first line is `FIT` or `UNFIT` (rest = reason).
+```
+pending → [running, stage=fit_assessment] → fit-assessment agent
+  → "FIT"                         → state=fit_done → dispatched as cv_adjust (pipeline continues)
+  → "UNFIT" / unclear / question  → Job.fit_reason set, state=unfit (parked; fail-to-modal)
+       → frontend shows a centered modal with the reason and two buttons:
+            Dismiss Job → POST /api/jobs/{id}/dismiss     (state=dismissed)
+            Ignore      → POST /api/jobs/{id}/ignore-fit  (state=fit_done → cv_adjust)
+```
+Notes: the reason lives in the `Job.fit_reason` column (not a `Document`, so it stays out
+of the versioning/render-on-review path). `fit_done` parallels `cv_done` in
+`list_runnable_jobs` and `_next_stage_for`. Because the gate is keyed on job *state* (not a
+side-channel flag), any path that resets a job to `pending` (e.g. a failed-job re-run)
+re-runs the assessment automatically. Verdict parsing fails *to* the modal (closed): an
+`UNFIT`, an unrecognized verdict, a `NEED_INPUT`, or even a sentinel-less `ProtocolError`
+reply all park the job in `unfit` rather than slipping past the gate or failing the job.
 
 ### Follow-up path (park & resume)
 ```

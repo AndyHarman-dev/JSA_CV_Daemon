@@ -4,6 +4,16 @@ This file records non-derivable conventions for all agents working on this proje
 
 ---
 
+## Implementation Workflow
+
+Whenever asked to implement a feature, a plan phase, or any multi-step task:
+
+1. **Draft a todo list first.** Before writing any code, create a file at `~/.claude/todos/<feature-slug>.md` listing every concrete step as a checkbox. Example path: `~/.claude/todos/excel-table-migration.md`.
+2. **Work through the list.** After completing each step, tick its checkbox (`- [x]`) by editing the file, then continue to the next item. Keep the file as a live checklist throughout the session so the current state is always visible.
+3. **Clean up on approval.** Once the user confirms the implementation is accepted, delete the todo file with `rm ~/.claude/todos/<feature-slug>.md`.
+
+If a session is interrupted before approval, leave the todo file in place so the next session can resume from where it left off.
+
 ## Sentinel protocol — MANDATORY for all agent prompts
 
 Every prompt file (`jsa/prompts/PROMPT_CDADJUST.md`, `jsa/prompts/CVL_PROMPT.md`) **must** instruct the model to terminate every reply with exactly one of:
@@ -53,10 +63,25 @@ New backends are registered in `jsa/agents/registry.py` by adding an entry to th
 
 ## Prompt files
 
-- Location: `jsa/prompts/PROMPT_CDADJUST.md` and `jsa/prompts/CVL_PROMPT.md`
+- Location: `jsa/prompts/PROMPT_CDADJUST.md`, `jsa/prompts/CVL_PROMPT.md`, and `jsa/prompts/PROMPT_FIT_ASSESSMENT.md`
 - Loaded by `jsa/prompts/loader.py` → `read_prompt(name)` — **no caching**, always reads from disk
 - Edited externally by the user — never programmatically overwritten
 - During development, use the stubs (which already contain the sentinel grammar instructions)
+
+---
+
+## Fit-assessment gate
+
+Every pending job first runs a one-shot `fit_assessment` stage (always on) before
+`cv_adjust`. The agent returns a single `<<<FINAL>>>` whose **first line is `FIT` or
+`UNFIT`** (the rest is a brief reason — never `NEED_INPUT`). `FIT` → `fit_done`
+(continues to cv_adjust); anything else (UNFIT, unclear, unparseable, or a question) →
+`unfit`, with the reason stored in the `Job.fit_reason` column and surfaced as a centered
+"not a fit" modal. **Verdict parsing fails *to* the modal (closed), never silently past
+it.** The modal's buttons map to `POST /api/jobs/{id}/dismiss` (→ dismissed) and
+`POST /api/jobs/{id}/ignore-fit` (→ fit_done → resume pipeline). `fit_done` is treated
+exactly like `cv_done` in `list_runnable_jobs` and `_next_stage_for`. See ARCH.md →
+"Fit-assessment gate".
 
 ---
 
