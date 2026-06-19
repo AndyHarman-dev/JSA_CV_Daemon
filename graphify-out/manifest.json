@@ -1,0 +1,802 @@
+{
+  "/Users/wiam/VSCodeProjects/JSA/.claude/settings.local.json": {
+    "mtime": 1780875137.6539662,
+    "ast_hash": "ffa0c0610c8ff606848bffc2fa172786",
+    "semantic_hash": "ffa0c0610c8ff606848bffc2fa172786"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/package.json": {
+    "mtime": 1779815902.5609393,
+    "ast_hash": "2a073d60a1194c44eb9c87f7b17eb8cc",
+    "semantic_hash": "2a073d60a1194c44eb9c87f7b17eb8cc"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/postcss.config.js": {
+    "mtime": 1779583873.9678638,
+    "ast_hash": "ef3ba2a81ba19f8ea5ddf625521e96f0",
+    "semantic_hash": "ef3ba2a81ba19f8ea5ddf625521e96f0"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/App.tsx": {
+    "mtime": 1780194191.7875264,
+    "ast_hash": "d8d04cfd8c74f700d460eac7995fbcf2",
+    "semantic_hash": "d8d04cfd8c74f700d460eac7995fbcf2"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/ChatBox.test.tsx": {
+    "mtime": 1780091350.5079162,
+    "ast_hash": "05d5d042cf88f29bb47c0d72a167184d",
+    "semantic_hash": "05d5d042cf88f29bb47c0d72a167184d"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/FollowUpPane.test.tsx": {
+    "mtime": 1780091333.5891373,
+    "ast_hash": "cb8c96a3fef696b0a272b1feca90f6ca",
+    "semantic_hash": "cb8c96a3fef696b0a272b1feca90f6ca"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/Header.test.tsx": {
+    "mtime": 1780091336.6000707,
+    "ast_hash": "d84b988a9a03e3f92292aa12931fbfe3",
+    "semantic_hash": "d84b988a9a03e3f92292aa12931fbfe3"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/JobDetail.test.tsx": {
+    "mtime": 1780091329.933804,
+    "ast_hash": "fde10a2196cc119868dc1d69baa3644c",
+    "semantic_hash": "fde10a2196cc119868dc1d69baa3644c"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/JobList.test.tsx": {
+    "mtime": 1781307287.1614327,
+    "ast_hash": "47501ebcc8beaec48e734c13c869be3e",
+    "semantic_hash": "47501ebcc8beaec48e734c13c869be3e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/MarkdownPreview.test.tsx": {
+    "mtime": 1779814809.445221,
+    "ast_hash": "c5ac5c1492b4768a7e96dd8b01512b52",
+    "semantic_hash": "c5ac5c1492b4768a7e96dd8b01512b52"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/ReviewPane.test.tsx": {
+    "mtime": 1780416892.0631826,
+    "ast_hash": "7f183946a4b6465191580463e55bdc98",
+    "semantic_hash": "7f183946a4b6465191580463e55bdc98"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/StageTimeline.test.tsx": {
+    "mtime": 1779762067.1885166,
+    "ast_hash": "cabefe092189bfc02f2d2b13bdc19694",
+    "semantic_hash": "cabefe092189bfc02f2d2b13bdc19694"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/StatusBadge.test.tsx": {
+    "mtime": 1779762022.652031,
+    "ast_hash": "6b724a97eb245ba117e3428d47a336f8",
+    "semantic_hash": "6b724a97eb245ba117e3428d47a336f8"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/UnfitModal.test.tsx": {
+    "mtime": 1781307287.1617596,
+    "ast_hash": "2a190f311aa7222df3babab28bacfb4f",
+    "semantic_hash": "2a190f311aa7222df3babab28bacfb4f"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/api.test.ts": {
+    "mtime": 1779762013.4477582,
+    "ast_hash": "56fc399862b4ff3583bef3f52a253f93",
+    "semantic_hash": "56fc399862b4ff3583bef3f52a253f93"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/bugfixes_bf2.test.tsx": {
+    "mtime": 1780091357.0535204,
+    "ast_hash": "9a4bec1be970f47a92917aaba60f18e1",
+    "semantic_hash": "9a4bec1be970f47a92917aaba60f18e1"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/cancel_bf6.test.tsx": {
+    "mtime": 1780194191.7878351,
+    "ast_hash": "02c9ce022d02695b682cb0ddb08abf0c",
+    "semantic_hash": "02c9ce022d02695b682cb0ddb08abf0c"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/mobile_responsive.test.tsx": {
+    "mtime": 1780194238.5596833,
+    "ast_hash": "e2f901a508b6d904e4c8351912210ce9",
+    "semantic_hash": "e2f901a508b6d904e4c8351912210ce9"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/__tests__/store.test.ts": {
+    "mtime": 1780091308.7534125,
+    "ast_hash": "bb83d00bd1c27bcb0217e930766bd957",
+    "semantic_hash": "bb83d00bd1c27bcb0217e930766bd957"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/api.ts": {
+    "mtime": 1781307287.1622834,
+    "ast_hash": "3df470d1163eef3698d36feebb5f0043",
+    "semantic_hash": "3df470d1163eef3698d36feebb5f0043"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/ChatBox.tsx": {
+    "mtime": 1779811937.2058797,
+    "ast_hash": "50b2c6b69ed6ad3b77281d5556565ad6",
+    "semantic_hash": "50b2c6b69ed6ad3b77281d5556565ad6"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/FollowUpPane.tsx": {
+    "mtime": 1779892809.3132312,
+    "ast_hash": "f66d183363886188f054fc6c2d2714c4",
+    "semantic_hash": "f66d183363886188f054fc6c2d2714c4"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/Header.tsx": {
+    "mtime": 1781307287.1629455,
+    "ast_hash": "5ae33af70931720fbbbd64baeef2dfe9",
+    "semantic_hash": "5ae33af70931720fbbbd64baeef2dfe9"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/JobDetail.tsx": {
+    "mtime": 1781307287.163505,
+    "ast_hash": "01ebd96d09e7a8d9c79a7c48c4de8bf2",
+    "semantic_hash": "01ebd96d09e7a8d9c79a7c48c4de8bf2"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/JobList.tsx": {
+    "mtime": 1781307287.1637814,
+    "ast_hash": "1f97742e1e52cdce54dcfbd982ae1863",
+    "semantic_hash": "1f97742e1e52cdce54dcfbd982ae1863"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/MarkdownPreview.tsx": {
+    "mtime": 1780088808.0286367,
+    "ast_hash": "59182ba396de42194b5cd034c94dfc46",
+    "semantic_hash": "59182ba396de42194b5cd034c94dfc46"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/ReviewPane.tsx": {
+    "mtime": 1780874646.5338109,
+    "ast_hash": "fddef74ac796634670f3d7150bca71d7",
+    "semantic_hash": "fddef74ac796634670f3d7150bca71d7"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/StageTimeline.tsx": {
+    "mtime": 1781307287.1641617,
+    "ast_hash": "f52894de12690ebad0f92bb34652f1ea",
+    "semantic_hash": "f52894de12690ebad0f92bb34652f1ea"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/StatusBadge.tsx": {
+    "mtime": 1781307287.1645718,
+    "ast_hash": "1e6e7a285de9a4eb9ec117cb39338319",
+    "semantic_hash": "1e6e7a285de9a4eb9ec117cb39338319"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/components/UnfitModal.tsx": {
+    "mtime": 1781307287.1649578,
+    "ast_hash": "a96a8a9f6c99afb03c1677d39bcd5399",
+    "semantic_hash": "a96a8a9f6c99afb03c1677d39bcd5399"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/main.tsx": {
+    "mtime": 1779583882.6599936,
+    "ast_hash": "787e5a07efeb2bf6209d5937195f2f68",
+    "semantic_hash": "787e5a07efeb2bf6209d5937195f2f68"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/setupTests.ts": {
+    "mtime": 1779761948.7342882,
+    "ast_hash": "3709e3aa95abf0544678f0f2d9b46702",
+    "semantic_hash": "3709e3aa95abf0544678f0f2d9b46702"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/store.ts": {
+    "mtime": 1780419643.1288655,
+    "ast_hash": "0e25604ee6b21199dd050c6d1721c3b3",
+    "semantic_hash": "0e25604ee6b21199dd050c6d1721c3b3"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/types.ts": {
+    "mtime": 1781307287.1652029,
+    "ast_hash": "dbf00afd5d9d3f4589d782a218896e22",
+    "semantic_hash": "dbf00afd5d9d3f4589d782a218896e22"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/src/ws.ts": {
+    "mtime": 1780243898.6862142,
+    "ast_hash": "3931f0905e806e3178298a1165ae43ca",
+    "semantic_hash": "3931f0905e806e3178298a1165ae43ca"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/tailwind.config.js": {
+    "mtime": 1779583876.653691,
+    "ast_hash": "3346df3fd0a1ea3f84440703bf8fd2cb",
+    "semantic_hash": "3346df3fd0a1ea3f84440703bf8fd2cb"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/tsconfig.json": {
+    "mtime": 1779815938.827471,
+    "ast_hash": "8abbca07c3b43f232190a409383bbb9b",
+    "semantic_hash": "8abbca07c3b43f232190a409383bbb9b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/tsconfig.node.json": {
+    "mtime": 1779583871.60141,
+    "ast_hash": "df562a73dce2f53f022bc93ee20099c2",
+    "semantic_hash": "df562a73dce2f53f022bc93ee20099c2"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/vite.config.ts": {
+    "mtime": 1779812902.501465,
+    "ast_hash": "49d06081898d178918857a2da089e1e1",
+    "semantic_hash": "49d06081898d178918857a2da089e1e1"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/__init__.py": {
+    "mtime": 1779583758.8084393,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/agents/__init__.py": {
+    "mtime": 1779583758.808631,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/agents/anthropic_api.py": {
+    "mtime": 1780268237.224462,
+    "ast_hash": "82e021ca4bb888f546f1523523ab7f87",
+    "semantic_hash": "82e021ca4bb888f546f1523523ab7f87"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/agents/base.py": {
+    "mtime": 1780268199.33281,
+    "ast_hash": "bac98352e0a5ede4b656e04bb059fb0f",
+    "semantic_hash": "bac98352e0a5ede4b656e04bb059fb0f"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/agents/claude_cli.py": {
+    "mtime": 1781307287.16568,
+    "ast_hash": "4c781f3cdf705062711806cdb1616e82",
+    "semantic_hash": "4c781f3cdf705062711806cdb1616e82"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/agents/gemini_cli.py": {
+    "mtime": 1780419643.1299458,
+    "ast_hash": "cc2ae0932f09d7bebabf50aa76d57071",
+    "semantic_hash": "cc2ae0932f09d7bebabf50aa76d57071"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/agents/protocol.py": {
+    "mtime": 1780093613.5672216,
+    "ast_hash": "982c911d2ec4d435396c35abea661396",
+    "semantic_hash": "982c911d2ec4d435396c35abea661396"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/agents/registry.py": {
+    "mtime": 1779820235.330349,
+    "ast_hash": "93050123efec3ebf748222224b092d4f",
+    "semantic_hash": "93050123efec3ebf748222224b092d4f"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/api/__init__.py": {
+    "mtime": 1779583758.8088977,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/api/routes_jobs.py": {
+    "mtime": 1781307287.1660242,
+    "ast_hash": "a7c157b4d02046d8d92421c5e1718097",
+    "semantic_hash": "a7c157b4d02046d8d92421c5e1718097"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/api/routes_meta.py": {
+    "mtime": 1780419643.131227,
+    "ast_hash": "12d1e471f8b8f0af02aaf2532f30f65e",
+    "semantic_hash": "12d1e471f8b8f0af02aaf2532f30f65e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/api/ws.py": {
+    "mtime": 1779747748.7467697,
+    "ast_hash": "1c51f36b4d454227495073ed43f81f97",
+    "semantic_hash": "1c51f36b4d454227495073ed43f81f97"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/cli.py": {
+    "mtime": 1781307287.1665187,
+    "ast_hash": "a04ec230cc8808374598a412d363878c",
+    "semantic_hash": "a04ec230cc8808374598a412d363878c"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/config.py": {
+    "mtime": 1781307287.1669571,
+    "ast_hash": "a640cf2011cd1bb7a60aad136a8e9006",
+    "semantic_hash": "a640cf2011cd1bb7a60aad136a8e9006"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/db/__init__.py": {
+    "mtime": 1779583758.80853,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/db/engine.py": {
+    "mtime": 1781307287.1672084,
+    "ast_hash": "1ee9cea7ae0c27fdf8191647b89f58a3",
+    "semantic_hash": "1ee9cea7ae0c27fdf8191647b89f58a3"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/db/models.py": {
+    "mtime": 1781307287.1676087,
+    "ast_hash": "8ffaf8f828821dbb77d33ea446080771",
+    "semantic_hash": "8ffaf8f828821dbb77d33ea446080771"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/db/repo.py": {
+    "mtime": 1781307287.1681457,
+    "ast_hash": "1b3a5b929b62cf54e939e3be9a6e2e20",
+    "semantic_hash": "1b3a5b929b62cf54e939e3be9a6e2e20"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/dev/__init__.py": {
+    "mtime": 1781307287.1684256,
+    "ast_hash": "c31e2105f0c565c399454bc437793cf2",
+    "semantic_hash": "c31e2105f0c565c399454bc437793cf2"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/dev/answers.py": {
+    "mtime": 1781307287.168686,
+    "ast_hash": "ba0daab56b007de0af01858afa9878b8",
+    "semantic_hash": "ba0daab56b007de0af01858afa9878b8"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/dev/autoresponder.py": {
+    "mtime": 1781307287.169121,
+    "ast_hash": "da86f7635071bdda03be09e1bf5f77fe",
+    "semantic_hash": "da86f7635071bdda03be09e1bf5f77fe"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/events/__init__.py": {
+    "mtime": 1779583758.8088362,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/events/bus.py": {
+    "mtime": 1779747684.1815834,
+    "ast_hash": "42c281c84cf87e939ef147d3d43126ee",
+    "semantic_hash": "42c281c84cf87e939ef147d3d43126ee"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/events/schema.py": {
+    "mtime": 1780419643.1346273,
+    "ast_hash": "45ff80d48beafd8c1e6c6988dbccc3a7",
+    "semantic_hash": "45ff80d48beafd8c1e6c6988dbccc3a7"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/ingest/__init__.py": {
+    "mtime": 1779583758.8085842,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/ingest/csv_loader.py": {
+    "mtime": 1779830546.8576274,
+    "ast_hash": "00d1f657fc534adc342cdfd3f0dccc91",
+    "semantic_hash": "00d1f657fc534adc342cdfd3f0dccc91"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/ingest/cv_loader.py": {
+    "mtime": 1779630080.7084446,
+    "ast_hash": "524ee94593ec3fa315dabaea3e8015b9",
+    "semantic_hash": "524ee94593ec3fa315dabaea3e8015b9"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/pipeline/__init__.py": {
+    "mtime": 1779583758.8087335,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/pipeline/checkpoints.py": {
+    "mtime": 1779667021.7709277,
+    "ast_hash": "13fbf3eb53e6d8881798d5916df4b4d9",
+    "semantic_hash": "13fbf3eb53e6d8881798d5916df4b4d9"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/pipeline/orchestrator.py": {
+    "mtime": 1781307287.16954,
+    "ast_hash": "52b89d94aa559043def2082e551f13e8",
+    "semantic_hash": "52b89d94aa559043def2082e551f13e8"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/pipeline/stages.py": {
+    "mtime": 1781307287.17003,
+    "ast_hash": "3621e95a58cff38ab7afe31d72568f28",
+    "semantic_hash": "3621e95a58cff38ab7afe31d72568f28"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/pipeline/state_machine.py": {
+    "mtime": 1781307287.1704066,
+    "ast_hash": "42196ca0e6e9fcc841207a0b37c269ed",
+    "semantic_hash": "42196ca0e6e9fcc841207a0b37c269ed"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/DEV_ANSWERS.json": {
+    "mtime": 1781307287.1712632,
+    "ast_hash": "7a19284ccaa2e111834eceb2e186cd53",
+    "semantic_hash": "7a19284ccaa2e111834eceb2e186cd53"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/__init__.py": {
+    "mtime": 1779583758.808679,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/loader.py": {
+    "mtime": 1781307287.1717956,
+    "ast_hash": "2463d51ce2fd7833592164e732bb4f2a",
+    "semantic_hash": "2463d51ce2fd7833592164e732bb4f2a"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/render/__init__.py": {
+    "mtime": 1779583758.80879,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/render/base.py": {
+    "mtime": 1779729126.3678157,
+    "ast_hash": "a5449cfda71252bad8ad70c29b68af14",
+    "semantic_hash": "a5449cfda71252bad8ad70c29b68af14"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/render/docx_render.py": {
+    "mtime": 1780269203.9811807,
+    "ast_hash": "98352dd2b51390070c021d04aece9b92",
+    "semantic_hash": "98352dd2b51390070c021d04aece9b92"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/render/registry.py": {
+    "mtime": 1780268284.9452379,
+    "ast_hash": "d639e1752e8607e82d51980dfd090aa6",
+    "semantic_hash": "d639e1752e8607e82d51980dfd090aa6"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/render/weasy.py": {
+    "mtime": 1780005661.6090834,
+    "ast_hash": "7e96361b94c39609aad0a47bf970604b",
+    "semantic_hash": "7e96361b94c39609aad0a47bf970604b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/server.py": {
+    "mtime": 1781307287.172114,
+    "ast_hash": "136aaeeba06d544dbb86990cb13a8d5f",
+    "semantic_hash": "136aaeeba06d544dbb86990cb13a8d5f"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/util.py": {
+    "mtime": 1780419643.1377974,
+    "ast_hash": "09aa4807d2bbbd6ae750e562d3bbccf7",
+    "semantic_hash": "09aa4807d2bbbd6ae750e562d3bbccf7"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/__init__.py": {
+    "mtime": 1779583758.8089445,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/__init__.py": {
+    "mtime": 1779583758.8089914,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/fakes/__init__.py": {
+    "mtime": 1779583758.8090386,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/fakes/fake_backend.py": {
+    "mtime": 1779638159.9489288,
+    "ast_hash": "5cb6818271f89647d1a4bf8b4ca649ab",
+    "semantic_hash": "5cb6818271f89647d1a4bf8b4ca649ab"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/fakes/fake_renderer.py": {
+    "mtime": 1779729323.9967673,
+    "ast_hash": "eac427519978de4357b8e47a5b16eaae",
+    "semantic_hash": "eac427519978de4357b8e47a5b16eaae"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_anthropic_api.py": {
+    "mtime": 1779820383.1175187,
+    "ast_hash": "af3701ce4076af65baeb73a77052958b",
+    "semantic_hash": "af3701ce4076af65baeb73a77052958b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_api.py": {
+    "mtime": 1781307287.1725748,
+    "ast_hash": "a67061aab073fe560b116241ec6c0af2",
+    "semantic_hash": "a67061aab073fe560b116241ec6c0af2"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf10_revision_resume.py": {
+    "mtime": 1780425722.0794878,
+    "ast_hash": "4c08903729ae0d12d515ad14631e5f2e",
+    "semantic_hash": "4c08903729ae0d12d515ad14631e5f2e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf11_html_strip.py": {
+    "mtime": 1780006094.9026835,
+    "ast_hash": "36c897a87c5c55992fb06e02fdf5113e",
+    "semantic_hash": "36c897a87c5c55992fb06e02fdf5113e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf12_delete_job.py": {
+    "mtime": 1780002325.934243,
+    "ast_hash": "f032fe2a72ef5d70b6bb860223e3216e",
+    "semantic_hash": "f032fe2a72ef5d70b6bb860223e3216e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf15_smart_retry.py": {
+    "mtime": 1780425722.0797071,
+    "ast_hash": "acdd419755b79ee2b598d39eb9c83b62",
+    "semantic_hash": "acdd419755b79ee2b598d39eb9c83b62"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf16_change_log_strip.py": {
+    "mtime": 1780093701.8469412,
+    "ast_hash": "a74ba21e13eaee444a12568e56c97e7a",
+    "semantic_hash": "a74ba21e13eaee444a12568e56c97e7a"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf17_format.py": {
+    "mtime": 1780158456.766408,
+    "ast_hash": "99d020326bdb4216f654b3817361d921",
+    "semantic_hash": "99d020326bdb4216f654b3817361d921"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf18_limit_detection.py": {
+    "mtime": 1780268516.518608,
+    "ast_hash": "6594d8d34b17159c99047009c186212e",
+    "semantic_hash": "6594d8d34b17159c99047009c186212e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf20_docx_renderer.py": {
+    "mtime": 1780269211.4509256,
+    "ast_hash": "0d1102278f3dd13bb48636ef4cdacf52",
+    "semantic_hash": "0d1102278f3dd13bb48636ef4cdacf52"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bf9_revision_session.py": {
+    "mtime": 1780425722.0800078,
+    "ast_hash": "12126039c3b58ef2455a36bd14f7daa3",
+    "semantic_hash": "12126039c3b58ef2455a36bd14f7daa3"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_bugfixes_bf1.py": {
+    "mtime": 1779896791.684426,
+    "ast_hash": "070d7d0c1a12be6d8600aa4659806af5",
+    "semantic_hash": "070d7d0c1a12be6d8600aa4659806af5"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_cancel_bf6.py": {
+    "mtime": 1779933404.8284426,
+    "ast_hash": "b36ab2a046599636d764f79b3d65c4cf",
+    "semantic_hash": "b36ab2a046599636d764f79b3d65c4cf"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_claude_cli_nudge.py": {
+    "mtime": 1779915202.4443533,
+    "ast_hash": "55806d3e1989b863836d15f5db4afd79",
+    "semantic_hash": "55806d3e1989b863836d15f5db4afd79"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_cli_backends.py": {
+    "mtime": 1779917194.2790196,
+    "ast_hash": "3a182ea2770179516c2008e93d85c405",
+    "semantic_hash": "3a182ea2770179516c2008e93d85c405"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_db_repo.py": {
+    "mtime": 1780087815.9557002,
+    "ast_hash": "822f80da2732b2dbf45ba6649d1b231b",
+    "semantic_hash": "822f80da2732b2dbf45ba6649d1b231b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_dev_autoanswer.py": {
+    "mtime": 1781307287.172854,
+    "ast_hash": "d033155dc05a4ef658c7f53ac55db213",
+    "semantic_hash": "d033155dc05a4ef658c7f53ac55db213"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_dev_tunnel.py": {
+    "mtime": 1780166705.579758,
+    "ast_hash": "cee9829df1ba849a1baee43731b828bf",
+    "semantic_hash": "cee9829df1ba849a1baee43731b828bf"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_fake_backend.py": {
+    "mtime": 1779637795.0470479,
+    "ast_hash": "741f4727ec644219b8ba06e2c9a953bb",
+    "semantic_hash": "741f4727ec644219b8ba06e2c9a953bb"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_fit_assessment.py": {
+    "mtime": 1781307287.173055,
+    "ast_hash": "01ec10382542e92f1aeb55e40f889a2e",
+    "semantic_hash": "01ec10382542e92f1aeb55e40f889a2e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_gemini_cli_bf5.py": {
+    "mtime": 1779930177.7209318,
+    "ast_hash": "7cf447721b6174c54ca62008ab0402de",
+    "semantic_hash": "7cf447721b6174c54ca62008ab0402de"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_ingest.py": {
+    "mtime": 1779630735.4759953,
+    "ast_hash": "2a675f7e5021e3b13b53be3b09e46cfa",
+    "semantic_hash": "2a675f7e5021e3b13b53be3b09e46cfa"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_integration.py": {
+    "mtime": 1781307287.1734362,
+    "ast_hash": "aa030ba691a80caeff2c32f8def70dcd",
+    "semantic_hash": "aa030ba691a80caeff2c32f8def70dcd"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_log_events_bf7.py": {
+    "mtime": 1781307287.1738632,
+    "ast_hash": "9c6ccf0392dbc48d5bda0da460af6402",
+    "semantic_hash": "9c6ccf0392dbc48d5bda0da460af6402"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_orchestrator.py": {
+    "mtime": 1781307287.174204,
+    "ast_hash": "6966070a78156f3f3438db0e19f7c2b7",
+    "semantic_hash": "6966070a78156f3f3438db0e19f7c2b7"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_protocol_parser.py": {
+    "mtime": 1779638259.7791042,
+    "ast_hash": "13d0db16f341e881e1399f5347c65a32",
+    "semantic_hash": "13d0db16f341e881e1399f5347c65a32"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_registry.py": {
+    "mtime": 1779637925.145933,
+    "ast_hash": "a853d88e5bf24c62525bb8d41ecd620b",
+    "semantic_hash": "a853d88e5bf24c62525bb8d41ecd620b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_renderer.py": {
+    "mtime": 1779730936.4687722,
+    "ast_hash": "f18734a3090491fdcddd6c121092ade5",
+    "semantic_hash": "f18734a3090491fdcddd6c121092ade5"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_research.py": {
+    "mtime": 1781307287.174608,
+    "ast_hash": "75c3de8453e7d11690b8cc1395df8f27",
+    "semantic_hash": "75c3de8453e7d11690b8cc1395df8f27"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_scaffold.py": {
+    "mtime": 1779747881.7858315,
+    "ast_hash": "6f6897a66f082db9e5a19ce32d0c7ea5",
+    "semantic_hash": "6f6897a66f082db9e5a19ce32d0c7ea5"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_stages.py": {
+    "mtime": 1781307287.1750736,
+    "ast_hash": "5eaf29c91850792b6511e7202b480aac",
+    "semantic_hash": "5eaf29c91850792b6511e7202b480aac"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/tests/backend/test_state_machine.py": {
+    "mtime": 1780419643.1389155,
+    "ast_hash": "de51b532abf9e4ebec0200d11e180c54",
+    "semantic_hash": "de51b532abf9e4ebec0200d11e180c54"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/MEMORY.md": {
+    "mtime": 1780419643.1260529,
+    "ast_hash": "a65512b8eb08a60c31be81c8b7df9562",
+    "semantic_hash": "a65512b8eb08a60c31be81c8b7df9562"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/feedback_advisor_usage.md": {
+    "mtime": 1778961629.0382776,
+    "ast_hash": "6bb31e3d3fb544c348d999fdb8d6ead1",
+    "semantic_hash": "6bb31e3d3fb544c348d999fdb8d6ead1"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/feedback_tdd.md": {
+    "mtime": 1778961635.536357,
+    "ast_hash": "4b2b9fce3a697e09fd34f8f9560cd5a5",
+    "semantic_hash": "4b2b9fce3a697e09fd34f8f9560cd5a5"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_bugfixes_bf.md": {
+    "mtime": 1779986607.798348,
+    "ast_hash": "5c91a2f13ce35ee9792efccb53da337b",
+    "semantic_hash": "5c91a2f13ce35ee9792efccb53da337b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_context.md": {
+    "mtime": 1779581993.2854543,
+    "ast_hash": "780d4afababaed0b44e3c997cd5d8940",
+    "semantic_hash": "780d4afababaed0b44e3c997cd5d8940"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_dev1_tunnel.md": {
+    "mtime": 1780166792.5467672,
+    "ast_hash": "f72a59e800bcb8850324d8ed746415b6",
+    "semantic_hash": "f72a59e800bcb8850324d8ed746415b6"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase2_3.md": {
+    "mtime": 1779728874.5688655,
+    "ast_hash": "7e1876f4bc7435d3301ccf12c4fa1465",
+    "semantic_hash": "7e1876f4bc7435d3301ccf12c4fa1465"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase4.md": {
+    "mtime": 1779638319.4683404,
+    "ast_hash": "f5fad790f0db50bf183d67231cf0141e",
+    "semantic_hash": "f5fad790f0db50bf183d67231cf0141e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase5.md": {
+    "mtime": 1779930257.874088,
+    "ast_hash": "81a86192810c77e30723c8098683484b",
+    "semantic_hash": "81a86192810c77e30723c8098683484b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase6.md": {
+    "mtime": 1779727825.5609796,
+    "ast_hash": "900158d42f3ba978060224b6dbab95fe",
+    "semantic_hash": "900158d42f3ba978060224b6dbab95fe"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase8.md": {
+    "mtime": 1779751633.6789007,
+    "ast_hash": "9907e8dba5a0a920b46d5c6071207aa0",
+    "semantic_hash": "9907e8dba5a0a920b46d5c6071207aa0"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase8_prep.md": {
+    "mtime": 1779728894.1601245,
+    "ast_hash": "45c4240220ebc0a9cc5741818547fc0f",
+    "semantic_hash": "45c4240220ebc0a9cc5741818547fc0f"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf12.md": {
+    "mtime": 1780002692.7564788,
+    "ast_hash": "82fe49ae82106cd5a270c2b04217541d",
+    "semantic_hash": "82fe49ae82106cd5a270c2b04217541d"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf13.md": {
+    "mtime": 1780006142.3341775,
+    "ast_hash": "76996518afae300a58b34b7448088358",
+    "semantic_hash": "76996518afae300a58b34b7448088358"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf14.md": {
+    "mtime": 1780014178.0310314,
+    "ast_hash": "e5d2e6e189e4573f7bc522af05a89a65",
+    "semantic_hash": "e5d2e6e189e4573f7bc522af05a89a65"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf15.md": {
+    "mtime": 1780088912.085648,
+    "ast_hash": "46862ca34c4d5876878506cc63563dec",
+    "semantic_hash": "46862ca34c4d5876878506cc63563dec"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf16.md": {
+    "mtime": 1780093750.3338661,
+    "ast_hash": "e351260547b576b550071858506d6536",
+    "semantic_hash": "e351260547b576b550071858506d6536"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf17.md": {
+    "mtime": 1780159133.05569,
+    "ast_hash": "292e4899a761caf18294d7f7649b6ce2",
+    "semantic_hash": "292e4899a761caf18294d7f7649b6ce2"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf18_bf20.md": {
+    "mtime": 1780269254.9428685,
+    "ast_hash": "9df303c549271e33082e1f14d9be0f5e",
+    "semantic_hash": "9df303c549271e33082e1f14d9be0f5e"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_bf19_bf21.md": {
+    "mtime": 1780419643.1265268,
+    "ast_hash": "9573a412a47a31606a12b544ff432220",
+    "semantic_hash": "9573a412a47a31606a12b544ff432220"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_m1.md": {
+    "mtime": 1780194278.9327242,
+    "ast_hash": "fd1fa0639e3686b99c437f1def504110",
+    "semantic_hash": "fd1fa0639e3686b99c437f1def504110"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_sa1.md": {
+    "mtime": 1780247858.344453,
+    "ast_hash": "9e9a6c68a5a20cb032862188f5b527e3",
+    "semantic_hash": "9e9a6c68a5a20cb032862188f5b527e3"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agent-memory/coordinator/project_jsa_phase_sa2.md": {
+    "mtime": 1780419643.126777,
+    "ast_hash": "aee4e33bde9deb5809234f350c3a3f80",
+    "semantic_hash": "aee4e33bde9deb5809234f350c3a3f80"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agents/architect.md": {
+    "mtime": 1778896216.3058772,
+    "ast_hash": "823cd41e029478ce1a47a72fd219483c",
+    "semantic_hash": "823cd41e029478ce1a47a72fd219483c"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agents/cl-research.md": {
+    "mtime": 1780247315.0747447,
+    "ast_hash": "17407aef233b6f9cb09399db77b40497",
+    "semantic_hash": "17407aef233b6f9cb09399db77b40497"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agents/coder.md": {
+    "mtime": 1778896216.3062115,
+    "ast_hash": "3ee56faa7edd0a534d0978e366108ed9",
+    "semantic_hash": "3ee56faa7edd0a534d0978e366108ed9"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agents/coordinator.md": {
+    "mtime": 1778955004.8798113,
+    "ast_hash": "97372aca696592e9de590b06436dd167",
+    "semantic_hash": "97372aca696592e9de590b06436dd167"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agents/cv-research.md": {
+    "mtime": 1780247315.0749173,
+    "ast_hash": "214c078cde70b71a1584c4f87d7bdf4b",
+    "semantic_hash": "214c078cde70b71a1584c4f87d7bdf4b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agents/reviewer.md": {
+    "mtime": 1780250822.063284,
+    "ast_hash": "9456f2db4377b8ed346f7515285a4e50",
+    "semantic_hash": "9456f2db4377b8ed346f7515285a4e50"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/.claude/agents/tester.md": {
+    "mtime": 1780250827.594003,
+    "ast_hash": "d35bd48dfc817e66f594d110a2ecb3a3",
+    "semantic_hash": "d35bd48dfc817e66f594d110a2ecb3a3"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/ARCH.md": {
+    "mtime": 1781307287.1602516,
+    "ast_hash": "8ec9c101f46b057d76c3af0c1cae1e75",
+    "semantic_hash": "8ec9c101f46b057d76c3af0c1cae1e75"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/CLAUDE.md": {
+    "mtime": 1781307287.160561,
+    "ast_hash": "c91060cba5d73e0fb722dce885f5d870",
+    "semantic_hash": "c91060cba5d73e0fb722dce885f5d870"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/COMMANDS.md": {
+    "mtime": 1781307287.160734,
+    "ast_hash": "f321d7f470d00c71e284640fa29a8d78",
+    "semantic_hash": "f321d7f470d00c71e284640fa29a8d78"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/PLAN.md": {
+    "mtime": 1780425722.0785806,
+    "ast_hash": "773caa1b42d387bb11aa21a62b2dc014",
+    "semantic_hash": "773caa1b42d387bb11aa21a62b2dc014"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/README.md": {
+    "mtime": 1779822203.380788,
+    "ast_hash": "e058b39b72bc0d57d281ac35045a5954",
+    "semantic_hash": "e058b39b72bc0d57d281ac35045a5954"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/TEST.md": {
+    "mtime": 1781307287.1609066,
+    "ast_hash": "49d22113a28a4f0a0817999b1ab07eef",
+    "semantic_hash": "49d22113a28a4f0a0817999b1ab07eef"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/frontend/index.html": {
+    "mtime": 1779583879.9055958,
+    "ast_hash": "6e00a295e180b2cd7bde122ccdba0fe8",
+    "semantic_hash": "6e00a295e180b2cd7bde122ccdba0fe8"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/CVL_PROMPT.md": {
+    "mtime": 1781307287.170996,
+    "ast_hash": "ce98cab7b15b0e7b60e1f1823fa8f895",
+    "semantic_hash": "ce98cab7b15b0e7b60e1f1823fa8f895"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/GEMINI_CL_RESEARCH.md": {
+    "mtime": 1780419643.1368349,
+    "ast_hash": "458ca97059dd7778cf83e50c612a263b",
+    "semantic_hash": "458ca97059dd7778cf83e50c612a263b"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/GEMINI_CV_RESEARCH.md": {
+    "mtime": 1780419643.1370807,
+    "ast_hash": "428c77b5b0e4efba332f1082e960e02a",
+    "semantic_hash": "428c77b5b0e4efba332f1082e960e02a"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/PROMPT_CDADJUST.md": {
+    "mtime": 1780422303.8475697,
+    "ast_hash": "2a47d6ce270dc7fe40a5698dbd6bcb15",
+    "semantic_hash": "2a47d6ce270dc7fe40a5698dbd6bcb15"
+  },
+  "/Users/wiam/VSCodeProjects/JSA/jsa/prompts/PROMPT_FIT_ASSESSMENT.md": {
+    "mtime": 1781307287.171531,
+    "ast_hash": "80cd0aeebdd4842169c0313f6c6b64de",
+    "semantic_hash": "80cd0aeebdd4842169c0313f6c6b64de"
+  }
+}

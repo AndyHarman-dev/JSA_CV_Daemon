@@ -1,6 +1,6 @@
 
 Test run:
-jsa --cv '/Users/wiam/Downloads/Andrei Kharlanchev CV (6) (1).pdf' --csv ~/test.csv --backends gemini-cli,claude-cli
+jsa --cv '/Users/wiam/Downloads/Andrei Kharlanchev CV (6) (1).pdf' --csv ~/test.csv --backends google-cli,claude-cli
 
 Remove stuff:
 rm -rf output
