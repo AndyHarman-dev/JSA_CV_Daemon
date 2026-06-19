@@ -1,5 +1,15 @@
 # AGENTS.md — JSA Project
 
+## Implementation Workflow
+
+Whenever asked to implement a feature, a plan phase, or any multi-step task:
+
+1. **Draft a todo list first.** Before writing any code, create a file at `./.opencode/todos/<feature-slug>.md` listing every concrete step as a checkbox. Example path: `./.opencode/todos/excel-table-migration.md`.
+2. **Work through the list.** After completing each step, tick its checkbox (`- [x]`) by editing the file, then continue to the next item. Keep the file as a live checklist throughout the session so the current state is always visible.
+3. **Clean up on approval.** Once the user confirms the implementation is accepted, delete the todo file with `rm ./.opencode/todos/<feature-slug>.md`.
+
+If a session is interrupted before approval, leave the todo file in place so the next session can resume from where it left off.
+
 ## Commands
 
 ```bash
@@ -58,3 +68,21 @@ Every backend implements `AgentBackend` ABC:
 - `restore_session(system_prompt, history, external_id) → SessionHandle`
 - `send_message(handle, text) → AgentReply`
 - `end_session(handle)`
+
+# Git Branch Policy
+
+This policy applies to every agent and every session, for any type of work (features, fixes, refactors, experiments, etc.).
+
+1. **Create a branch first.** Before writing any code or making any file changes, create a new git branch from the current base branch:
+   ```
+   git checkout -b <type>/<short-slug>
+   ```
+   Use a prefix that matches the work: `feat/`, `fix/`, `refactor/`, `chore/`, `experiment/`.
+
+2. **All work stays on that branch.** Never commit directly to `master`, `main`, `develop`, or any other shared branch. Every change, including intermediate commits, goes to the feature branch.
+
+3. **Do not merge without explicit user approval.** When the implementation is complete, present the branch name and a summary of changes, then ask the user whether to merge. Wait for an explicit "yes, merge it" (or equivalent) before running any merge or PR command.
+
+4. **If the user declines or redirects**, keep the branch as-is and note its name so work can be resumed or discarded later.
+
+5. **At the end of your work, mention which branch you branched from**
