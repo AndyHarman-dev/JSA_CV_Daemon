@@ -41,7 +41,7 @@ class HistoryTurn:
 
 
 class AgentBackend(ABC):
-    name: str                                   # "claude-cli" | "gemini-cli" | "anthropic"
+    name: str                                   # "claude-cli" | "google-cli" | "anthropic"
 
     @abstractmethod
     async def start_session(

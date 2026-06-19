@@ -25,7 +25,7 @@ from jsa.server import create_app
 
 app = typer.Typer(help="JSA — Job Search Assistant")
 
-_VALID_BACKENDS = {"claude-cli", "gemini-cli", "anthropic"}  # kept for fast validation before registry import
+_VALID_BACKENDS = {"claude-cli", "google-cli", "anthropic"}  # kept for fast validation before registry import
 
 
 def _start_tunnel(port: int) -> None:
@@ -85,8 +85,8 @@ def main(
         readable=True,
     ),
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory for generated PDFs"),
-    backend: Optional[str] = typer.Option(None, "--backend", help="AI backend (single): claude-cli | gemini-cli | anthropic (backward-compat alias for --backends)"),
-    backends: Optional[str] = typer.Option(None, "--backends", help="Comma-separated ordered backend chain, e.g. claude-cli,gemini-cli"),
+    backend: Optional[str] = typer.Option(None, "--backend", help="AI backend (single): claude-cli | google-cli | anthropic (backward-compat alias for --backends)"),
+    backends: Optional[str] = typer.Option(None, "--backends", help="Comma-separated ordered backend chain, e.g. claude-cli,google-cli"),
     db: Optional[Path] = typer.Option(None, "--db", help="SQLite database path"),
     port: Optional[int] = typer.Option(None, "--port", help="Port for the local web server"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser on start", is_flag=True),

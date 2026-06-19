@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from jsa.agents.base import AgentReply, HistoryTurn, SessionHandle
-from jsa.agents.gemini_cli import GeminiSessionExpiredError
+from jsa.agents.google_cli import GoogleCliSessionExpiredError
 from jsa.db import repo
 from jsa.db.models import (
     Base,
@@ -505,11 +505,11 @@ class TestAwaitingInputResume:
 # ---------------------------------------------------------------------------
 
 
-class TestGeminiSessionExpiredAutoRecovery:
+class TestGoogleSessionExpiredAutoRecovery:
     async def test_auto_resets_once_then_fails_permanently(self, session_factory):
-        """GeminiSessionExpiredError triggers one auto soft-reset; second expiry → failed.
+        """GoogleCliSessionExpiredError triggers one auto soft-reset; second expiry → failed.
 
-        A backend that always raises GeminiSessionExpiredError will cause:
+        A backend that always raises GoogleCliSessionExpiredError will cause:
         - First run: job is pending (retry_count=0) → auto soft-reset → pending (retry_count=1)
         - Second run: retry_count=1 > 0 → no further reset → job stays failed
         """
@@ -521,7 +521,7 @@ class TestGeminiSessionExpiredAutoRecovery:
 
             async def start_session(self, system_prompt, initial_user_msg):
                 call_count[0] += 1
-                raise GeminiSessionExpiredError(
+                raise GoogleCliSessionExpiredError(
                     f"Gemini session not found (test call #{call_count[0]})"
                 )
 
@@ -542,7 +542,7 @@ class TestGeminiSessionExpiredAutoRecovery:
         assert call_count[0] == 2
 
     async def test_no_auto_reset_when_already_retried(self, session_factory):
-        """If retry_count is already >0, a GeminiSessionExpiredError marks the job failed immediately."""
+        """If retry_count is already >0, a GoogleCliSessionExpiredError marks the job failed immediately."""
         job = await _insert_job(session_factory)
 
         # Manually bump retry_count to simulate a previously auto-recovered job
@@ -556,7 +556,7 @@ class TestGeminiSessionExpiredAutoRecovery:
                 super().__init__([])
 
             async def start_session(self, system_prompt, initial_user_msg):
-                raise GeminiSessionExpiredError("Gemini session not found (test)")
+                raise GoogleCliSessionExpiredError("Gemini session not found (test)")
 
         orch = Orchestrator(
             db_session_factory=session_factory,

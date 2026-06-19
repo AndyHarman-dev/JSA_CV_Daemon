@@ -82,7 +82,7 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | `--csv` | required | — | Path to the jobs CSV file |
 | `--cv` | required | — | Path to your CV (`.pdf` or `.docx`) |
 | `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where PDFs are written on approval |
-| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend: `claude-cli` \| `gemini-cli` \| `anthropic` |
+| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend: `claude-cli` \| `google-cli` \| `anthropic` |
 | `--db` | `~/.jsa/jsa.sqlite` | `JSA_DB_PATH` | SQLite database path |
 | `--port` | `8765` | `JSA_PORT` | Port for the local web server |
 | `--no-browser` | false | — | Skip opening the browser automatically |
@@ -101,14 +101,12 @@ Download and authenticate: [https://claude.ai/download](https://claude.ai/downlo
 jsa --csv jobs.csv --cv resume.pdf --backend claude-cli
 ```
 
-### `gemini-cli`
+### `google-cli`
 
-Uses the `gemini` CLI tool as a subprocess. Requires `gemini` to be installed.
-
-Setup instructions: [Google AI Studio](https://aistudio.google.com/)
+Uses the `agy` (Google Antigravity) CLI tool as a subprocess. Requires `agy` to be installed and authenticated.
 
 ```bash
-jsa --csv jobs.csv --cv resume.pdf --backend gemini-cli
+jsa --csv jobs.csv --cv resume.pdf --backend google-cli
 ```
 
 ### `anthropic`

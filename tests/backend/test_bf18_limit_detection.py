@@ -4,7 +4,7 @@ Tests cover:
 1. AgentLimitReached is importable and is a RuntimeError subclass.
 2. ClaudeCliBackend._parse_with_nudge detects limit keywords and raises AgentLimitReached.
 3. ClaudeCliBackend._parse_with_nudge proceeds with nudge when no limit keyword is present.
-4. GeminiCliBackend._parse_with_nudge detects limit keywords and raises AgentLimitReached.
+4. GoogleCliBackend._parse_with_nudge detects limit keywords and raises AgentLimitReached.
 5. AnthropicAPIBackend._call_api catches anthropic.RateLimitError and raises AgentLimitReached.
 6. Orchestrator._run_one catches AgentLimitReached and marks the job failed with the correct message.
 """
@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from jsa.agents.anthropic_api import AnthropicAPIBackend
 from jsa.agents.base import AgentLimitReached, AgentReply
 from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
-from jsa.agents.gemini_cli import GeminiCliBackend, GeminiSessionHandle
+from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
 from jsa.db import repo
 from jsa.db.models import Base, Job, JobState, Stage
 from jsa.pipeline.orchestrator import Orchestrator
@@ -164,52 +164,52 @@ class TestClaudeCliLimitKeywordDetection:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: GeminiCliBackend._parse_with_nudge detects limit keywords
+# Test 3: GoogleCliBackend._parse_with_nudge detects limit keywords
 # ---------------------------------------------------------------------------
 
 
-class ScriptedGeminiBackend(GeminiCliBackend):
-    """Test double: GeminiCliBackend with scripted _run responses."""
+class ScriptedGoogleBackend(GoogleCliBackend):
+    """Test double: GoogleCliBackend with scripted _run responses."""
 
     def __init__(self, run_responses: list[dict]) -> None:
         super().__init__(timeout=5.0)
         self._run_responses: list[dict] = list(run_responses)
         self.run_call_count: int = 0
 
-    def _run(self, cmd: list[str], context: str = "") -> dict:
+    def _run(self, cmd: list[str], context: str = "", timeout=None, log_path=None) -> dict:
         self.run_call_count += 1
         if not self._run_responses:
-            raise IndexError("ScriptedGeminiBackend: no more scripted _run responses")
+            raise IndexError("ScriptedGoogleBackend: no more scripted _run responses")
         return self._run_responses.pop(0)
 
 
-class TestGeminiCliLimitKeywordDetection:
-    """Tests for GeminiCliBackend._parse_with_nudge limit keyword detection."""
+class TestGoogleCliLimitKeywordDetection:
+    """Tests for GoogleCliBackend._parse_with_nudge limit keyword detection."""
 
     async def test_usage_limit_keyword_raises_agent_limit_reached(self):
         """Raw output containing 'usage limit' raises AgentLimitReached."""
-        backend = ScriptedGeminiBackend(run_responses=[])
+        backend = ScriptedGoogleBackend(run_responses=[])
         raw = "You have reached your usage limit for this billing cycle."
         with pytest.raises(AgentLimitReached):
             await backend._parse_with_nudge("test-session", raw)
 
     async def test_rate_limit_keyword_raises_agent_limit_reached(self):
         """Raw output containing 'rate limit' raises AgentLimitReached."""
-        backend = ScriptedGeminiBackend(run_responses=[])
+        backend = ScriptedGoogleBackend(run_responses=[])
         raw = "The API rate limit has been exceeded."
         with pytest.raises(AgentLimitReached):
             await backend._parse_with_nudge("test-session", raw)
 
     async def test_quota_keyword_raises_agent_limit_reached(self):
         """Raw output containing 'quota' raises AgentLimitReached."""
-        backend = ScriptedGeminiBackend(run_responses=[])
+        backend = ScriptedGoogleBackend(run_responses=[])
         raw = "Your quota for this service has been exhausted."
         with pytest.raises(AgentLimitReached):
             await backend._parse_with_nudge("test-session", raw)
 
     async def test_no_limit_keyword_proceeds_to_nudge_gemini(self):
         """Without limit keyword, missing-sentinel error triggers nudge for Gemini."""
-        backend = ScriptedGeminiBackend(
+        backend = ScriptedGoogleBackend(
             run_responses=[{"response": "<<<FINAL>>>\nsome content\n<<<END>>>"}]
         )
         raw = "Plain response without sentinel block."
@@ -222,7 +222,7 @@ class TestGeminiCliLimitKeywordDetection:
 
     async def test_gemini_limit_keyword_skips_nudge(self):
         """When limit keyword is detected, no nudge subprocess call is made for Gemini."""
-        backend = ScriptedGeminiBackend(run_responses=[])  # no nudge response
+        backend = ScriptedGoogleBackend(run_responses=[])  # no nudge response
         raw = "API rate limit exceeded. Please retry after some time."
         with pytest.raises(AgentLimitReached):
             await backend._parse_with_nudge("test-session", raw)

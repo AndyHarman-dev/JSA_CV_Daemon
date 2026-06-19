@@ -816,7 +816,7 @@ async def _gather_research(job: Job, backend: AgentBackend, stage: Stage) -> str
     """Return a research brief block to inject into the initial user message.
 
     Any backend that implements ``run_research`` (e.g. ClaudeCliBackend,
-    GeminiCliBackend) will have it invoked here.  Any backend without
+    GoogleCliBackend) will have it invoked here.  Any backend without
     ``run_research``, or any research failure, yields the NONE placeholder so
     the main prompt's single code path falls back to asking the user directly.
     Research is best-effort and never fails the job.

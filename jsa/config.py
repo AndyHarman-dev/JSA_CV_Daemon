@@ -11,14 +11,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JSA_")
 
     output_dir: Path = Path("output")
-    backend: str = "claude-cli"          # claude-cli | gemini-cli | anthropic (kept for backward compat)
+    backend: str = "claude-cli"          # claude-cli | google-cli | anthropic (kept for backward compat)
     backends: List[str] = ["claude-cli"]  # Ordered chain; backends[0] is the primary
     db_path: Path = Path.home() / ".jsa" / "jsa.sqlite"
     port: int = 8765
     no_browser: bool = False
     model: str = "claude-haiku-4-5"       # Claude model ID for claude-cli and anthropic backends; overridable via JSA_MODEL
     anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT
-    agent_timeout: float = 300.0         # Timeout for CLI backends (claude-cli, gemini-cli), via JSA_AGENT_TIMEOUT
+    agent_timeout: float = 300.0         # Timeout for CLI backends (claude-cli, google-cli), via JSA_AGENT_TIMEOUT
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
     dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
 

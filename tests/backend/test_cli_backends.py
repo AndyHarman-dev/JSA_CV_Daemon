@@ -1,15 +1,15 @@
-"""Unit tests for CLI backends: ClaudeCliBackend and GeminiCliBackend.
+"""Unit tests for CLI backends: ClaudeCliBackend and GoogleCliBackend.
 
 ClaudeCliBackend: uses subprocess -p mode (no ptyprocess).
   - subprocess.run is patched at jsa.agents.claude_cli.subprocess.run.
 
-GeminiCliBackend: uses subprocess -p mode with -o json (no ptyprocess).
-  - subprocess.run is patched at jsa.agents.gemini_cli.subprocess.run.
+GoogleCliBackend: uses subprocess -p mode, plain-text stdout (no ptyprocess, no -o json).
+  - subprocess.run is patched at jsa.agents.google_cli.subprocess.run.
+  - Session ID extracted from --log-file; patched via _extract_conversation_id in unit tests.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -18,7 +18,7 @@ import pytest
 
 from jsa.agents.base import AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
-from jsa.agents.gemini_cli import GeminiCliBackend, GeminiSessionHandle
+from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
 from jsa.agents.registry import backend_for
 
 
@@ -40,15 +40,13 @@ def _make_mock_subprocess(stdout: bytes = _FINAL_BYTES, returncode: int = 0) -> 
     return proc
 
 
-def _make_gemini_mock_proc(
+def _make_google_mock_proc(
     response_text: str = _FINAL_TEXT,
-    session_id: str = "test-session-uuid",
     returncode: int = 0,
 ) -> MagicMock:
-    """Return a mock subprocess.CompletedProcess with JSON stdout for Gemini."""
-    data = {"session_id": session_id, "response": response_text, "stats": {}}
+    """Return a mock subprocess.CompletedProcess with plain-text stdout for agy."""
     proc = MagicMock()
-    proc.stdout = json.dumps(data).encode()
+    proc.stdout = response_text.encode()
     proc.stderr = b""
     proc.returncode = returncode
     return proc
@@ -316,254 +314,239 @@ class TestBackendForClaudeCli:
 
 
 # ---------------------------------------------------------------------------
-# GeminiCliBackend (rewritten — now uses subprocess -p mode with -o json)
+# GoogleCliBackend (agy subprocess -p mode, plain-text output)
 # ---------------------------------------------------------------------------
 
-class TestGeminiCliBackendImport:
+class TestGoogleCliBackendImport:
     """Test 9 — module import and name attribute."""
 
     def test_import_does_not_raise(self):
-        from jsa.agents.gemini_cli import GeminiCliBackend as GCB
-        assert GCB is GeminiCliBackend
+        from jsa.agents.google_cli import GoogleCliBackend as GCB
+        assert GCB is GoogleCliBackend
 
-    def test_name_attribute_is_gemini_cli(self):
-        assert GeminiCliBackend.name == "gemini-cli"
+    def test_name_attribute_is_google_cli(self):
+        assert GoogleCliBackend.name == "google-cli"
 
 
-class TestGeminiSessionHandle:
-    """Structural test — GeminiSessionHandle fields (subprocess era: no pty field)."""
+class TestGoogleSessionHandle:
+    """Structural test — GoogleSessionHandle fields (subprocess era: no pty field)."""
 
     def test_fields_id_and_external_id_exist(self):
-        handle = GeminiSessionHandle(id="g-id", external_id="ext")
+        handle = GoogleSessionHandle(id="g-id", external_id="ext")
         assert handle.id == "g-id"
         assert handle.external_id == "ext"
 
     def test_is_subclass_of_session_handle(self):
-        handle = GeminiSessionHandle(id="g-id", external_id=None)
+        handle = GoogleSessionHandle(id="g-id", external_id=None)
         assert isinstance(handle, SessionHandle)
 
     def test_external_id_can_be_none(self):
-        handle = GeminiSessionHandle(id="x", external_id=None)
+        handle = GoogleSessionHandle(id="x", external_id=None)
         assert handle.external_id is None
 
     def test_no_pty_field(self):
-        """GeminiSessionHandle must not have a pty field after subprocess rewrite."""
-        handle = GeminiSessionHandle(id="g-id", external_id="ext")
+        """GoogleSessionHandle must not have a pty field after subprocess rewrite."""
+        handle = GoogleSessionHandle(id="g-id", external_id="ext")
         assert not hasattr(handle, "pty")
 
 
-class TestGeminiStartSession:
-    """Test 10 — start_session returns (GeminiSessionHandle, AgentReply)."""
+class TestGoogleStartSession:
+    """Test 10 — start_session returns (GoogleSessionHandle, AgentReply)."""
 
     async def test_returns_tuple_of_handle_and_reply(self):
-        mock_proc = _make_gemini_mock_proc()
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc):
-            backend = GeminiCliBackend(timeout=5.0)
+        mock_proc = _make_google_mock_proc()
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+             patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
+            backend = GoogleCliBackend(timeout=5.0)
             result = await backend.start_session("sys", "user")
 
         assert isinstance(result, tuple)
         assert len(result) == 2
 
-    async def test_handle_is_gemini_session_handle(self):
-        mock_proc = _make_gemini_mock_proc()
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc):
-            backend = GeminiCliBackend(timeout=5.0)
+    async def test_handle_is_google_session_handle(self):
+        mock_proc = _make_google_mock_proc()
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+             patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
+            backend = GoogleCliBackend(timeout=5.0)
             handle, _reply = await backend.start_session("sys", "user")
 
-        assert isinstance(handle, GeminiSessionHandle)
+        assert isinstance(handle, GoogleSessionHandle)
 
     async def test_reply_kind_is_final(self):
-        mock_proc = _make_gemini_mock_proc()
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc):
-            backend = GeminiCliBackend(timeout=5.0)
+        mock_proc = _make_google_mock_proc()
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+             patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
+            backend = GoogleCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
 
         assert reply.kind == "final"
 
     async def test_reply_content_contains_expected_text(self):
-        mock_proc = _make_gemini_mock_proc()
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc):
-            backend = GeminiCliBackend(timeout=5.0)
+        mock_proc = _make_google_mock_proc()
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+             patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
+            backend = GoogleCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
 
         assert "my cv" in reply.content
 
-    async def test_subprocess_called_with_skip_trust_flag(self):
-        mock_proc = _make_gemini_mock_proc()
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc) as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
+    async def test_subprocess_called_with_dangerously_skip_permissions_flag(self):
+        mock_proc = _make_google_mock_proc()
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+             patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
+            backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("sys", "user message")
 
         cmd = mock_run.call_args.args[0]
-        assert "--skip-trust" in cmd
+        assert "--dangerously-skip-permissions" in cmd
 
-    async def test_subprocess_called_with_session_id_flag(self):
-        mock_proc = _make_gemini_mock_proc()
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc) as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
+    async def test_subprocess_called_with_log_file_flag(self):
+        mock_proc = _make_google_mock_proc()
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+             patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
+            backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("sys", "user message")
 
         cmd = mock_run.call_args.args[0]
-        assert "--session-id" in cmd
+        assert "--log-file" in cmd
 
-    async def test_subprocess_called_with_o_json_flag(self):
-        mock_proc = _make_gemini_mock_proc()
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc) as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
-            await backend.start_session("sys", "user message")
-
-        cmd = mock_run.call_args.args[0]
-        assert "-o" in cmd
-        assert "json" in cmd
-
-    async def test_handle_external_id_set_from_json_session_id(self):
-        mock_proc = _make_gemini_mock_proc(session_id="from-json-uuid")
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc):
-            backend = GeminiCliBackend(timeout=5.0)
+    async def test_handle_external_id_set_from_log_extraction(self):
+        mock_proc = _make_google_mock_proc()
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+             patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="extracted-conv-uuid"):
+            backend = GoogleCliBackend(timeout=5.0)
             handle, _ = await backend.start_session("sys", "user")
 
-        assert handle.external_id == "from-json-uuid"
+        assert handle.external_id == "extracted-conv-uuid"
 
 
-class TestGeminiRestoreSession:
+class TestGoogleRestoreSession:
     """Tests 11 + 12 — restore_session uses native --resume (no subprocess needed)."""
 
     async def test_with_external_id_no_subprocess_called(self):
         """Test 11 — with external_id, no subprocess is spawned."""
-        with patch("jsa.agents.gemini_cli.subprocess.run") as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
+        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+            backend = GoogleCliBackend(timeout=5.0)
             await backend.restore_session("sys", [], "xyz")
 
         mock_run.assert_not_called()
 
-    async def test_with_external_id_returns_gemini_session_handle(self):
-        backend = GeminiCliBackend(timeout=5.0)
+    async def test_with_external_id_returns_google_session_handle(self):
+        backend = GoogleCliBackend(timeout=5.0)
         handle = await backend.restore_session("sys", [], "xyz")
 
-        assert isinstance(handle, GeminiSessionHandle)
+        assert isinstance(handle, GoogleSessionHandle)
 
     async def test_with_external_id_preserved_in_handle(self):
-        backend = GeminiCliBackend(timeout=5.0)
+        backend = GoogleCliBackend(timeout=5.0)
         handle = await backend.restore_session("sys", [], "xyz")
 
         assert handle.external_id == "xyz"
 
     async def test_without_external_id_raises_runtime_error(self):
         """Test 12 — without external_id, RuntimeError is raised."""
-        backend = GeminiCliBackend(timeout=5.0)
+        backend = GoogleCliBackend(timeout=5.0)
         with pytest.raises(RuntimeError, match="external_id is None"):
             await backend.restore_session("sys", [], None)
 
     async def test_without_external_id_no_subprocess_called(self):
-        with patch("jsa.agents.gemini_cli.subprocess.run") as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
+        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+            backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(RuntimeError):
                 await backend.restore_session("sys", [], None)
 
         mock_run.assert_not_called()
 
 
-class TestBackendForGeminiCli:
-    """Test 13 — backend_for("gemini-cli") returns a GeminiCliBackend instance."""
+class TestBackendForGoogleCli:
+    """Test 13 — backend_for("google-cli") returns a GoogleCliBackend instance."""
 
-    def test_backend_for_gemini_cli_returns_gemini_cli_backend(self):
-        instance = backend_for("gemini-cli")
-        assert isinstance(instance, GeminiCliBackend)
+    def test_backend_for_google_cli_returns_google_cli_backend(self):
+        instance = backend_for("google-cli")
+        assert isinstance(instance, GoogleCliBackend)
 
 
-class TestGeminiEndSession:
+class TestGoogleEndSession:
     """end_session is a no-op (subprocess already exited)."""
 
     async def test_end_session_is_noop(self):
-        handle = GeminiSessionHandle(id="h1", external_id="uuid")
-        backend = GeminiCliBackend(timeout=5.0)
+        handle = GoogleSessionHandle(id="h1", external_id="uuid")
+        backend = GoogleCliBackend(timeout=5.0)
         # Must not raise
         await backend.end_session(handle)
 
     async def test_no_subprocess_called(self):
-        handle = GeminiSessionHandle(id="h1", external_id="uuid")
-        with patch("jsa.agents.gemini_cli.subprocess.run") as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
+        handle = GoogleSessionHandle(id="h1", external_id="uuid")
+        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+            backend = GoogleCliBackend(timeout=5.0)
             await backend.end_session(handle)
 
         mock_run.assert_not_called()
 
 
-class TestGeminiSendMessage:
-    """send_message uses --resume mode with -o json, returns AgentReply."""
+class TestGoogleSendMessage:
+    """send_message uses --conversation mode, plain-text output, returns AgentReply."""
 
     async def test_final_reply_returned(self):
-        mock_proc = _make_gemini_mock_proc()
-        handle = GeminiSessionHandle(id="h1", external_id="sess-uuid")
+        mock_proc = _make_google_mock_proc()
+        handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc):
-            backend = GeminiCliBackend(timeout=5.0)
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc):
+            backend = GoogleCliBackend(timeout=5.0)
             reply = await backend.send_message(handle, "text")
 
         assert reply.kind == "final"
 
     async def test_needs_input_reply_on_need_input_output(self):
         need_input_text = "<<<NEED_INPUT>>>\nWhat is your target role?\n<<<END>>>\n"
-        mock_proc = _make_gemini_mock_proc(response_text=need_input_text)
-        handle = GeminiSessionHandle(id="h1", external_id="sess-uuid")
+        mock_proc = _make_google_mock_proc(response_text=need_input_text)
+        handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc):
-            backend = GeminiCliBackend(timeout=5.0)
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc):
+            backend = GoogleCliBackend(timeout=5.0)
             reply = await backend.send_message(handle, "my answer")
 
         assert reply.kind == "needs_input"
         assert "target role" in reply.question
 
-    async def test_subprocess_called_with_resume_flag(self):
-        mock_proc = _make_gemini_mock_proc()
-        handle = GeminiSessionHandle(id="h1", external_id="sess-uuid")
+    async def test_subprocess_called_with_conversation_flag(self):
+        mock_proc = _make_google_mock_proc()
+        handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc) as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = GoogleCliBackend(timeout=5.0)
             await backend.send_message(handle, "my message")
 
         cmd = mock_run.call_args.args[0]
-        assert "--resume" in cmd
+        assert "--conversation" in cmd
         assert "sess-uuid" in cmd
 
-    async def test_subprocess_called_with_skip_trust_flag(self):
-        mock_proc = _make_gemini_mock_proc()
-        handle = GeminiSessionHandle(id="h1", external_id="sess-uuid")
+    async def test_subprocess_called_with_dangerously_skip_permissions_flag(self):
+        mock_proc = _make_google_mock_proc()
+        handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc) as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = GoogleCliBackend(timeout=5.0)
             await backend.send_message(handle, "my message")
 
         cmd = mock_run.call_args.args[0]
-        assert "--skip-trust" in cmd
+        assert "--dangerously-skip-permissions" in cmd
 
     async def test_subprocess_called_with_p_flag_and_message(self):
-        mock_proc = _make_gemini_mock_proc()
-        handle = GeminiSessionHandle(id="h1", external_id="sess-uuid")
+        mock_proc = _make_google_mock_proc()
+        handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc) as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
-            await backend.send_message(handle, "hello gemini")
+        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = GoogleCliBackend(timeout=5.0)
+            await backend.send_message(handle, "hello agy")
 
         cmd = mock_run.call_args.args[0]
         assert "-p" in cmd
-        assert "hello gemini" in cmd
-
-    async def test_subprocess_called_with_o_json_flag(self):
-        mock_proc = _make_gemini_mock_proc()
-        handle = GeminiSessionHandle(id="h1", external_id="sess-uuid")
-
-        with patch("jsa.agents.gemini_cli.subprocess.run", return_value=mock_proc) as mock_run:
-            backend = GeminiCliBackend(timeout=5.0)
-            await backend.send_message(handle, "text")
-
-        cmd = mock_run.call_args.args[0]
-        assert "-o" in cmd
-        assert "json" in cmd
+        assert "hello agy" in cmd
 
     async def test_raises_when_external_id_is_none(self):
-        handle = GeminiSessionHandle(id="h1", external_id=None)
-        backend = GeminiCliBackend(timeout=5.0)
+        handle = GoogleSessionHandle(id="h1", external_id=None)
+        backend = GoogleCliBackend(timeout=5.0)
 
         with pytest.raises(RuntimeError, match="external_id is None"):
             await backend.send_message(handle, "msg")
@@ -587,13 +570,13 @@ class TestAgentTimeoutPropagation:
             with pytest.raises(AgentTimeout):
                 await backend.start_session("sys", "msg")
 
-    async def test_gemini_cli_backend_raises_agent_timeout(self):
-        """GeminiCliBackend.start_session raises AgentTimeout (not subprocess.TimeoutExpired,
+    async def test_google_cli_backend_raises_agent_timeout(self):
+        """GoogleCliBackend.start_session raises AgentTimeout (not subprocess.TimeoutExpired,
         not ProtocolError) when the subprocess times out."""
         with patch(
-            "jsa.agents.gemini_cli.subprocess.run",
+            "jsa.agents.google_cli.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["gemini"], timeout=0.001),
         ):
-            backend = GeminiCliBackend(timeout=0.001)
+            backend = GoogleCliBackend(timeout=0.001)
             with pytest.raises(AgentTimeout):
                 await backend.start_session("sys", "msg")

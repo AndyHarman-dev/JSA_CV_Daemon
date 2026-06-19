@@ -12,7 +12,7 @@ from typing import Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.agents.base import AgentBackend, AgentLimitReached
-from jsa.agents.gemini_cli import GeminiSessionExpiredError
+from jsa.agents.google_cli import GoogleCliSessionExpiredError
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
 from jsa.events.bus import bus
@@ -250,8 +250,8 @@ class Orchestrator:
             logger.warning("_run_one: job %s hit backend limit: %s", job_id, exc)
             await self._handle_limit_reached(job_id, exc)
 
-        except GeminiSessionExpiredError as exc:
-            logger.warning("_run_one: job %s gemini session expired, attempting auto-recovery", job_id)
+        except GoogleCliSessionExpiredError as exc:
+            logger.warning("_run_one: job %s google session expired, attempting auto-recovery", job_id)
             await self._handle_session_expired(job_id, exc)
 
         except Exception as exc:
@@ -351,7 +351,7 @@ class Orchestrator:
             )
 
     async def _handle_session_expired(self, job_id: str, exc: Exception) -> None:
-        """Auto-soft-reset once on Gemini session expiry; fail permanently on second try.
+        """Auto-soft-reset once on Google CLI session expiry; fail permanently on second try.
 
         soft_reset_job sets retry_count=1. If session expires again on the retry,
         retry_count>0 so we leave the job failed rather than looping.
@@ -374,7 +374,7 @@ class Orchestrator:
                             LogEvent(
                                 job_id=job_id,
                                 level="warn",
-                                text="Gemini session expired — auto-retrying from scratch",
+                                text="Google CLI session expired — auto-retrying from scratch",
                             )
                         )
                     )

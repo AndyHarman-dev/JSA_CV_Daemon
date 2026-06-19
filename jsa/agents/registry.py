@@ -31,10 +31,10 @@ def backend_for(name: str, **kwargs: object) -> "AgentBackend":
 
 # Register CLI backends
 from jsa.agents.claude_cli import ClaudeCliBackend  # noqa: E402
-from jsa.agents.gemini_cli import GeminiCliBackend  # noqa: E402
+from jsa.agents.google_cli import GoogleCliBackend  # noqa: E402
 
 register("claude-cli", ClaudeCliBackend)
-register("gemini-cli", GeminiCliBackend)
+register("google-cli", GoogleCliBackend)
 
 from jsa.agents.anthropic_api import AnthropicAPIBackend  # noqa: E402
 
