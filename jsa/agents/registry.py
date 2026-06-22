@@ -37,7 +37,5 @@ register("claude-cli", ClaudeCliBackend)
 register("google-cli", GoogleCliBackend)
 
 from jsa.agents.anthropic_api import AnthropicAPIBackend  # noqa: E402
-from jsa.agents.opencode_cli import OpenCodeCliBackend  # noqa: E402
 
 register("anthropic", AnthropicAPIBackend)
-register("opencode-cli", OpenCodeCliBackend)
