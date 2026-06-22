@@ -833,8 +833,14 @@ async def _gather_research(job: Job, backend: AgentBackend, stage: Stage) -> str
         )
         text = await backend.run_research(agent_name, query)
         text = text.strip()
-        # Trust the agent's own tags if present; otherwise fall back to placeholder.
-        return text if open_tag in text else _research_placeholder(stage)
+        if open_tag in text:
+            return text
+        logger.warning(
+            "run_research for job %s (%s) returned output missing expected tag %r; "
+            "falling back to research placeholder",
+            job.id, agent_name, open_tag,
+        )
+        return _research_placeholder(stage)
     except Exception as exc:  # research is best-effort; never fail the job
         logger.warning(
             "research failed for job %s (%s): %s", job.id, agent_name, exc
