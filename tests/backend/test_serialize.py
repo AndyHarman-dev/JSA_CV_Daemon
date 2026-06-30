@@ -171,8 +171,8 @@ class TestLayoutPolicies:
         assert "**Languages:** C++, Python, Go" in md
         assert "**Tools:** Docker, K8s" in md
 
-    def test_summary_floated_to_top(self):
-        # A Summary section is rendered first even if the model lists it later.
+    def test_section_order_preserved_summary_last(self):
+        # Section order is the user's call — the serializer never reorders, even Summary.
         cv = CVDocument.model_validate({
             "contact": {"name": "A", "email": "a@x.com"},
             "sections": [
@@ -181,7 +181,27 @@ class TestLayoutPolicies:
             ],
         })
         md = cv_to_markdown(cv)
-        assert md.index("## Profile") < md.index("## Skills")
+        assert md.index("## Skills") < md.index("## Profile")
+
+    def test_section_order_preserved_summary_in_middle(self):
+        # Regression: a curated structure that places Summary mid-list must render that way
+        # (this is the exact shape the LLM emitted for a real job before the fix).
+        cv = CVDocument.model_validate({
+            "contact": {"name": "A", "email": "a@x.com"},
+            "sections": [
+                {"name": "Skills", "items": ["C++"]},
+                {"name": "Experience", "text": "Did stuff."},
+                {"name": "Summary", "text": "Seasoned engineer."},
+                {"name": "Projects", "text": "Built things."},
+            ],
+        })
+        md = cv_to_markdown(cv)
+        assert (
+            md.index("## Skills")
+            < md.index("## Experience")
+            < md.index("## Summary")
+            < md.index("## Projects")
+        )
 
 
 class TestContentKindGuards:

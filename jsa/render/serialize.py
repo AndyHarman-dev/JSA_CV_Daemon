@@ -7,9 +7,10 @@ byte-identical Markdown, which is what makes the output consistent run-to-run.
 
 Sections are uniform (see jsa/schema/cv.py): each may carry free ``text``, a flat
 ``items`` list, and/or structured ``entries``. The serializer dispatches on which of
-those are populated. Two layout policies the program enforces regardless of what the
+those are populated. ``cv.sections`` order is rendered verbatim — section order is the
+user's call (curated in the Structure Editor, or as the model emitted it), never the
+serializer's. The one layout policy the program still enforces regardless of what the
 model emits:
-  - a Summary/Profile section is floated to the top (and the prompt asks for one);
   - a Skills/Technologies section is rendered compactly (one line per group, comma-
     joined) rather than one item per line, so it doesn't fill the page.
 
@@ -30,8 +31,7 @@ from jsa.schema import CoverLetter, CVDocument, Entry, Section
 # instead of a comma-joined line.
 _ITEM_INLINE_MAX = 60
 
-# Section-name heuristics (the program owns these layout decisions, not the model).
-_SUMMARY_RE = re.compile(r"\b(summary|profile|objective|about|overview)\b", re.I)
+# Section-name heuristic (the program owns this layout decision, not the model).
 _SKILLS_RE = re.compile(
     r"\b(skills?|technolog|competenc|tool|expertise|proficienc|tech\s*stack|stack)\b", re.I
 )
@@ -130,19 +130,12 @@ def _section_body(section: Section) -> str:
     return "\n\n".join(blocks).strip()
 
 
-def _ordered_sections(cv: CVDocument) -> list[Section]:
-    """Float a Summary/Profile section to the top; otherwise preserve order (stable)."""
-    summaries = [s for s in cv.sections if _SUMMARY_RE.search(s.name or "")]
-    rest = [s for s in cv.sections if not _SUMMARY_RE.search(s.name or "")]
-    return summaries + rest
-
-
 def cv_to_markdown(cv: CVDocument) -> str:
     """Render a validated CVDocument to canonical Markdown."""
     parts: list[str] = [f"# {cv.contact.name.strip()}", _contact_line(cv)]
     out = "\n".join(p for p in parts if p)
 
-    for section in _ordered_sections(cv):
+    for section in cv.sections:
         body = _section_body(section)
         if not body:
             continue

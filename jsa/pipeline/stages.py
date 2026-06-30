@@ -216,11 +216,13 @@ _CL_CORRECTION = (
 # rather than failing the job (a missing summary is thinness, not corruption).
 _CV_SUMMARY_NUDGE = (
     "Your CV JSON is valid but is missing a Summary section. Re-emit the SAME CV with one "
-    "change: add a section named \"Summary\" as the FIRST entry in `sections`, with a `text` "
-    "value holding a 2–3 sentence professional summary tailored to this role and drawn from "
-    "the candidate's own experience (do not invent facts). Keep everything else identical. "
-    "Emit the complete CV JSON object inside one <<<FINAL>>>...<<<END>>> block — no Markdown, "
-    "no commentary, no code fences."
+    "change: add a section named \"Summary\" to `sections`, with a `text` value holding a "
+    "2–3 sentence professional summary tailored to this role and drawn from the candidate's "
+    "own experience (do not invent facts). If a base CV structure was provided, insert it "
+    "wherever that structure placed (or would place) a Summary; otherwise put it first. Keep "
+    "everything else, including the order of every other section, identical. Emit the "
+    "complete CV JSON object inside one <<<FINAL>>>...<<<END>>> block — no Markdown, no "
+    "commentary, no code fences."
 )
 
 

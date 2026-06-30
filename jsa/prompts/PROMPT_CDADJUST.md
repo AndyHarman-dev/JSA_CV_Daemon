@@ -96,10 +96,13 @@ Only after the user approves the strategy:
    - `contact`: `{ "name": str, "email": str?, "phone": str?, "location": str?, "links": [str] }`
      — `name` is required; include `email`/`phone` copied **verbatim** from the base CV.
      `links` is for LinkedIn/GitHub/portfolio URLs.
-   - `sections`: an **ordered** array mirroring the base CV's sections. The **first**
-     section must be a `"Summary"` (a 2–3 sentence professional summary tailored to this
-     role) — if the base CV has no summary, write one from its content. Every element is the
-     **same shape**: a `name` plus one or more content fields. Pick whichever content fields
+   - `sections`: an **ordered** array mirroring the base CV's sections. If a `BASE CV
+     STRUCTURE` block was provided, keep its section order exactly — including wherever it
+     placed `"Summary"` — do not move it. Only when **no** base structure was provided,
+     lead with a `"Summary"` (a 2–3 sentence professional summary tailored to this role) as
+     the first section. Either way, every CV must end up with a `"Summary"` section
+     somewhere — if the base CV has no summary, write one from its content. Every element is
+     the **same shape**: a `name` plus one or more content fields. Pick whichever content fields
      fit the section — you do **not** need all of them, and there is no section `type`:
      - `"name"`: str — the section heading, e.g. `"Summary"`, `"Experience"`, `"Skills"`, `"Projects"`.
      - `"text"`: str? — prose for the section (use this for the Summary/Profile).
