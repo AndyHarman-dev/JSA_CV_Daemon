@@ -1,41 +1,130 @@
-/* CV Structure Editor fonts — Geist (UI), Geist Mono (labels/dates/JSON), Newsreader (paper).
-   Loaded from Google Fonts; falls back to system stacks (see tailwind fontFamily) offline. */
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+/* Cyberpunk daemon redesign — Chakra Petch (display), IBM Plex Sans (body),
+   Share Tech Mono (mono/telemetry), Newsreader (paper preview, kept light/serif). */
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Share+Tech+Mono&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Editor field pseudo-states (defined as CSS since hover/focus can't be inline). The
-   .cv-field / .cv-paper-field classes are applied to the editor's text inputs/areas. */
-@layer components {
-  .cv-field {
-    background: #faf8f4;
-    border: 1px solid transparent;
-    border-radius: 8px;
-    transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
-  }
-  .cv-field:hover:not(:focus) {
-    background: #f2f0ea;
-  }
-  .cv-field:focus {
-    background: #fff;
-    border-color: #b5c1f1;
-    box-shadow: 0 0 0 3px rgba(59, 91, 217, 0.13);
-    outline: none;
-  }
-  .cv-paper-field {
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid transparent;
-    transition: background 120ms ease, border-color 120ms ease;
-  }
-  .cv-paper-field:hover:not(:focus) {
-    background: rgba(59, 91, 217, 0.05);
-  }
-  .cv-paper-field:focus {
-    background: rgba(59, 91, 217, 0.06);
-    border-bottom-color: #3b5bd9;
-    outline: none;
-  }
+/* --a / --pa are set per-surface at runtime (Jobs shell -> amber, CV editor -> red) via a
+   <style>:root{--a:...}</style> tag rendered by each surface's root, mirroring the design
+   handoff's renderThemeStyle(). These are fallbacks for any class below that renders before
+   a surface mounts. --pa (paper accent) is fixed blue regardless of surface. */
+:root {
+  --a: #F4CE4A;
+  --pa: #2563EB;
 }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--a) 30%, transparent);
+  color: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #1C232C;
+  border-radius: 3px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #28323D;
+  background-clip: padding-box;
+}
+
+/* ---- keyframes (ported 1:1 from the design handoff; shell uses the js* names, the
+   editor uses the cv*/cy* names — both kept distinct to match the reference exactly) ---- */
+@keyframes jsfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes jsspin { to { transform: rotate(360deg); } }
+@keyframes jsblink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .2; } }
+@keyframes jsscan { from { background-position: 0 0; } to { background-position: 0 160vh; } }
+
+@keyframes cvspin { to { transform: rotate(360deg); } }
+@keyframes cvpulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+@keyframes cvfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes cvbar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes cyscan { from { background-position: 0 0; } to { background-position: 0 160vh; } }
+@keyframes cyblink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .2; } }
+
+/* ============================================================ Jobs shell interaction classes */
+.jrow { transition: background .12s, border-color .12s; }
+.jbtn { transition: background .12s, color .12s, border-color .12s; }
+.jbtn:hover { background: #1B232C; }
+.jbtn:disabled { opacity: .35; cursor: default !important; }
+.jghost { transition: background .12s, border-color .12s; }
+.jghost:hover { background: #1B232C; }
+.jprimary { transition: background .14s, box-shadow .14s, transform .05s; }
+.jprimary:active { transform: translateY(1px); }
+.jdanger { transition: background .12s, border-color .12s, color .12s; }
+.jta { transition: border-color .12s, box-shadow .12s; }
+.jta:focus { outline: none; border-color: color-mix(in srgb, var(--a) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--a) 18%, transparent); }
+.jtab { transition: color .12s, border-color .12s; }
+
+/* ============================================================ CV editor interaction classes */
+.cvf { transition: background .12s, border-color .12s, box-shadow .12s; }
+.cvf-card:hover:not(:focus) { background: #161D27; }
+.cvf-card:focus {
+  background: #0E141B;
+  border-color: color-mix(in srgb, var(--a) 55%, #0E141B) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--a) 18%, transparent);
+  outline: none;
+}
+.cvf-paper:hover:not(:focus) { background: color-mix(in srgb, var(--pa) 7%, transparent); }
+.cvf-paper:focus {
+  border-bottom-color: color-mix(in srgb, var(--pa) 60%, #fff) !important;
+  background: color-mix(in srgb, var(--pa) 6%, transparent);
+  outline: none;
+}
+.cvf-card::placeholder { color: #46505C; }
+.cvf-paper::placeholder { color: #B8B0A2; }
+
+.cvbtn { transition: background .12s, color .12s, border-color .12s; }
+.cvbtn:hover { background: #1B232C; color: #E8EEF2; }
+.cvbtn:disabled { opacity: .3; cursor: default !important; }
+.cvbtn:disabled:hover { background: transparent; color: #5A6472; }
+
+.cvbtn-light { transition: background .12s, color .12s; }
+.cvbtn-light:hover { background: #EFEDE6; }
+.cvbtn-light:disabled { opacity: .3; cursor: default !important; }
+.cvbtn-light:disabled:hover { background: transparent; }
+
+.cvprimary { transition: background .14s, box-shadow .14s, transform .05s; }
+.cvprimary:hover { background: color-mix(in srgb, var(--a) 85%, #fff); }
+.cvprimary:active { transform: translateY(1px); }
+
+.cvghost { transition: background .12s, border-color .12s; }
+.cvghost:hover { background: #141B23; border-color: color-mix(in srgb, var(--a) 45%, #2A3440); }
+
+.cvsec .cvtools { opacity: 0; transition: opacity .14s; }
+.cvsec:hover .cvtools, .cvsec:focus-within .cvtools { opacity: 1; }
+
+.cvchip { transition: background .12s; }
+.cvchip:hover .cvx { opacity: 1; }
+.cvx { opacity: 0; transition: opacity .12s; }
+
+.cvitem .cvih { opacity: 0; transition: opacity .12s; }
+.cvitem:hover .cvih { opacity: 1; }
+
+.cvgap { transition: opacity .12s; }
+.cvgap .cvadd { opacity: 0; transition: opacity .14s; }
+.cvgap:hover .cvadd { opacity: 1; }
+
+.cvkindbtn { transition: background .1s, border-color .1s; }
+.cvkindbtn:hover { background: #141B23; border-color: color-mix(in srgb, var(--a) 40%, #2A3440); }
+
+.cvpapersec { transition: box-shadow .15s; }
