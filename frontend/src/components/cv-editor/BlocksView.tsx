@@ -744,7 +744,6 @@ function AddSectionMenu({ anchor }: { anchor: string | null }) {
   if (addOpen !== anchor) return null;
   return (
     <div
-      className="animate-cvfade"
       style={{
         position: "absolute",
         zIndex: 30,
@@ -752,6 +751,7 @@ function AddSectionMenu({ anchor }: { anchor: string | null }) {
         marginTop: 6,
         left: anchor === "end" ? "50%" : 0,
         transform: anchor === "end" ? "translateX(-50%)" : "none",
+        animation: "cvfade .14s ease",
         width: 300,
         ...panelBase(T, { chamfer: 14 }),
         boxShadow: T.shadowMd,

@@ -79,7 +79,7 @@ function EmptyState() {
   const startBlank = useEditorStore((s) => s.startBlank);
   return (
     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", zIndex: 1 }}>
-      <div className="animate-cvfade" style={{ position: "relative", textAlign: "center", maxWidth: 460 }}>
+      <div style={{ position: "relative", textAlign: "center", maxWidth: 460, animation: "cvfade .18s ease" }}>
         <div
           style={{
             width: 60,
@@ -160,8 +160,7 @@ function InferringState() {
   return (
     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", zIndex: 1 }}>
       <div
-        className="animate-cvfade"
-        style={{ position: "relative", width: 460, ...panelBase(T, { chamfer: 16 }), padding: "26px 28px 24px", boxShadow: T.shadowMd }}
+        style={{ position: "relative", width: 460, ...panelBase(T, { chamfer: 16 }), padding: "26px 28px 24px", boxShadow: T.shadowMd, animation: "cvfade .18s ease" }}
       >
         {cornerMarks(T, T.a, 11)}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
@@ -222,8 +221,7 @@ function InferringState() {
                         <Icon name="check" size={9} color="#06080B" />
                       ) : active ? (
                         <div
-                          className="animate-cvspin"
-                          style={{ width: 6, height: 6, borderRadius: 6, border: `1.5px solid ${T.a}`, borderTopColor: "transparent" }}
+                          style={{ width: 6, height: 6, borderRadius: 6, border: `1.5px solid ${T.a}`, borderTopColor: "transparent", animation: "cvspin .7s linear infinite" }}
                         />
                       ) : null}
                     </span>
@@ -237,12 +235,12 @@ function InferringState() {
                 </div>
                 <div style={{ height: 3, background: T.sunk, borderRadius: 3, overflow: "hidden" }}>
                   <div
-                    className={active ? "animate-cvpulse" : undefined}
                     style={{
                       height: "100%",
                       width: `${errored ? 100 : active ? 100 : pct}%`,
                       background: errored ? T.danger : done ? T.accent2 : T.a,
                       transition: "width .2s ease",
+                      animation: active ? "cvpulse 1s ease-in-out infinite" : undefined,
                     }}
                   />
                 </div>
