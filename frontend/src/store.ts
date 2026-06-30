@@ -1,14 +1,17 @@
 import { create } from "zustand";
 import type { JobDTO, WSEvent } from "./types";
 import { api } from "./api";
+import { useEditorStore } from "./editorStore";
 
 interface Store {
   jobs: Record<string, JobDTO>;
   selectedId: string | undefined;
   wsStatus: "connecting" | "open" | "closed";
+  editorOpen: boolean;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setWsStatus(s: Store["wsStatus"]): void;
+  setEditorOpen(open: boolean): void;
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
   removeJob(id: string): void;
@@ -18,6 +21,7 @@ export const useStore = create<Store>((set, get) => ({
   jobs: {},
   selectedId: undefined,
   wsStatus: "connecting",
+  editorOpen: false,
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -31,6 +35,10 @@ export const useStore = create<Store>((set, get) => ({
 
   setWsStatus(s: Store["wsStatus"]) {
     set({ wsStatus: s });
+  },
+
+  setEditorOpen(open: boolean) {
+    set({ editorOpen: open });
   },
 
   removeJob(id: string) {
@@ -69,6 +77,10 @@ export const useStore = create<Store>((set, get) => ({
         break;
       case "job_removed":
         store.removeJob(e.job_id);
+        break;
+      case "infer_progress":
+        // Job-less editor event — drive the inferring checklist in the editor store.
+        useEditorStore.getState().onInferProgress(e);
         break;
     }
   },

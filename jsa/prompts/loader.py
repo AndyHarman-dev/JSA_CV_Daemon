@@ -9,10 +9,13 @@ _NAME_TO_FILE: dict[str, str] = {
     "cv_adjust": "PROMPT_CDADJUST.md",
     "cover_letter": "CVL_PROMPT.md",
     "fit_assessment": "PROMPT_FIT_ASSESSMENT.md",
+    "infer_structure": "PROMPT_INFER_STRUCTURE.md",
 }
 
 
-def read_prompt(name: Literal["cv_adjust", "cover_letter", "fit_assessment"]) -> str:
+def read_prompt(
+    name: Literal["cv_adjust", "cover_letter", "fit_assessment", "infer_structure"],
+) -> str:
     """Read a prompt file from disk and return its contents as a string.
 
     No caching — always reads from disk so user edits are picked up immediately.

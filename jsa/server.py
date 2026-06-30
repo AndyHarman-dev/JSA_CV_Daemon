@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.events.bus import bus
+from jsa.api.routes_cv_structure import router as cv_structure_router
 from jsa.api.routes_jobs import router as jobs_router
 from jsa.api.routes_meta import router as meta_router
 from jsa.api.ws import router as ws_router
@@ -65,7 +66,17 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
                 return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
             return backend_for(name, timeout=settings.agent_timeout)
 
-        orchestrator = Orchestrator(session_factory, _backend_factory, settings.backends, output_dir=settings.output_dir)
+        # Exposed for the job-less CV-structure infer endpoint (routes_cv_structure), which
+        # needs a backend the same way the orchestrator does. Tests override this post-startup.
+        app.state.backend_factory = _backend_factory
+
+        orchestrator = Orchestrator(
+            session_factory,
+            _backend_factory,
+            settings.backends,
+            output_dir=settings.output_dir,
+            cv_structure_path=settings.cv_structure_path,
+        )
         app.state.orchestrator = orchestrator
         asyncio.create_task(orchestrator.run())
 
@@ -86,6 +97,7 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
 
     app.include_router(meta_router)
     app.include_router(jobs_router)
+    app.include_router(cv_structure_router)
     app.include_router(ws_router)
 
     # Serve built frontend bundle if present.

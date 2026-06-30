@@ -42,6 +42,7 @@ from jsa.events.schema import (
 )
 from jsa.pipeline.checkpoints import checkpoint
 from jsa.prompts import loader
+from jsa.store import cv_structure as cv_structure_store
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,7 @@ async def run_stage(
     stage: Stage,
     session: AsyncSession,
     output_dir: Path | None = None,
+    cv_structure_path: Path | None = None,
 ) -> None:
     """Run one pipeline stage to completion or park.
 
@@ -408,7 +410,14 @@ async def run_stage(
         else:
             # Fresh session — run research pre-step (claude-cli only; best-effort)
             brief = await _gather_research(job, backend, stage)
-            initial_user_msg = _build_initial_user_msg(job, brief)
+            # cv_adjust only: inject the standalone base-CV structure (if the editor has saved
+            # one) as the authoritative skeleton. Read at stage time so edits apply to the next
+            # job without a restart. Soft steer — the schema gate stays the only hard check; a
+            # missing/absent file falls back to today's raw cv_text behavior.
+            base_structure = None
+            if stage == Stage.cv_adjust and cv_structure_path is not None:
+                base_structure = await cv_structure_store.read(cv_structure_path)
+            initial_user_msg = _build_initial_user_msg(job, brief, base_structure)
             handle, reply = await backend.start_session(system_prompt, initial_user_msg)
             # Accumulate all messages for this session (system, user, assistant reply)
             accumulated_messages = [
@@ -814,16 +823,35 @@ def _get_system_prompt(stage: Stage) -> str:
         return loader.read_prompt("cover_letter")
 
 
-def _build_initial_user_msg(job: Job, brief: str) -> str:
+def _build_initial_user_msg(
+    job: Job, brief: str, base_structure: CVDocument | None = None
+) -> str:
     """Build the initial user message for a fresh session.
 
     ``brief`` is either a populated research block ([INTEL_BRIEF] or [COMPANY_BRIEF])
     or the NONE placeholder produced by ``_research_placeholder``.  It is always
     injected first so the main agent sees it immediately and the resumed Message
     history replays it verbatim (research runs at most once per stage).
+
+    ``base_structure`` (cv_adjust only) is the standalone base-CV ``CVDocument`` the user
+    shaped in the Structure Editor. When present it is injected as the authoritative
+    skeleton: tailor content to the JD but preserve these sections, their order, and shape.
+    It is a soft steer — the schema gate remains the only hard check; absence falls back to
+    the raw ``cv_text`` behavior. Injected here (rather than after research) so it is part of
+    the persisted initial message and replays verbatim on an awaiting_input resume.
     """
+    skeleton = ""
+    if base_structure is not None:
+        skeleton = (
+            "BASE CV STRUCTURE (authoritative skeleton — the user curated this in the "
+            "Structure Editor). Tailor the content to the job, but PRESERVE this structure: "
+            "the same sections, in the same order, each with the same shape. Do not invent "
+            "or drop sections.\n"
+            f"{base_structure.model_dump_json(indent=2)}\n\n"
+        )
     return (
         f"{brief}\n\n"
+        f"{skeleton}"
         f"CV TEXT:\n{job.cv_text}\n\n"
         f"JOB DESCRIPTION:\n{job.jd}\n\n"
         f"TIER: {job.tier}"

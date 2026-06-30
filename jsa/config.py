@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
     dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
 
+    @property
+    def cv_structure_path(self) -> Path:
+        """Canonical base-CV ``CVDocument`` JSON — the standalone source of truth edited by
+        the CV Structure Editor and consumed by the cv_adjust stage. Lives next to the DB
+        (``~/.jsa/cv_structure.json`` by default); derived from ``db_path`` so a test that
+        points ``db_path`` at a tmp dir is automatically isolated."""
+        return self.db_path.parent / "cv_structure.json"
+
     @field_validator("backends", mode="before")
     @classmethod
     def _parse_backends(cls, v: object) -> list[str]:

@@ -928,3 +928,89 @@ class TestCvAdjustCoverLetterGuard:
         assert refreshed.state != JobState.cv_done
         docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
         assert docs == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2B: cv_adjust consumes the standalone base-CV structure as a skeleton
+# ---------------------------------------------------------------------------
+
+
+class _CapturingBackend(FakeAgentBackend):
+    """Records the initial_user_msg of the fresh session so a test can assert what was
+    injected into the prompt (the base-CV skeleton, or the absence thereof)."""
+
+    def __init__(self, replies):
+        super().__init__(replies)
+        self.captured_initial_msg: str | None = None
+
+    async def start_session(self, system_prompt, initial_user_msg):
+        self.captured_initial_msg = initial_user_msg
+        handle = FakeSessionHandle(id=str(uuid4()), external_id=None)
+        return handle, self._pop_reply()
+
+
+class TestCvAdjustConsumesBaseStructure:
+    async def test_skeleton_injected_when_file_present(self, session, tmp_path):
+        # Write a base structure with a distinctively-named section.
+        structure_path = tmp_path / "cv_structure.json"
+        structure_path.write_text(json.dumps({
+            "contact": {"name": "Jane Doe", "email": "jane@x.com"},
+            "sections": [
+                {"name": "Summary", "text": "Backend engineer."},
+                {"name": "Open Source Leadership", "items": ["Maintainer of Foo"]},
+            ],
+        }), encoding="utf-8")
+
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = _CapturingBackend([_final_reply()])
+        await run_stage(
+            job, backend, Stage.cv_adjust, session, cv_structure_path=structure_path
+        )
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "BASE CV STRUCTURE" in msg
+        assert "Open Source Leadership" in msg  # the curated section name was injected
+
+    async def test_falls_back_to_cv_text_when_file_absent(self, session, tmp_path):
+        # Path points at a non-existent file → no skeleton, raw cv_text behavior preserved.
+        missing = tmp_path / "nope.json"
+
+        job = await _insert_job(session, cv_text="MY UNIQUE CV BODY")
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = _CapturingBackend([_final_reply()])
+        await run_stage(job, backend, Stage.cv_adjust, session, cv_structure_path=missing)
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "BASE CV STRUCTURE" not in msg
+        assert "MY UNIQUE CV BODY" in msg
+
+    async def test_skeleton_not_injected_for_cover_letter(self, session, tmp_path):
+        # The base structure is a CV concept; the cover_letter stage must not receive it.
+        structure_path = tmp_path / "cv_structure.json"
+        structure_path.write_text(json.dumps({
+            "contact": {"name": "Jane Doe"},
+            "sections": [{"name": "Open Source Leadership", "items": ["Maintainer"]}],
+        }), encoding="utf-8")
+
+        job = await _insert_job(session)
+        # cover_letter runs from cv_done; reach it via running(cv_adjust) like the suite does.
+        transition(job, JobState.running, Stage.cv_adjust)
+        transition(job, JobState.cv_done, None)
+        transition(job, JobState.running, Stage.cover_letter)
+        await session.commit()
+
+        backend = _CapturingBackend([_cl_final_reply()])
+        await run_stage(
+            job, backend, Stage.cover_letter, session, cv_structure_path=structure_path
+        )
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "Open Source Leadership" not in msg

@@ -4,16 +4,6 @@ This file records non-derivable conventions for all agents working on this proje
 
 ---
 
-## Implementation Workflow
-
-Whenever asked to implement a feature, a plan phase, or any multi-step task:
-
-1. **Draft a todo list first.** Before writing any code, create a file at `~/.claude/todos/<feature-slug>.md` listing every concrete step as a checkbox. Example path: `~/.claude/todos/excel-table-migration.md`.
-2. **Work through the list.** After completing each step, tick its checkbox (`- [x]`) by editing the file, then continue to the next item. Keep the file as a live checklist throughout the session so the current state is always visible.
-3. **Clean up on approval.** Once the user confirms the implementation is accepted, delete the todo file with `rm ~/.claude/todos/<feature-slug>.md`.
-
-If a session is interrupted before approval, leave the todo file in place so the next session can resume from where it left off.
-
 ## Sentinel protocol — MANDATORY for all agent prompts
 
 Every prompt file (`jsa/prompts/PROMPT_CDADJUST.md`, `jsa/prompts/CVL_PROMPT.md`) **must** instruct the model to terminate every reply with exactly one of:

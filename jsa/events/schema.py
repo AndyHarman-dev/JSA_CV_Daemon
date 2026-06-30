@@ -67,6 +67,22 @@ class BackendSwitchedEvent:
     to_backend: str = ""
 
 
+@dataclass
+class InferProgressEvent:
+    """Progress for a standalone CV-structure inference task (no job).
+
+    Broadcast as each of the five inference steps becomes active; a final event with
+    ``status="done"`` (or ``status="error"`` + ``message``) marks completion. The structured
+    result is NOT carried here — it is returned in the HTTP response of the infer endpoint."""
+    type: Literal["infer_progress"] = "infer_progress"
+    task_id: str = ""
+    step: int = 0
+    total: int = 5
+    label: str = ""
+    status: Literal["active", "done", "error"] = "active"
+    message: str = ""
+
+
 def event_to_dict(event) -> dict:
     """Convert any event dataclass to a JSON-serialisable dict."""
     return dataclasses.asdict(event)
