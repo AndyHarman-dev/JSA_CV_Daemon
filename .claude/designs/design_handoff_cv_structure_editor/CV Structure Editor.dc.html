@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;height:100%}
+    body{font-family:"Geist",system-ui,sans-serif;background:#F4F2ED;color:#1F1B16;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+    textarea,input,button{font-family:inherit}
+    @keyframes cvspin{to{transform:rotate(360deg)}}
+    @keyframes cvpulse{0%,100%{opacity:.3}50%{opacity:1}}
+    @keyframes cvfade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    @keyframes cvbar{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+    ::selection{background:color-mix(in srgb,var(--a,#3B5BD9) 20%,transparent)}
+    ::-webkit-scrollbar{width:11px;height:11px}
+    ::-webkit-scrollbar-thumb{background:#D8D2C8;border-radius:7px;border:3px solid transparent;background-clip:padding-box}
+    ::-webkit-scrollbar-thumb:hover{background:#C4BCAE;background-clip:padding-box}
+    .cvf{transition:background .12s,border-color .12s,box-shadow .12s}
+    .cvf-card:hover:not(:focus){background:#F2F0EA}
+    .cvf-card:focus{background:#fff;border-color:color-mix(in srgb,var(--a) 42%,#fff)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--a) 13%,transparent)}
+    .cvf-paper:hover:not(:focus){background:color-mix(in srgb,var(--a) 7%,transparent)}
+    .cvf-paper:focus{border-bottom-color:color-mix(in srgb,var(--a) 60%,#fff)!important;background:color-mix(in srgb,var(--a) 6%,transparent)}
+    .cvf-paper::placeholder,.cvf-card::placeholder{color:#B8B0A2}
+    .cvbtn{transition:background .12s,color .12s,border-color .12s}
+    .cvbtn:hover{background:#ECE9E2;color:#1F1B16}
+    .cvbtn:disabled{opacity:.3;cursor:default!important}
+    .cvbtn:disabled:hover{background:transparent;color:#6B6358}
+    .cvprimary{transition:background .14s,box-shadow .14s,transform .05s}
+    .cvprimary:hover{background:color-mix(in srgb,var(--a) 88%,#000)}
+    .cvprimary:active{transform:translateY(1px)}
+    .cvghost{transition:background .12s,border-color .12s}
+    .cvghost:hover{background:#EDEAE3;border-color:#CFC8BB}
+    .cvsec .cvtools{opacity:0;transition:opacity .14s}
+    .cvsec:hover .cvtools,.cvsec:focus-within .cvtools{opacity:1}
+    .cvchip{transition:background .12s}
+    .cvchip:hover .cvx{opacity:1}
+    .cvx{opacity:0;transition:opacity .12s}
+    .cvitem .cvih{opacity:0;transition:opacity .12s}
+    .cvitem:hover .cvih{opacity:1}
+    .cvgap{transition:opacity .12s}
+    .cvgap .cvadd{opacity:0;transition:opacity .14s}
+    .cvgap:hover .cvadd{opacity:1}
+    .cvkindbtn{transition:background .1s,border-color .1s}
+    .cvkindbtn:hover{background:#F6F4EF;border-color:color-mix(in srgb,var(--a) 35%,#fff)}
+    .cvpapersec{transition:box-shadow .15s}
+  </style>
+</helmet>
+<div style="height:100vh;display:flex;flex-direction:column;min-height:0;background:#F4F2ED;color:#1F1B16">
+  {{ topbar }}
+  <div style="flex:1;display:flex;min-height:0;overflow:hidden">
+    <main style="flex:1;min-width:0;overflow:auto">{{ surface }}</main>
+    {{ drawer }}
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;options&quot;:[&quot;#3B5BD9&quot;,&quot;#2E7D5B&quot;,&quot;#B4530A&quot;,&quot;#6B4E9E&quot;],&quot;default&quot;:&quot;#3B5BD9&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;density&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;comfortable&quot;,&quot;compact&quot;],&quot;default&quot;:&quot;comfortable&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;paperSerif&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Appearance&quot;}}">
+class Component extends DCLogic {
+  state = {
+    cv: null, view: 'blocks', jsonOpen: false,
+    inferring: false, inferStep: 0,
+    dragId: null, overId: null, armed: null,
+    selectedId: null, addOpen: null,
+    history: [], hpos: -1,
+  };
+
+  // ---- lifecycle ----
+  componentDidMount() {
+    this._key = (e) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); this.undo(); }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); this.redo(); }
+    };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._key); clearTimeout(this._t); this._timers && this._timers.forEach(clearTimeout); }
+
+  // ---- helpers ----
+  clone(o) { return JSON.parse(JSON.stringify(o)); }
+  uid() { this._seq = (this._seq || 0) + 1; return 'k' + this._seq + Math.random().toString(36).slice(2, 5); }
+
+  get accent() { return this.props.accent ?? '#3B5BD9'; }
+  get compact() { return (this.props.density ?? 'comfortable') === 'compact'; }
+  get serif() { return this.props.paperSerif ?? true; }
+  get T() {
+    const a = this.accent, c = this.compact;
+    return {
+      a, ui: '"Geist", system-ui, sans-serif', mono: '"Geist Mono", ui-monospace, monospace',
+      serifF: '"Newsreader", Georgia, serif',
+      canvas: '#F4F2ED', surface: '#FFFFFF', subtle: '#FAF8F4', sunk: '#F0EDE6',
+      bd: '#E7E2DA', bd2: '#DCD6CB', ink: '#211C16', ink2: '#6B6358', ink3: '#A39B8D',
+      aSoft: `color-mix(in srgb, ${a} 9%, #fff)`, aSoft2: `color-mix(in srgb, ${a} 15%, #fff)`,
+      aBorder: `color-mix(in srgb, ${a} 38%, #fff)`,
+      pad: c ? 13 : 17, gap: c ? 8 : 12, secGap: c ? 12 : 18,
+    };
+  }
+
+  KINDS = [
+    { kind: 'summary', label: 'Summary', desc: 'A short free-text paragraph', icon: 'text' },
+    { kind: 'bullets', label: 'Bullet list', desc: 'A flat list of one-line points', icon: 'list' },
+    { kind: 'skills', label: 'Skills', desc: 'Grouped, comma-separated keywords', icon: 'tag' },
+    { kind: 'experience', label: 'Experience', desc: 'Roles with company, dates & bullets', icon: 'work' },
+    { kind: 'projects', label: 'Projects', desc: 'Named work with links', icon: 'spark' },
+    { kind: 'education', label: 'Education', desc: 'Degrees & institutions', icon: 'cap' },
+  ];
+  kindMeta(k) { return this.KINDS.find(x => x.kind === k) || this.KINDS[0]; }
+
+  // ---- history ----
+  _push(cv) {
+    const h = this.state.history.slice(0, this.state.hpos + 1);
+    h.push(this.clone(cv));
+    if (h.length > 120) h.shift();
+    this.setState({ history: h, hpos: h.length - 1, cv });
+  }
+  flush() { if (this._t) { clearTimeout(this._t); this._t = null; if (this._pending) { this._pending = false; this._push(this.state.cv); } } }
+  edit(cv) { this.flush(); this._push(cv); }              // structural -> immediate snapshot
+  editText(cv) {                                          // typing -> coalesced snapshot
+    this.setState({ cv });
+    clearTimeout(this._t); this._pending = true;
+    this._t = setTimeout(() => { this._pending = false; this._t = null; this._push(this.state.cv); }, 600);
+  }
+  undo() { this.flush(); const { hpos, history } = this.state; if (hpos > 0) this.setState({ hpos: hpos - 1, cv: this.clone(history[hpos - 1]) }); }
+  redo() { const { hpos, history } = this.state; if (hpos < history.length - 1) this.setState({ hpos: hpos + 1, cv: this.clone(history[hpos + 1]) }); }
+  loadCv(cv) { this.setState({ cv, history: [this.clone(cv)], hpos: 0, selectedId: cv.sections[0] && cv.sections[0].id }); }
+
+  // ---- mutation primitives ----
+  withSection(id, fn, text) {
+    const cv = this.clone(this.state.cv);
+    const s = cv.sections.find(x => x.id === id);
+    if (s) fn(s, cv);
+    text ? this.editText(cv) : this.edit(cv);
+  }
+  withEntry(sid, eid, fn, text) {
+    this.withSection(sid, (s) => { const e = s.entries.find(x => x.id === eid); if (e) fn(e, s); }, text);
+  }
+  setContact(field, val) { const cv = this.clone(this.state.cv); cv.contact[field] = val; this.editText(cv); }
+
+  newEntry(kind) {
+    const e = { id: this.uid() };
+    if (kind === 'skills') { e.heading = ''; e.bullets = ['']; }
+    else if (kind === 'projects') { e.heading = ''; e.text = ''; e.bullets = []; e.links = ['']; }
+    else if (kind === 'education') { e.heading = ''; e.subheading = ''; e.dates = ''; e.location = ''; }
+    else { e.heading = ''; e.subheading = ''; e.dates = ''; e.location = ''; e.bullets = ['']; }
+    return e;
+  }
+  newSection(kind) {
+    const m = this.kindMeta(kind);
+    const s = { id: this.uid(), kind, name: m.label, text: '', items: [], entries: [] };
+    if (kind === 'bullets') s.items = [''];
+    else if (kind !== 'summary') s.entries = [this.newEntry(kind)];
+    return s;
+  }
+  addSection(kind, atKey) {
+    const cv = this.clone(this.state.cv);
+    const ns = this.newSection(kind);
+    if (atKey === 'end' || atKey == null) cv.sections.push(ns);
+    else { const i = cv.sections.findIndex(s => s.id === atKey); cv.sections.splice(i + 1, 0, ns); }
+    this.edit(cv);
+    this.setState({ addOpen: null, selectedId: ns.id });
+  }
+  delSection(id) { const cv = this.clone(this.state.cv); cv.sections = cv.sections.filter(s => s.id !== id); this.edit(cv); }
+  moveSection(id, dir) {
+    const cv = this.clone(this.state.cv); const a = cv.sections;
+    const i = a.findIndex(s => s.id === id), j = i + dir;
+    if (j < 0 || j >= a.length) return;
+    [a[i], a[j]] = [a[j], a[i]]; this.edit(cv);
+  }
+  reorder(targetId) {
+    const cv = this.clone(this.state.cv); const a = cv.sections;
+    const from = a.findIndex(s => s.id === this.state.dragId);
+    const to = a.findIndex(s => s.id === targetId);
+    if (from < 0 || to < 0 || from === to) { this.setState({ dragId: null, overId: null, armed: null }); return; }
+    const [m] = a.splice(from, 1); a.splice(to, 0, m);
+    this._push(cv); this.setState({ dragId: null, overId: null, armed: null });
+  }
+  moveEntry(sid, eid, dir) {
+    this.withSection(sid, (s) => { const a = s.entries; const i = a.findIndex(e => e.id === eid), j = i + dir; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; });
+  }
+
+  // ---- sample + infer ----
+  blankCv() { return { contact: { name: '', email: '', phone: '', location: '', links: [] }, sections: [this.newSection('summary')] }; }
+  sampleCv() {
+    const E = (o) => ({ id: this.uid(), ...o });
+    return {
+      contact: { name: 'Daniel Okafor', email: 'daniel.okafor@gmail.com', phone: '+1 (415) 555-0147', location: 'Austin, TX', links: ['github.com/danokafor', 'linkedin.com/in/danokafor'] },
+      sections: [
+        { id: this.uid(), kind: 'summary', name: 'Summary', items: [], entries: [],
+          text: 'Gameplay and engine programmer with 7+ years shipping titles on Unreal Engine 4/5. Specialized in C++ systems, networked multiplayer, and performance profiling across PC and console. Comfortable owning features end-to-end, from prototype to cert.' },
+        { id: this.uid(), kind: 'experience', name: 'Experience', text: '', items: [], entries: [
+          E({ heading: 'Senior Gameplay Programmer', subheading: 'Hidden Forge Studios', dates: '2021 — Present', location: 'Austin, TX', bullets: [
+            'Architected the ability system for a UE5 third-person action title, supporting 60+ networked abilities with client-side prediction.',
+            'Cut frame-time spikes 38% by profiling and rebudgeting the animation pipeline with Unreal Insights.',
+            'Mentored four junior engineers and owned the gameplay code-review process.' ], links: [] }),
+          E({ heading: 'Engine Programmer', subheading: 'Voltline Interactive', dates: '2018 — 2021', location: 'Remote', bullets: [
+            'Built a custom replication-graph extension that halved bandwidth for 64-player matches.',
+            'Integrated PlayStation and Xbox platform SDKs, shipping two titles through certification.' ], links: [] }),
+          E({ heading: 'Gameplay Programmer', subheading: 'Pixel Anvil', dates: '2016 — 2018', location: 'Dallas, TX', bullets: [
+            'Implemented AI behavior trees and EQS queries for a stealth title.' ], links: [] }),
+        ] },
+        { id: this.uid(), kind: 'projects', name: 'Projects', text: '', items: [], entries: [
+          E({ heading: 'Replication Profiler', text: 'Open-source UE5 plugin that visualizes per-actor replication cost in real time.', bullets: [], links: ['github.com/danokafor/rep-profiler'] }),
+          E({ heading: 'Forge Combat Framework', text: 'Modular melee + ranged combat starter kit, 1.2k stars on GitHub.', bullets: [], links: ['github.com/danokafor/forge-combat'] }),
+        ] },
+        { id: this.uid(), kind: 'skills', name: 'Skills', text: '', items: [], entries: [
+          E({ heading: 'Languages', bullets: ['C++', 'Blueprint', 'Python', 'C#'] }),
+          E({ heading: 'Engines & Tools', bullets: ['Unreal Engine 4/5', 'Unreal Insights', 'Perforce', 'RenderDoc'] }),
+          E({ heading: 'Systems', bullets: ['Gameplay Ability System', 'Replication', 'Behavior Trees', 'Animation'] }),
+          E({ heading: 'Platforms', bullets: ['PC', 'PlayStation', 'Xbox', 'Switch'] }),
+        ] },
+        { id: this.uid(), kind: 'bullets', name: 'Highlights', text: '', entries: [], items: [
+          'Shipped 5 titles to retail', 'Speaker, Unreal Fest 2024', 'GDC mentor, 2022–2024' ] },
+        { id: this.uid(), kind: 'education', name: 'Education', text: '', items: [], entries: [
+          E({ heading: 'B.S. Computer Science', subheading: 'University of Texas at Austin', dates: '2012 — 2016', location: 'Austin, TX' }),
+        ] },
+      ],
+    };
+  }
+  startInfer() {
+    const steps = ['Reading document…', 'Detecting section breaks…', 'Extracting entries & dates…', 'Structuring JSON…', 'Validating against schema…'];
+    this.setState({ inferring: true, inferStep: 0, cv: null });
+    this._timers = [];
+    steps.forEach((_, i) => this._timers.push(setTimeout(() => this.setState({ inferStep: i + 1 }), 480 * (i + 1))));
+    this._timers.push(setTimeout(() => { this.setState({ inferring: false, view: 'blocks' }); this.loadCv(this.sampleCv()); }, 480 * steps.length + 520));
+  }
+
+  // ---- JSON export (schema shape) ----
+  exportJson() {
+    const cv = this.state.cv; if (!cv) return {};
+    const c = cv.contact, contact = { name: c.name || '' };
+    ['email', 'phone', 'location'].forEach(k => { if (c[k]) contact[k] = c[k]; });
+    if (c.links && c.links.filter(Boolean).length) contact.links = c.links.filter(Boolean);
+    const sections = cv.sections.map(s => {
+      const o = { name: s.name || '' };
+      if (s.text && s.text.trim()) o.text = s.text.trim();
+      const items = (s.items || []).filter(x => x && x.trim());
+      if (items.length) o.items = items;
+      const entries = (s.entries || []).map(e => {
+        const eo = {};
+        ['heading', 'subheading', 'dates', 'location', 'text'].forEach(k => { if (e[k] && e[k].trim()) eo[k] = e[k].trim(); });
+        const b = (e.bullets || []).filter(x => x && x.trim()); if (b.length) eo.bullets = b;
+        const l = (e.links || []).filter(x => x && x.trim()); if (l.length) eo.links = l;
+        return eo;
+      }).filter(eo => Object.keys(eo).length);
+      if (entries.length) o.entries = entries;
+      return o;
+    });
+    return { contact, sections };
+  }
+
+  // ======================================================= RENDER HELPERS
+  icon(name, sz, color) {
+    const h = React.createElement;
+    const P = (d, extra) => h('path', { d, ...extra });
+    const C = (cx, cy) => h('circle', { cx, cy, r: 1, fill: 'currentColor', stroke: 'none' });
+    const map = {
+      up: [P('M3.5 9.5L8 5l4.5 4.5')], down: [P('M3.5 6.5L8 11l4.5-4.5')],
+      plus: [P('M8 3.2v9.6M3.2 8h9.6')], x: [P('M4 4l8 8M12 4l-8 8')],
+      check: [P('M3 8.4l3.3 3.4L13 4.6')],
+      trash: [P('M3 4.5h10M6.4 4.5V3.2h3.2v1.3M4.6 4.5l.6 8.3h5.6l.6-8.3')],
+      undo: [P('M6.5 4L3 7.2l3.5 3.2'), P('M3 7.2h6.2a3.4 3.4 0 0 1 0 6.8H6.6')],
+      redo: [P('M9.5 4L13 7.2l-3.5 3.2'), P('M13 7.2H6.8a3.4 3.4 0 0 0 0 6.8h2.6')],
+      braces: [P('M6.2 3C4.6 3 5 5 5 6.2c0 1-.5 1.6-1.6 1.8 1.1.2 1.6.8 1.6 1.8C5 11 4.6 13 6.2 13'), P('M9.8 3c1.6 0 1.2 2 1.2 3.2 0 1 .5 1.6 1.6 1.8-1.1.2-1.6.8-1.6 1.8 0 1.2.4 3.2-1.2 3.2')],
+      spark: [P('M8 2.2l1.3 3.9 3.9 1.3-3.9 1.3L8 12.6 6.7 8.7 2.8 7.4l3.9-1.3z')],
+      eye: [P('M1.2 8S3.6 3.6 8 3.6 14.8 8 14.8 8 12.4 12.4 8 12.4 1.2 8 1.2 8z'), h('circle', { cx: 8, cy: 8, r: 1.9 })],
+      link: [P('M6.5 9.5l3-3M7 5.2l.8-.8a2.4 2.4 0 0 1 3.4 3.4l-.9.9M9 10.8l-.8.8a2.4 2.4 0 0 1-3.4-3.4l.9-.9')],
+      copy: [h('rect', { x: 5.2, y: 5.2, width: 7.6, height: 7.6, rx: 1.6 }), P('M3.2 10.8V4a.8.8 0 0 1 .8-.8h6.8')],
+      text: [P('M3.5 4.5h9M3.5 8h9M3.5 11.5h5.5')],
+      list: [C(4, 4.5), C(4, 8), C(4, 11.5), P('M6.8 4.5h6M6.8 8h6M6.8 11.5h4')],
+      tag: [P('M8.3 2.8H12a1.2 1.2 0 0 1 1.2 1.2v3.7a1 1 0 0 1-.3.7l-5 5a1 1 0 0 1-1.4 0L3 9.5a1 1 0 0 1 0-1.4l5-5a1 1 0 0 1 .3-.3z'), h('circle', { cx: 10.3, cy: 5.7, r: .9 })],
+      work: [h('rect', { x: 2.5, y: 5, width: 11, height: 7.5, rx: 1.2 }), P('M6 5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1')],
+      cap: [P('M8 3L1.8 6 8 9l6.2-3L8 3z'), P('M4.5 7.3v3c0 .9 1.6 1.7 3.5 1.7s3.5-.8 3.5-1.7v-3')],
+      blocks: [h('rect', { x: 2.5, y: 3, width: 11, height: 3.4, rx: 1 }), h('rect', { x: 2.5, y: 9.6, width: 11, height: 3.4, rx: 1 })],
+      doc: [h('rect', { x: 3.5, y: 2.2, width: 9, height: 11.6, rx: 1.2 }), P('M5.8 5.4h4.4M5.8 8h4.4M5.8 10.6h2.6')],
+      cols: [h('rect', { x: 2.4, y: 2.8, width: 11.2, height: 10.4, rx: 1.4 }), P('M8 2.8v10.4')],
+    };
+    return h('svg', { width: sz, height: sz, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.55, strokeLinecap: 'round', strokeLinejoin: 'round', style: { display: 'block', color: color || 'currentColor', flex: 'none' } }, map[name] || []);
+  }
+  grip(color, sz) {
+    const h = React.createElement, c = color || '#B7AF9F', s = sz || 16;
+    const dots = [[5, 4], [11, 4], [5, 8], [11, 8], [5, 12], [11, 12]].map(([x, y], i) => h('circle', { key: i, cx: x, cy: y, r: 1.25, fill: c }));
+    return h('svg', { width: s, height: s, viewBox: '0 0 16 16', style: { display: 'block' } }, dots);
+  }
+
+  iconBtn(name, onClick, o = {}) {
+    const h = React.createElement, T = this.T;
+    return h('button', { onClick, disabled: o.disabled, title: o.title, className: 'cvbtn', style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: o.sz || 28, height: o.sz || 28, border: 'none', background: o.bg || 'transparent', color: o.color || T.ink2, borderRadius: 7, cursor: 'pointer', padding: 0, flex: 'none' } }, this.icon(name, o.isz || 15));
+  }
+
+  field(val, onChange, o = {}) {
+    const h = React.createElement, T = this.T, paper = o.variant === 'paper';
+    const base = paper
+      ? { font: 'inherit', color: o.color || 'inherit', textAlign: o.align || 'inherit', letterSpacing: 'inherit', textTransform: 'inherit', border: 'none', borderBottom: '1px solid transparent', outline: 'none', background: 'transparent', padding: '0 1px', margin: 0, borderRadius: 2, width: o.width || '100%' }
+      : { font: `${o.weight || 400} ${o.size || 14}px/1.55 ${T.ui}`, color: o.color || T.ink, border: '1px solid transparent', borderRadius: 8, outline: 'none', background: 'transparent', padding: o.pad || '6px 9px', width: '100%', margin: 0 };
+    const cls = 'cvf ' + (paper ? 'cvf-paper' : 'cvf-card');
+    const common = { value: val || '', placeholder: o.ph || '', spellCheck: false, className: cls, onChange: e => onChange(e.target.value), style: base };
+    if (o.onKeyDown) common.onKeyDown = o.onKeyDown;
+    if (o.multiline) return h('textarea', { ...common, rows: 1, style: { ...base, resize: 'none', fieldSizing: 'content', minHeight: paper ? undefined : '1.6em', overflow: 'hidden', display: 'block' } });
+    return h('input', { ...common, type: 'text' });
+  }
+
+  // tag editor for skills (chips + add input)
+  tagEditor(list, onChange, o = {}) {
+    const h = React.createElement, T = this.T, paper = o.variant === 'paper';
+    const chips = (list || []).map((t, i) => h('span', { key: i, className: 'cvchip', style: { display: 'inline-flex', alignItems: 'center', gap: 5, padding: paper ? '1px 3px 1px 6px' : '3px 4px 3px 9px', background: paper ? T.aSoft : T.sunk, border: `1px solid ${paper ? T.aBorder : T.bd}`, borderRadius: 6, font: `500 ${paper ? 12.5 : 12.5}px ${T.ui}`, color: T.ink } },
+      t,
+      h('button', { className: 'cvx cvbtn', onClick: () => { const n = list.slice(); n.splice(i, 1); onChange(n); }, style: { border: 'none', background: 'transparent', color: T.ink3, cursor: 'pointer', padding: 0, width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4 } }, this.icon('x', 10))
+    ));
+    const input = h('input', { key: 'in', placeholder: o.ph || 'Add…', spellCheck: false, style: { border: 'none', outline: 'none', background: 'transparent', font: `400 13px ${T.ui}`, color: T.ink, padding: '3px 2px', minWidth: 64, flex: 1 },
+      onKeyDown: e => {
+        const v = e.target.value;
+        if ((e.key === 'Enter' || e.key === ',') && v.trim()) { e.preventDefault(); onChange([...(list || []), v.trim()]); e.target.value = ''; }
+        else if (e.key === 'Backspace' && !v && (list || []).length) { onChange(list.slice(0, -1)); }
+      } });
+    return h('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 } }, ...chips, input);
+  }
+
+  // bullet line list (card variant)
+  bulletList(list, onChange, o = {}) {
+    const h = React.createElement, T = this.T;
+    const rows = (list || []).map((b, i) => h('div', { key: i, className: 'cvitem', style: { display: 'flex', alignItems: 'flex-start', gap: 8 } },
+      h('span', { style: { width: 5, height: 5, borderRadius: 5, background: T.ink3, marginTop: 10, flex: 'none' } }),
+      this.field(b, v => { const n = list.slice(); n[i] = v; onChange(n, true); }, { multiline: true, ph: o.ph || 'Bullet point', pad: '4px 7px' }),
+      h('button', { className: 'cvih cvbtn', onClick: () => { const n = list.slice(); n.splice(i, 1); onChange(n.length ? n : ['']); }, style: { border: 'none', background: 'transparent', color: T.ink3, cursor: 'pointer', width: 24, height: 26, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none', marginTop: 2 } }, this.icon('x', 12))
+    ));
+    const add = h('button', { key: 'add', className: 'cvbtn', onClick: () => onChange([...(list || []), '']), style: { display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', color: T.ink2, cursor: 'pointer', font: `500 12.5px ${T.ui}`, padding: '4px 7px', borderRadius: 7, marginLeft: 13 } }, this.icon('plus', 12), o.addLabel || 'Add point');
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } }, ...rows, add);
+  }
+
+  linkList(list, onChange) {
+    const h = React.createElement, T = this.T;
+    const rows = (list || []).filter(x => true).map((l, i) => h('div', { key: i, className: 'cvitem', style: { display: 'flex', alignItems: 'center', gap: 7 } },
+      this.icon('link', 13, T.ink3),
+      this.field(l, v => { const n = list.slice(); n[i] = v; onChange(n, true); }, { ph: 'github.com/…', size: 13, color: this.accent, pad: '4px 7px' }),
+      h('button', { className: 'cvih cvbtn', onClick: () => { const n = list.slice(); n.splice(i, 1); onChange(n); }, style: { border: 'none', background: 'transparent', color: T.ink3, cursor: 'pointer', width: 22, height: 24, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, this.icon('x', 11))
+    ));
+    const add = h('button', { key: 'a', className: 'cvbtn', onClick: () => onChange([...(list || []), '']), style: { display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', color: T.ink2, cursor: 'pointer', font: `500 12.5px ${T.ui}`, padding: '4px 7px', borderRadius: 7 } }, this.icon('plus', 12), 'Add link');
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } }, ...rows, add);
+  }
+
+  // ======================================================= TOPBAR
+  renderTopbar() {
+    const h = React.createElement, T = this.T, cv = this.state.cv;
+    const canUndo = this.state.hpos > 0, canRedo = this.state.hpos < this.state.history.length - 1;
+    const views = [['blocks', 'blocks', 'Blocks'], ['document', 'doc', 'Document'], ['split', 'cols', 'Split']];
+    const viewBtns = views.map(([v, ic, lbl]) => {
+      const on = this.state.view === v;
+      return h('button', { key: v, onClick: () => this.setState({ view: v }), className: on ? '' : 'cvbtn', style: { display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 12px', border: 'none', borderRadius: 8, cursor: 'pointer', font: `${on ? 600 : 500} 13px ${T.ui}`, color: on ? T.ink : T.ink2, background: on ? T.surface : 'transparent', boxShadow: on ? '0 1px 2px rgba(0,0,0,.07)' : 'none' } }, this.icon(ic, 15), lbl);
+    });
+    const switcher = h('div', { style: { display: 'flex', gap: 2, padding: 3, background: T.sunk, borderRadius: 11, border: `1px solid ${T.bd}` } }, ...viewBtns);
+
+    const tbtn = (label, ic, onClick, o = {}) => h('button', { onClick, disabled: o.disabled, className: o.primary ? 'cvprimary' : 'cvghost', style: { display: 'inline-flex', alignItems: 'center', gap: 7, padding: o.primary ? '8px 15px' : '7px 13px', border: o.primary ? 'none' : `1px solid ${T.bd2}`, borderRadius: 9, cursor: o.disabled ? 'default' : 'pointer', font: `${o.primary ? 600 : 500} 13px ${T.ui}`, color: o.primary ? '#fff' : T.ink, background: o.primary ? T.a : T.surface, opacity: o.disabled ? .5 : 1, boxShadow: o.primary ? `0 1px 2px ${T.a}55` : 'none' } }, ic && this.icon(ic, 15), label);
+
+    const left = h('div', { style: { display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 9, flex: 'none' } },
+        h('div', { style: { width: 30, height: 30, borderRadius: 8, background: T.a, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 1px 3px ${T.a}66`, color: '#fff' } }, this.icon('blocks', 16)),
+        h('div', { style: { lineHeight: 1.15 } },
+          h('div', { style: { font: `600 14px ${T.ui}`, color: T.ink, letterSpacing: '-.01em' } }, 'Structure Editor'),
+          h('div', { style: { font: `500 10.5px ${T.mono}`, color: T.ink3, letterSpacing: '.04em' } }, 'CVDocument · live JSON'))),
+      cv && h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 4px 4px 12px', borderLeft: `1px solid ${T.bd}`, minWidth: 0 } },
+        h('span', { style: { font: `500 13px ${T.ui}`, color: T.ink2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, cv.contact.name || 'Untitled candidate'),
+        h('span', { style: { font: `500 11px ${T.mono}`, color: T.ink3, background: T.sunk, padding: '2px 7px', borderRadius: 6, flex: 'none' } }, cv.sections.length + ' sections')));
+
+    const right = h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flex: 'none' } },
+      cv && switcher,
+      cv && h('div', { style: { display: 'flex', gap: 1, padding: 3, background: T.sunk, borderRadius: 9, border: `1px solid ${T.bd}` } },
+        this.iconBtn('undo', () => this.undo(), { disabled: !canUndo, title: 'Undo (⌘Z)', sz: 30 }),
+        this.iconBtn('redo', () => this.redo(), { disabled: !canRedo, title: 'Redo (⌘⇧Z)', sz: 30 })),
+      cv && tbtn(this.state.jsonOpen ? 'Hide JSON' : 'View JSON', 'braces', () => this.setState({ jsonOpen: !this.state.jsonOpen }), {}),
+      tbtn(cv ? 'Re-infer' : 'Infer from CV', 'spark', () => this.startInfer(), { primary: !cv, disabled: this.state.inferring }),
+      cv && tbtn('Done', 'check', () => {}, { primary: true }));
+
+    return h('header', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '11px 18px', background: 'rgba(250,248,244,.85)', backdropFilter: 'blur(10px)', borderBottom: `1px solid ${T.bd}`, flex: 'none', zIndex: 20 } }, left, right);
+  }
+
+  // ======================================================= ADD-SECTION MENU
+  addMenu(anchorKey) {
+    const h = React.createElement, T = this.T;
+    if (this.state.addOpen !== anchorKey) return null;
+    const items = this.KINDS.map(k => h('button', { key: k.kind, className: 'cvkindbtn', onClick: () => this.addSection(k.kind, anchorKey), style: { display: 'flex', alignItems: 'center', gap: 11, width: '100%', textAlign: 'left', padding: '9px 11px', border: '1px solid transparent', borderRadius: 9, background: 'transparent', cursor: 'pointer' } },
+      h('div', { style: { width: 30, height: 30, borderRadius: 8, background: T.aSoft, color: T.a, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, this.icon(k.icon, 15)),
+      h('div', { style: { minWidth: 0 } },
+        h('div', { style: { font: `600 13px ${T.ui}`, color: T.ink } }, k.label),
+        h('div', { style: { font: `400 11.5px ${T.ui}`, color: T.ink3 } }, k.desc))));
+    return h('div', { style: { position: 'absolute', zIndex: 30, top: '100%', marginTop: 6, left: anchorKey === 'end' ? '50%' : 0, transform: anchorKey === 'end' ? 'translateX(-50%)' : 'none', width: 290, background: T.surface, border: `1px solid ${T.bd2}`, borderRadius: 14, boxShadow: '0 12px 32px rgba(40,34,24,.16), 0 2px 6px rgba(40,34,24,.08)', padding: 6, animation: 'cvfade .14s ease' } },
+      h('div', { style: { font: `600 10.5px ${T.mono}`, letterSpacing: '.08em', color: T.ink3, textTransform: 'uppercase', padding: '6px 9px 7px' } }, 'Add section'),
+      ...items);
+  }
+  addButton(anchorKey, full) {
+    const h = React.createElement, T = this.T;
+    const open = this.state.addOpen === anchorKey;
+    return h('div', { style: { position: 'relative', display: full ? 'block' : 'inline-block' } },
+      h('button', { className: 'cvghost', onClick: () => this.setState({ addOpen: open ? null : anchorKey }), style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: full ? '100%' : 'auto', padding: full ? '12px' : '7px 13px', border: `1px ${full ? 'dashed' : 'solid'} ${T.bd2}`, borderRadius: 11, background: open ? T.sunk : T.surface, cursor: 'pointer', font: `600 13px ${T.ui}`, color: T.ink2 } }, this.icon('plus', 15), full ? 'Add section' : 'Add'),
+      this.addMenu(anchorKey));
+  }
+
+  // ======================================================= BLOCKS VIEW
+  entryEditor(s, e, idx, kind) {
+    const h = React.createElement, T = this.T;
+    const F = { experience: { sub: 1, dates: 1, loc: 1, bul: 1, ph: 'Role / title', subph: 'Company', text: 0, links: 0 },
+      projects: { sub: 0, dates: 0, loc: 0, bul: 1, ph: 'Project name', text: 1, links: 1 },
+      education: { sub: 1, dates: 1, loc: 1, bul: 0, ph: 'Degree', subph: 'Institution', text: 0, links: 0 } }[kind] || {};
+    const upd = (patch, t) => this.withEntry(s.id, e.id, (en) => Object.assign(en, patch), t);
+    const head = h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 10 } },
+      h('div', { style: { flex: 1, minWidth: 0 } }, this.field(e.heading, v => upd({ heading: v }, true), { weight: 600, size: 14.5, ph: F.ph, pad: '4px 8px' })),
+      F.dates ? h('div', { style: { flex: 'none', width: 138 } }, this.field(e.dates, v => upd({ dates: v }, true), { size: 12.5, color: T.ink2, ph: 'Dates', align: 'right', pad: '5px 8px' })) : null);
+    const sub = (F.sub || F.loc) ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+      F.sub ? h('div', { style: { flex: 1, minWidth: 0 } }, this.field(e.subheading, v => upd({ subheading: v }, true), { size: 13, color: T.ink2, ph: F.subph, pad: '4px 8px' })) : h('div', { style: { flex: 1 } }),
+      F.loc ? h('div', { style: { flex: 'none', width: 138 } }, this.field(e.location, v => upd({ location: v }, true), { size: 12.5, color: T.ink2, ph: 'Location', align: 'right', pad: '4px 8px' })) : null) : null;
+    const text = F.text ? this.field(e.text, v => upd({ text: v }, true), { multiline: true, size: 13.5, color: T.ink2, ph: 'Short description', pad: '5px 8px' }) : null;
+    const bul = F.bul ? this.bulletList(e.bullets, (n, t) => upd({ bullets: n }, t)) : null;
+    const links = F.links ? this.linkList(e.links, (n, t) => upd({ links: n }, t)) : null;
+    const tools = h('div', { className: 'cvtools', style: { position: 'absolute', top: 8, right: 8, display: 'flex', gap: 1, background: T.surface, border: `1px solid ${T.bd}`, borderRadius: 8, padding: 2, boxShadow: '0 1px 3px rgba(0,0,0,.06)' } },
+      this.iconBtn('up', () => this.moveEntry(s.id, e.id, -1), { sz: 24, isz: 13, disabled: idx === 0, title: 'Move up' }),
+      this.iconBtn('down', () => this.moveEntry(s.id, e.id, 1), { sz: 24, isz: 13, disabled: idx === s.entries.length - 1, title: 'Move down' }),
+      this.iconBtn('trash', () => this.withSection(s.id, sec => { sec.entries = sec.entries.filter(x => x.id !== e.id); }), { sz: 24, isz: 13, title: 'Delete entry', color: '#B4543E' }));
+    return h('div', { key: e.id, style: { position: 'relative', display: 'flex', flexDirection: 'column', gap: 7, padding: '11px 12px', paddingLeft: 14, background: T.subtle, border: `1px solid ${T.bd}`, borderRadius: 11, borderLeft: `2px solid ${T.bd2}` } },
+      head, sub, text, bul, links, tools);
+  }
+
+  sectionCard(s, idx) {
+    const h = React.createElement, T = this.T;
+    const meta = this.kindMeta(s.kind);
+    const isDrag = this.state.dragId === s.id, isOver = this.state.overId === s.id && this.state.dragId && this.state.dragId !== s.id;
+    let body = null;
+    if (s.kind === 'summary') body = this.field(s.text, v => this.withSection(s.id, x => x.text = v, true), { multiline: true, size: 14, color: T.ink, ph: 'Write a short professional summary…', pad: '8px 9px' });
+    else if (s.kind === 'bullets') body = this.bulletList(s.items, (n, t) => this.withSection(s.id, x => x.items = n, t), { ph: 'Highlight', addLabel: 'Add item' });
+    else if (s.kind === 'skills') {
+      const groups = s.entries.map((e, i) => h('div', { key: e.id, className: 'cvitem', style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 8px', borderRadius: 9, background: T.subtle, border: `1px solid ${T.bd}` } },
+        h('div', { style: { flex: 'none', width: 132 } }, this.field(e.heading, v => this.withEntry(s.id, e.id, en => en.heading = v, true), { weight: 600, size: 13, ph: 'Category', pad: '3px 7px' })),
+        h('div', { style: { flex: 1, minWidth: 0, paddingTop: 1 } }, this.tagEditor(e.bullets, n => this.withEntry(s.id, e.id, en => en.bullets = n), { ph: 'Add skill…' })),
+        h('button', { className: 'cvih cvbtn', onClick: () => this.withSection(s.id, sec => sec.entries = sec.entries.filter(x => x.id !== e.id)), style: { border: 'none', background: 'transparent', color: T.ink3, cursor: 'pointer', width: 24, height: 24, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' } }, this.icon('x', 12))));
+      const add = h('button', { key: 'a', className: 'cvbtn', onClick: () => this.withSection(s.id, sec => sec.entries.push(this.newEntry('skills'))), style: { display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', color: T.ink2, cursor: 'pointer', font: `500 12.5px ${T.ui}`, padding: '5px 7px', borderRadius: 7, alignSelf: 'flex-start' } }, this.icon('plus', 12), 'Add category');
+      body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } }, ...groups, add);
+    } else {
+      const entries = s.entries.map((e, i) => this.entryEditor(s, e, i, s.kind));
+      const add = h('button', { key: 'a', className: 'cvbtn', onClick: () => this.withSection(s.id, sec => sec.entries.push(this.newEntry(s.kind))), style: { display: 'inline-flex', alignItems: 'center', gap: 7, border: `1px dashed ${T.bd2}`, background: 'transparent', color: T.ink2, cursor: 'pointer', font: `600 12.5px ${T.ui}`, padding: '9px', borderRadius: 10, justifyContent: 'center' } }, this.icon('plus', 13), 'Add ' + (s.kind === 'education' ? 'education' : s.kind === 'projects' ? 'project' : 'role'));
+      body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: 9 } }, ...entries, add);
+    }
+
+    const headerRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 } },
+      h('div', { onMouseDown: () => this.setState({ armed: s.id }), onMouseUp: () => this.setState({ armed: null }), title: 'Drag to reorder', style: { cursor: 'grab', padding: '6px 3px', marginLeft: -4, display: 'flex', flex: 'none' } }, this.grip(T.ink3, 16)),
+      h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 9px 4px 7px', background: T.aSoft, color: T.a, borderRadius: 7, font: `600 11px ${T.ui}`, letterSpacing: '.02em', flex: 'none' } }, this.icon(meta.icon, 13), meta.label),
+      h('div', { style: { flex: 1, minWidth: 0 } }, this.field(s.name, v => this.withSection(s.id, x => x.name = v, true), { weight: 600, size: 16, ph: 'Section title', pad: '4px 8px' })),
+      h('div', { className: 'cvtools', style: { display: 'flex', gap: 1, flex: 'none' } },
+        this.iconBtn('up', () => this.moveSection(s.id, -1), { disabled: idx === 0, title: 'Move section up' }),
+        this.iconBtn('down', () => this.moveSection(s.id, 1), { disabled: idx === this.state.cv.sections.length - 1, title: 'Move section down' }),
+        this.iconBtn('trash', () => this.delSection(s.id), { title: 'Delete section', color: '#B4543E' })));
+
+    const card = h('div', { className: 'cvsec', draggable: this.state.armed === s.id,
+      onDragStart: (ev) => { this.setState({ dragId: s.id }); try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', s.id); } catch (x) {} },
+      onDragEnter: () => { if (this.state.overId !== s.id) this.setState({ overId: s.id }); },
+      onDragOver: (ev) => { ev.preventDefault(); },
+      onDrop: (ev) => { ev.preventDefault(); this.reorder(s.id); },
+      onDragEnd: () => this.setState({ dragId: null, overId: null, armed: null }),
+      style: { position: 'relative', background: T.surface, border: `1px solid ${isOver ? T.a : T.bd}`, borderRadius: 16, padding: T.pad + 1, boxShadow: isOver ? `0 0 0 3px ${T.aSoft2}` : '0 1px 2px rgba(40,34,24,.04)', opacity: isDrag ? .4 : 1, transition: 'box-shadow .12s,border-color .12s,opacity .12s' } },
+      headerRow, body);
+
+    return h('div', { key: s.id, style: { display: 'flex', flexDirection: 'column' } }, card,
+      h('div', { className: 'cvgap', style: { display: 'flex', justifyContent: 'center', height: T.secGap, alignItems: 'center', position: 'relative' } },
+        h('div', { className: 'cvadd' }, this.addButton(s.id, false))));
+  }
+
+  contactCard() {
+    const h = React.createElement, T = this.T, c = this.state.cv.contact;
+    const fld = (k, ph, o = {}) => this.field(c[k], v => this.setContact(k, v), { ph, ...o });
+    return h('div', { style: { background: T.surface, border: `1px solid ${T.bd}`, borderRadius: 16, padding: T.pad + 3, marginBottom: T.secGap, boxShadow: '0 1px 2px rgba(40,34,24,.04)' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 } },
+        h('span', { style: { font: `600 10.5px ${T.mono}`, letterSpacing: '.1em', color: T.ink3, textTransform: 'uppercase' } }, 'Contact'),
+        h('span', { style: { flex: 1, height: 1, background: T.bd } })),
+      this.field(c.name, v => this.setContact('name', v), { weight: 600, size: 23, ph: 'Full name', pad: '2px 8px' }),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 } },
+        this.contactRow('email', fld('email', 'email@example.com')), this.contactRow('phone', fld('phone', 'Phone')),
+        this.contactRow('location', fld('location', 'City, State'))),
+      h('div', { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.bd}` } },
+        h('div', { style: { font: `600 11px ${T.ui}`, color: T.ink3, marginBottom: 4 } }, 'Links'),
+        this.linkList(c.links, n => { const cv = this.clone(this.state.cv); cv.contact.links = n; this.editText(cv); })));
+  }
+  contactRow(label, fieldEl) {
+    const h = React.createElement, T = this.T;
+    return h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, background: T.subtle, border: `1px solid ${T.bd}`, borderRadius: 9, padding: '2px 6px' } },
+      h('span', { style: { font: `500 11px ${T.mono}`, color: T.ink3, width: 58, flex: 'none', paddingLeft: 4 } }, label), fieldEl);
+  }
+
+  renderBlocks() {
+    const h = React.createElement, T = this.T;
+    return h('div', { style: { maxWidth: 760, margin: '0 auto', padding: '28px 24px 120px', animation: 'cvfade .2s ease' } },
+      this.contactCard(),
+      ...this.state.cv.sections.map((s, i) => this.sectionCard(s, i)),
+      this.addButton('end', true));
+  }
+
+  // ======================================================= PAPER (Document + Split)
+  paperContactField(k, ph) {
+    const h = React.createElement, c = this.state.cv.contact, v = c[k] || '';
+    const w = `calc(${Math.max((v || ph).length, 4)}ch + 4px)`;
+    return this.field(v, val => this.setContact(k, val), { variant: 'paper', ph, width: w, align: 'center' });
+  }
+  paper(opts = {}) {
+    const h = React.createElement, T = this.T, cv = this.state.cv;
+    const sep = () => h('span', { style: { color: T.ink3, margin: '0 2px' } }, '·');
+    const contactParts = [];
+    if (true) { contactParts.push(h('span', { key: 'e' }, this.paperContactField('email', 'email'))); }
+    contactParts.push(sep(), h('span', { key: 'p' }, this.paperContactField('phone', 'phone')));
+    (cv.contact.links || []).forEach((l, i) => contactParts.push(sep(), h('span', { key: 'l' + i, style: { color: T.a } }, this.field(l, v => { const x = this.clone(cv); x.contact.links[i] = v; this.editText(x); }, { variant: 'paper', color: T.a, ph: 'link', width: `calc(${Math.max((l || 'link').length, 4)}ch + 4px)` }))));
+    contactParts.push(sep(), h('span', { key: 'loc' }, this.paperContactField('location', 'location')));
+
+    const sectionsEls = cv.sections.map((s, idx) => this.paperSection(s, idx, opts));
+
+    const sheet = h('div', { style: { width: 760, maxWidth: '100%', margin: '0 auto', background: '#fff', border: `1px solid ${T.bd}`, borderRadius: 4, boxShadow: '0 1px 2px rgba(40,34,24,.05), 0 16px 40px rgba(40,34,24,.07)', padding: '54px 60px 70px', minHeight: 900, fontFamily: this.serif ? T.serifF : T.ui } },
+      h('div', { style: { textAlign: 'center', marginBottom: 6 } }, h('input', { value: cv.contact.name || '', placeholder: 'Full Name', spellCheck: false, className: 'cvf cvf-paper', onChange: e => this.setContact('name', e.target.value), style: { font: `500 30px ${this.serif ? T.serifF : T.ui}`, color: T.ink, textAlign: 'center', border: 'none', borderBottom: '1px solid transparent', outline: 'none', background: 'transparent', padding: '0 2px', letterSpacing: this.serif ? '0' : '-.01em' } })),
+      h('style', null, `.cvname-x{}`),
+      h('div', { style: { textAlign: 'center', font: `400 12.5px ${T.ui}`, color: T.ink2, marginBottom: 26, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 2 } }, ...contactParts),
+      ...sectionsEls,
+      h('div', { className: 'cvgap', style: { display: 'flex', justifyContent: 'center', marginTop: 16 } }, h('div', { className: 'cvadd' }, this.addButton('end', false))));
+
+    // override name typography
+    return h('div', { style: { padding: opts.pad || '34px 24px 120px', animation: 'cvfade .2s ease' } }, sheet);
+  }
+
+  paperSection(s, idx, opts) {
+    const h = React.createElement, T = this.T;
+    const nameStyle = { font: `600 11.5px ${T.ui}`, letterSpacing: '.13em', textTransform: 'uppercase', color: T.ink };
+    const sel = opts.selectable && this.state.selectedId === s.id;
+    let body = null;
+    const fcommon = { variant: 'paper' };
+    if (s.kind === 'summary') body = this.field(s.text, v => this.withSection(s.id, x => x.text = v, true), { variant: 'paper', multiline: true, ph: 'Summary…', color: T.ink, width: '100%' });
+    else if (s.kind === 'bullets') body = h('ul', { style: { margin: '4px 0 0', paddingLeft: 20 } }, ...(s.items || []).map((b, i) => h('li', { key: i, className: 'cvitem', style: { marginBottom: 2, display: 'flex', gap: 6, alignItems: 'flex-start' } },
+      this.field(b, v => { const n = s.items.slice(); n[i] = v; this.withSection(s.id, x => x.items = n, true); }, { variant: 'paper', multiline: true, width: '100%', color: T.ink }),
+      h('button', { className: 'cvih cvbtn', onClick: () => this.withSection(s.id, x => { x.items = x.items.filter((_, j) => j !== i); }), style: { border: 'none', background: 'transparent', color: T.ink3, cursor: 'pointer', width: 18, height: 18, borderRadius: 4, flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' } }, this.icon('x', 10)))));
+    else if (s.kind === 'skills') body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, marginTop: 3 } }, ...s.entries.map(e => h('div', { key: e.id, style: { display: 'flex', gap: 7, alignItems: 'baseline', font: `400 13.5px ${this.serif ? T.serifF : T.ui}`, color: T.ink } },
+      h('span', { style: { flex: 'none' } }, this.field(e.heading, v => this.withEntry(s.id, e.id, en => en.heading = v, true), { variant: 'paper', weight: 600, ph: 'Group', width: `calc(${Math.max((e.heading || 'Group').length, 4)}ch + 4px)`, color: T.ink }), h('span', { style: { fontWeight: 600 } }, ':')),
+      h('span', { style: { flex: 1 } }, (e.bullets || []).join(', '))))) ;
+    else body = h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 } }, ...s.entries.map((e, ei) => this.paperEntry(s, e, ei)));
+
+    return h('div', { key: s.id, className: 'cvsec cvpapersec', onClick: opts.selectable ? () => this.setState({ selectedId: s.id }) : undefined, style: { position: 'relative', marginTop: idx === 0 ? 4 : 18, paddingTop: 14, borderTop: `1px solid ${T.bd2}`, boxShadow: sel ? `0 0 0 2px ${T.a}, 0 0 0 6px ${T.aSoft2}` : 'none', borderRadius: sel ? 6 : 0, padding: sel ? '14px 10px 8px' : '14px 0 0', cursor: opts.selectable ? 'pointer' : 'default' } },
+      h('div', { style: { marginBottom: 7 } }, h('input', { value: s.name || '', placeholder: 'Section', spellCheck: false, className: 'cvf cvf-paper', onChange: e => this.withSection(s.id, x => x.name = e.target.value, true), style: { ...nameStyle, border: 'none', borderBottom: '1px solid transparent', outline: 'none', background: 'transparent', padding: '0 1px', width: `calc(${Math.max((s.name || 'Section').length, 4)}ch + ${(Math.max((s.name || 'Section').length, 4) * 0.14).toFixed(2)}em + 10px)` } })),
+      body,
+      this.paperSectionTools(s, idx));
+  }
+  paperEntry(s, e, ei) {
+    const h = React.createElement, T = this.T;
+    const sans = T.ui, useSerif = this.serif ? T.serifF : T.ui;
+    const upd = (patch, t) => this.withEntry(s.id, e.id, en => Object.assign(en, patch), t);
+    const head = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 } },
+      h('span', { style: { font: `600 14px ${useSerif}`, color: T.ink } }, this.field(e.heading, v => upd({ heading: v }, true), { variant: 'paper', weight: 600, ph: 'Title', width: `calc(${Math.max((e.heading || 'Title').length, 4)}ch + 4px)`, color: T.ink })),
+      e.dates !== undefined ? h('span', { style: { font: `400 11.5px ${T.mono}`, color: T.ink2, flex: 'none' } }, this.field(e.dates, v => upd({ dates: v }, true), { variant: 'paper', ph: 'dates', align: 'right', width: `calc(${Math.max((e.dates || 'dates').length, 4)}ch + 4px)`, color: T.ink2 })) : null);
+    const sub = (e.subheading !== undefined || e.location !== undefined) ? h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, font: `400 12.5px ${useSerif}`, fontStyle: 'italic', color: T.ink2 } },
+      e.subheading !== undefined ? this.field(e.subheading, v => upd({ subheading: v }, true), { variant: 'paper', ph: 'Company', width: `calc(${Math.max((e.subheading || 'Company').length, 4)}ch + 4px)`, color: T.ink2 }) : h('span'),
+      e.location !== undefined ? h('span', { style: { flex: 'none' } }, this.field(e.location, v => upd({ location: v }, true), { variant: 'paper', ph: 'location', align: 'right', width: `calc(${Math.max((e.location || 'location').length, 4)}ch + 4px)`, color: T.ink2 })) : null) : null;
+    const text = e.text !== undefined ? this.field(e.text, v => upd({ text: v }, true), { variant: 'paper', multiline: true, ph: 'Description', color: T.ink, width: '100%' }) : null;
+    const bullets = (e.bullets !== undefined && (s.kind === 'experience' || s.kind === 'projects')) ? h('ul', { style: { margin: '3px 0 0', paddingLeft: 20 } }, ...(e.bullets || []).map((b, i) => h('li', { key: i, className: 'cvitem', style: { marginBottom: 1, display: 'flex', gap: 6, font: `400 13px ${useSerif}`, color: T.ink } },
+      this.field(b, v => { const n = e.bullets.slice(); n[i] = v; upd({ bullets: n }, true); }, { variant: 'paper', multiline: true, width: '100%', color: T.ink }),
+      h('button', { className: 'cvih cvbtn', onClick: () => upd({ bullets: e.bullets.filter((_, j) => j !== i) }), style: { border: 'none', background: 'transparent', color: T.ink3, cursor: 'pointer', width: 18, height: 18, flex: 'none', borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' } }, this.icon('x', 10))))) : null;
+    const links = (e.links && e.links.length) ? h('div', { style: { font: `400 12px ${T.ui}`, color: T.a, marginTop: 2 } }, ...e.links.map((l, i) => this.field(l, v => { const n = e.links.slice(); n[i] = v; upd({ links: n }, true); }, { variant: 'paper', color: T.a, ph: 'link', width: `calc(${Math.max((l || 'link').length, 4)}ch + 4px)` }))) : null;
+    return h('div', { key: e.id, style: { display: 'flex', flexDirection: 'column', gap: 2 } }, head, sub, text, bullets, links);
+  }
+  paperSectionTools(s, idx) {
+    const h = React.createElement, T = this.T;
+    return h('div', { className: 'cvtools', style: { position: 'absolute', top: 8, right: 0, display: 'flex', flexDirection: 'column', gap: 1, background: T.surface, border: `1px solid ${T.bd}`, borderRadius: 9, padding: 2, boxShadow: '0 2px 8px rgba(40,34,24,.1)' } },
+      this.iconBtn('up', () => this.moveSection(s.id, -1), { sz: 26, isz: 14, disabled: idx === 0, title: 'Move up' }),
+      this.iconBtn('down', () => this.moveSection(s.id, 1), { sz: 26, isz: 14, disabled: idx === this.state.cv.sections.length - 1, title: 'Move down' }),
+      this.iconBtn('trash', () => this.delSection(s.id), { sz: 26, isz: 14, title: 'Delete', color: '#B4543E' }));
+  }
+
+  renderDocument() { return this.paper({ pad: '36px 24px 120px' }); }
+
+  // ---- Split ----
+  renderSplit() {
+    const h = React.createElement, T = this.T;
+    const outline = h('div', { style: { width: 280, flex: 'none', borderRight: `1px solid ${T.bd}`, background: T.subtle, overflow: 'auto', padding: '18px 14px' } },
+      h('div', { style: { font: `600 10.5px ${T.mono}`, letterSpacing: '.1em', color: T.ink3, textTransform: 'uppercase', padding: '0 6px 10px' } }, 'Outline'),
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } }, ...this.state.cv.sections.map((s, i) => {
+        const on = this.state.selectedId === s.id, meta = this.kindMeta(s.kind);
+        const count = s.kind === 'summary' ? '' : s.kind === 'bullets' ? (s.items.filter(Boolean).length + '') : (s.entries.length + '');
+        return h('div', { key: s.id, className: 'cvsec', onClick: () => this.setState({ selectedId: s.id }), style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 9px', borderRadius: 10, cursor: 'pointer', background: on ? T.surface : 'transparent', border: `1px solid ${on ? T.aBorder : 'transparent'}`, boxShadow: on ? '0 1px 2px rgba(0,0,0,.05)' : 'none' } },
+          h('span', { style: { color: on ? T.a : T.ink3, flex: 'none' } }, this.icon(meta.icon, 15)),
+          h('div', { style: { flex: 1, minWidth: 0 } },
+            h('div', { style: { font: `600 13px ${T.ui}`, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, s.name || meta.label),
+            h('div', { style: { font: `400 10.5px ${T.ui}`, color: T.ink3 } }, meta.label + (count ? ' · ' + count : ''))),
+          h('div', { className: 'cvtools', style: { display: 'flex', gap: 0, flex: 'none' } },
+            this.iconBtn('up', (ev) => { ev.stopPropagation(); this.moveSection(s.id, -1); }, { sz: 22, isz: 12, disabled: i === 0 }),
+            this.iconBtn('down', (ev) => { ev.stopPropagation(); this.moveSection(s.id, 1); }, { sz: 22, isz: 12, disabled: i === this.state.cv.sections.length - 1 })));
+      })),
+      h('div', { style: { marginTop: 12, padding: '0 2px' } }, this.addButton('end', true)));
+    const preview = h('div', { style: { flex: 1, minWidth: 0, overflow: 'auto', background: T.canvas } }, this.paper({ selectable: true, pad: '32px 28px 120px' }));
+    return h('div', { style: { display: 'flex', height: '100%', minHeight: 0 } }, outline, preview);
+  }
+
+  // ======================================================= EMPTY / INFER
+  renderEmpty() {
+    const h = React.createElement, T = this.T;
+    if (this.state.inferring) {
+      const steps = ['Reading document', 'Detecting section breaks', 'Extracting entries & dates', 'Structuring JSON', 'Validating against schema'];
+      const cur = this.state.inferStep;
+      return h('div', { style: { height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 } },
+        h('div', { style: { width: 420, background: T.surface, border: `1px solid ${T.bd}`, borderRadius: 18, padding: '30px 30px 26px', boxShadow: '0 8px 30px rgba(40,34,24,.08)', animation: 'cvfade .2s ease' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 } },
+            h('div', { style: { width: 38, height: 38, borderRadius: 10, background: T.aSoft, color: T.a, display: 'flex', alignItems: 'center', justifyContent: 'center' } }, this.icon('spark', 19)),
+            h('div', null, h('div', { style: { font: `600 15px ${T.ui}`, color: T.ink } }, 'Inferring structure'), h('div', { style: { font: `400 12.5px ${T.ui}`, color: T.ink3 } }, 'daniel-okafor-resume.pdf'))),
+          h('div', { style: { height: 4, background: T.sunk, borderRadius: 4, overflow: 'hidden', marginBottom: 20 } }, h('div', { style: { height: '100%', width: Math.min(100, cur / steps.length * 100) + '%', background: T.a, borderRadius: 4, transition: 'width .4s ease' } })),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 11 } }, ...steps.map((st, i) => {
+            const done = i < cur, active = i === cur;
+            return h('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 10, opacity: done || active ? 1 : .4 } },
+              h('div', { style: { width: 18, height: 18, borderRadius: 9, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', background: done ? T.a : 'transparent', border: done ? 'none' : `1.5px solid ${active ? T.a : T.bd2}`, color: '#fff' } }, done ? this.icon('check', 11, '#fff') : active ? h('div', { style: { width: 8, height: 8, borderRadius: 8, border: `1.5px solid ${T.a}`, borderTopColor: 'transparent', animation: 'cvspin .7s linear infinite' } }) : null),
+              h('span', { style: { font: `${active ? 600 : 500} 13px ${T.ui}`, color: active ? T.ink : done ? T.ink2 : T.ink3 } }, st));
+          }))));
+    }
+    return h('div', { style: { height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 } },
+      h('div', { style: { textAlign: 'center', maxWidth: 460, animation: 'cvfade .2s ease' } },
+        h('div', { style: { width: 60, height: 60, borderRadius: 16, background: T.surface, border: `1px solid ${T.bd}`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', boxShadow: '0 2px 8px rgba(40,34,24,.05)', color: T.ink3 } }, this.icon('doc', 28)),
+        h('h2', { style: { font: `600 21px ${T.ui}`, color: T.ink, margin: '0 0 8px', letterSpacing: '-.01em' } }, 'No structure yet'),
+        h('p', { style: { font: `400 14.5px/1.55 ${T.ui}`, color: T.ink2, margin: '0 0 24px' } }, 'Infer a structured CV from an uploaded document, or start from a blank outline. The JSON is the source of truth — every edit here writes straight to it.'),
+        h('div', { style: { display: 'flex', gap: 10, justifyContent: 'center' } },
+          h('button', { className: 'cvprimary', onClick: () => this.startInfer(), style: { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '11px 20px', border: 'none', borderRadius: 11, background: T.a, color: '#fff', font: `600 14px ${T.ui}`, cursor: 'pointer', boxShadow: `0 2px 8px ${T.a}55` } }, this.icon('spark', 16), 'Infer from CV'),
+          h('button', { className: 'cvghost', onClick: () => { this.setState({ view: 'blocks' }); this.loadCv(this.blankCv()); }, style: { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '11px 18px', border: `1px solid ${T.bd2}`, borderRadius: 11, background: T.surface, color: T.ink, font: `600 14px ${T.ui}`, cursor: 'pointer' } }, this.icon('plus', 16), 'Start blank'))));
+  }
+
+  // ======================================================= JSON DRAWER
+  renderDrawer() {
+    const h = React.createElement, T = this.T;
+    if (!this.state.cv || !this.state.jsonOpen) return null;
+    const json = JSON.stringify(this.exportJson(), null, 2);
+    const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const colored = esc(json).replace(/("(?:\\.|[^"\\])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?)/g, (m) => {
+      let c = '#A8581E';
+      if (/^"/.test(m)) c = /:\s*$/.test(m) ? T.a : '#3E7A5E';
+      else if (/true|false|null/.test(m)) c = '#9A4DB8';
+      return `<span style="color:${c}">${m}</span>`;
+    });
+    return h('aside', { style: { width: 400, flex: 'none', borderLeft: `1px solid ${T.bd}`, background: '#FBFAF7', display: 'flex', flexDirection: 'column', minHeight: 0 } },
+      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderBottom: `1px solid ${T.bd}`, flex: 'none' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 9 } },
+          h('span', { style: { color: T.a } }, this.icon('braces', 16)),
+          h('div', null, h('div', { style: { font: `600 13px ${T.ui}`, color: T.ink } }, 'Source JSON'),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 5, font: `500 10.5px ${T.mono}`, color: T.ink3 } }, h('span', { style: { width: 6, height: 6, borderRadius: 6, background: '#3E9A6B' } }), 'live · read-only · schema-valid'))),
+        h('div', { style: { display: 'flex', gap: 2 } },
+          this.iconBtn('copy', () => { try { navigator.clipboard.writeText(json); } catch (x) {} }, { title: 'Copy JSON' }),
+          this.iconBtn('x', () => this.setState({ jsonOpen: false }), { title: 'Close' }))),
+      h('pre', { style: { margin: 0, flex: 1, overflow: 'auto', padding: '14px 16px', font: `400 12px/1.6 ${T.mono}`, color: T.ink, whiteSpace: 'pre', tabSize: 2 }, dangerouslySetInnerHTML: { __html: colored } }));
+  }
+
+  // ======================================================= SURFACE ROUTER
+  renderSurface() {
+    if (!this.state.cv || this.state.inferring) return this.renderEmpty();
+    if (this.state.view === 'document') return this.renderDocument();
+    if (this.state.view === 'split') return this.renderSplit();
+    return this.renderBlocks();
+  }
+
+  renderVals() {
+    return {
+      topbar: this.renderTopbar(),
+      surface: this.renderSurface(),
+      drawer: this.renderDrawer(),
+    };
+  }
+}
+</script>
+</body>
+</html>

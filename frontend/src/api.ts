@@ -1,4 +1,4 @@
-import type { JobDTO, FullJobDTO, Stage } from "./types";
+import type { JobDTO, FullJobDTO, Stage, CVDocument } from "./types";
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -93,6 +93,40 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ format }),
       }
+    );
+  },
+
+  // --- CV Structure Editor (standalone base CV; job-less) ---
+
+  // GET the saved base CV, or null if none has been saved yet (server 404 → empty state).
+  async getCvStructure(): Promise<CVDocument | null> {
+    const response = await fetch("/api/cv-structure");
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+    const body = (await response.json()) as { structured: CVDocument };
+    return body.structured;
+  },
+
+  // PUT (validate + persist) the edited base CV. Surfaces the server's 422 reason on failure.
+  async saveCvStructure(cv: CVDocument): Promise<CVDocument> {
+    const body = await apiFetch<{ structured: CVDocument }>("/api/cv-structure", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ structured: cv }),
+    });
+    return body.structured;
+  },
+
+  // POST a CV file to infer a structure. Runs synchronously server-side (streams
+  // `infer_progress` WS events meanwhile) and resolves with the inferred-but-unsaved CV.
+  async inferCvStructure(file: File): Promise<{ task_id: string; structured: CVDocument }> {
+    const form = new FormData();
+    form.append("file", file);
+    return apiFetch<{ task_id: string; structured: CVDocument }>(
+      "/api/cv-structure/infer",
+      { method: "POST", body: form }
     );
   },
 

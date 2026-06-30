@@ -1,3 +1,41 @@
+/* CV Structure Editor fonts — Geist (UI), Geist Mono (labels/dates/JSON), Newsreader (paper).
+   Loaded from Google Fonts; falls back to system stacks (see tailwind fontFamily) offline. */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Editor field pseudo-states (defined as CSS since hover/focus can't be inline). The
+   .cv-field / .cv-paper-field classes are applied to the editor's text inputs/areas. */
+@layer components {
+  .cv-field {
+    background: #faf8f4;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .cv-field:hover:not(:focus) {
+    background: #f2f0ea;
+  }
+  .cv-field:focus {
+    background: #fff;
+    border-color: #b5c1f1;
+    box-shadow: 0 0 0 3px rgba(59, 91, 217, 0.13);
+    outline: none;
+  }
+  .cv-paper-field {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid transparent;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .cv-paper-field:hover:not(:focus) {
+    background: rgba(59, 91, 217, 0.05);
+  }
+  .cv-paper-field:focus {
+    background: rgba(59, 91, 217, 0.06);
+    border-bottom-color: #3b5bd9;
+    outline: none;
+  }
+}

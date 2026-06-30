@@ -4,10 +4,12 @@ import { connectWS } from "./ws";
 import { Header } from "./components/Header";
 import { JobList } from "./components/JobList";
 import { JobDetail } from "./components/JobDetail";
+import { CvEditor } from "./components/cv-editor/CvEditor";
 
 function App() {
   const refetchAll = useStore((s) => s.refetchAll);
   const selectedId = useStore((s) => s.selectedId);
+  const editorOpen = useStore((s) => s.editorOpen);
 
   useEffect(() => {
     refetchAll().catch((err: unknown) => {
@@ -18,6 +20,7 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
+      {editorOpen && <CvEditor />}
       <Header />
       <div className="flex flex-1 overflow-hidden">
         {/* Left rail — always visible on desktop; hidden on mobile when a job is selected */}

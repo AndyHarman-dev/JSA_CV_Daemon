@@ -101,6 +101,7 @@ class Orchestrator:
         backends: list[str] | None = None,
         max_parallel: int = 5,
         output_dir: Path | None = None,
+        cv_structure_path: Path | None = None,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
         self.wakeup = asyncio.Event()
@@ -108,6 +109,7 @@ class Orchestrator:
         self._backend_factory = _wrap_factory(backend_factory)
         self._backends = backends if backends is not None else ["claude-cli"]
         self._output_dir = output_dir
+        self._cv_structure_path = cv_structure_path
         self._stopping = False
         self._tasks: set[asyncio.Task] = set()
 
@@ -240,7 +242,11 @@ class Orchestrator:
 
                 active_backend_name = job.backend_name
                 backend = self._backend_factory(active_backend_name)
-                await stages.run_stage(job, backend, stage, session, output_dir=self._output_dir)
+                await stages.run_stage(
+                    job, backend, stage, session,
+                    output_dir=self._output_dir,
+                    cv_structure_path=self._cv_structure_path,
+                )
 
         except PausedForInput:
             # Job successfully parked — not an error

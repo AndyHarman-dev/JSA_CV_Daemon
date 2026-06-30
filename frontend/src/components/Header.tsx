@@ -36,6 +36,7 @@ function CountBadge({ label, count, className }: CountBadgeProps) {
 export function Header() {
   const wsStatus = useStore((s) => s.wsStatus);
   const jobs = useStore((s) => s.jobs);
+  const setEditorOpen = useStore((s) => s.setEditorOpen);
   const dot = WS_STATUS_DOT[wsStatus];
 
   type BackendState = { status: "loading" } | { status: "ok"; value: string } | { status: "error" };
@@ -131,8 +132,16 @@ export function Header() {
         />
       </div>
 
-      {/* Right: WS status + hard reload */}
+      {/* Right: Structure Editor + WS status + hard reload */}
       <div className="flex items-center gap-3 flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => setEditorOpen(true)}
+          title="Open the CV Structure Editor"
+          className="px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors"
+        >
+          Structure Editor
+        </button>
         <div className="flex items-center gap-1.5">
           <div className={`w-2.5 h-2.5 rounded-full ${dot.color}`} />
           <span className="text-xs text-gray-500">{dot.label}</span>
