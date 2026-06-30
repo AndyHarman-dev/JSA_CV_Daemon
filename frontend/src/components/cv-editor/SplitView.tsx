@@ -1,8 +1,12 @@
-// View C — Split: a 280px outline rail (select / reorder sections) beside the selectable
-// paper sheet (View B in selectable mode).
+// View C — Split: a 280px dark "INDEX" outline rail (select / reorder sections) beside the
+// selectable paper sheet (View B in selectable mode).
 import { useEditorStore } from "../../editorStore";
+import { Icon } from "../../theme/Icon";
+import { EDITOR_THEME } from "../../theme/tokens";
 import { PaperSheet } from "./PaperSheet";
-import { IconChevDown, IconChevUp, KIND_ICON, KIND_LABEL } from "./ui";
+import { KIND_ICON, KIND_LABEL } from "./ui";
+
+const T = EDITOR_THEME;
 
 export function SplitView() {
   const cv = useEditorStore((s) => s.cv)!;
@@ -10,34 +14,51 @@ export function SplitView() {
   const selectedId = useEditorStore((s) => s.selectedId);
 
   return (
-    <div className="flex h-full">
-      <aside className="w-[280px] shrink-0 border-r border-cv-border bg-cv-subtle px-3.5 py-4 overflow-y-auto">
-        <div className="font-geist-mono text-[10.5px] tracking-widest text-cv-ink3 mb-2 px-1">
-          OUTLINE
+    <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
+      <aside style={{ width: 280, flex: "none", borderRight: `1px solid ${T.bd}`, background: T.subtle, overflow: "auto", padding: "18px 14px", position: "relative", zIndex: 1 }}>
+        <div style={{ font: `600 10px ${T.mono}`, letterSpacing: ".14em", color: T.ink3, textTransform: "uppercase", padding: "0 6px 10px" }}>
+          INDEX
         </div>
-        <div className="space-y-1">
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {cv.sections.map((s, i) => {
-            const Icon = KIND_ICON[s.kind];
-            const sel = selectedId === s.id;
-            const count = s.entries.length || s.items.length || (s.text ? 1 : 0);
+            const on = selectedId === s.id;
+            const count = s.kind === "summary" ? "" : s.kind === "bullets" ? `${s.items.filter(Boolean).length}` : `${s.entries.length}`;
             return (
               <div
                 key={s.id}
+                className="cvsec"
                 onClick={() => st.setSelected(s.id)}
-                className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 cursor-pointer transition-colors ${
-                  sel
-                    ? "bg-white border border-cv-accent-border shadow-sm"
-                    : "border border-transparent hover:bg-cv-sunk"
-                }`}
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 9px",
+                  borderRadius: T.btnRadius,
+                  cursor: "pointer",
+                  background: on ? T.surface : "transparent",
+                  border: `1px solid ${on ? T.aBorder : "transparent"}`,
+                }}
               >
-                <Icon className={`w-4 h-4 shrink-0 ${sel ? "text-cv-accent" : "text-cv-ink3"}`} />
-                <span className="flex-1 min-w-0">
-                  <span className="block truncate text-sm text-cv-ink">{s.name || "Untitled"}</span>
-                  <span className="block font-geist-mono text-[10px] text-cv-ink3">
-                    {KIND_LABEL[s.kind].toLowerCase()} · {count}
-                  </span>
+                {on && (
+                  <span style={{ position: "absolute", left: 0, top: 6, bottom: 6, width: 2, background: T.a, boxShadow: `0 0 8px ${T.a}` }} />
+                )}
+                <span style={{ color: on ? T.a : T.ink3, flex: "none" }}>
+                  <Icon name={KIND_ICON[s.kind]} size={14} />
                 </span>
-                <span className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    className="truncate"
+                    style={{ font: `600 12.5px ${T.ui}`, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  >
+                    {s.name || KIND_LABEL[s.kind]}
+                  </div>
+                  <div style={{ font: `400 9.5px ${T.mono}`, color: T.ink3, letterSpacing: ".04em" }}>
+                    {KIND_LABEL[s.kind].toLowerCase()}
+                    {count ? ` · ${count}` : ""}
+                  </div>
+                </div>
+                <div className="cvtools" style={{ display: "flex", gap: 0, flex: "none" }}>
                   <button
                     type="button"
                     title="Move up"
@@ -46,9 +67,10 @@ export function SplitView() {
                       e.stopPropagation();
                       st.moveSection(s.id, -1);
                     }}
-                    className="p-0.5 text-cv-ink3 hover:text-cv-ink2 disabled:opacity-30"
+                    className="cvbtn"
+                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, border: "none", background: "transparent", color: T.ink2, borderRadius: T.btnRadius, cursor: "pointer", padding: 0 }}
                   >
-                    <IconChevUp className="w-3.5 h-3.5" />
+                    <Icon name="up" size={11} />
                   </button>
                   <button
                     type="button"
@@ -58,17 +80,18 @@ export function SplitView() {
                       e.stopPropagation();
                       st.moveSection(s.id, 1);
                     }}
-                    className="p-0.5 text-cv-ink3 hover:text-cv-ink2 disabled:opacity-30"
+                    className="cvbtn"
+                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, border: "none", background: "transparent", color: T.ink2, borderRadius: T.btnRadius, cursor: "pointer", padding: 0 }}
                   >
-                    <IconChevDown className="w-3.5 h-3.5" />
+                    <Icon name="down" size={11} />
                   </button>
-                </span>
+                </div>
               </div>
             );
           })}
         </div>
       </aside>
-      <div className="flex-1 overflow-y-auto">
+      <div style={{ flex: 1, minWidth: 0, overflow: "auto", background: T.canvas, position: "relative" }}>
         <PaperSheet selectable />
       </div>
     </div>

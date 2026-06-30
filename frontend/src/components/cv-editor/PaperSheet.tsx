@@ -2,52 +2,128 @@
 // place; mirrors the serializer's layout (summary paragraph, bullets, `Category: a, b, c`
 // skills lines, entries with right-aligned dates). In `selectable` mode the selected section
 // gets an accent focus ring and clicking a section selects it (drives the Split outline).
+//
+// Per the design handoff, the sheet itself stays light/print-realistic (paperT) — it is NOT
+// reskinned dark. It sits inside a dark EDITOR_THEME "EXPORT_PREVIEW" viewport frame.
+//
+// Note: content-tracking field widths are computed inline here (not via `ui.tsx`'s
+// `ContentInput`) — ContentInput's own `style={{width:...}}` would be silently clobbered by
+// any caller-supplied `style` prop (JSX spread order), and these fields need custom paper
+// colors/fonts via `style`. ContentInput itself is left untouched.
+import type { CSSProperties } from "react";
 import { useEditorStore } from "../../editorStore";
+import { chamferPath, cornerMarks } from "../../theme/chrome";
+import { Icon } from "../../theme/Icon";
+import { EDITOR_THEME, paperT } from "../../theme/tokens";
 import type { EditorSection } from "../../types";
-import { AutoTextarea, ContentInput, IconChevDown, IconChevUp, IconTrash } from "./ui";
+import { AutoTextarea } from "./ui";
+
+const T = EDITOR_THEME;
+const PA = paperT;
+
+function chWidth(text: string | undefined, fallback: string, min = 4): string {
+  const len = Math.max((text || fallback).length, min);
+  return `calc(${len}ch + 4px)`;
+}
+
+function paperStyle(opts: {
+  fontFamily: string;
+  weight?: number;
+  size?: number;
+  color?: string;
+  align?: CSSProperties["textAlign"];
+  italic?: boolean;
+  width?: string;
+}): CSSProperties {
+  return {
+    font: `${opts.italic ? "italic " : ""}${opts.weight ?? 400} ${opts.size ?? 13.5}px/1.5 ${opts.fontFamily}`,
+    color: opts.color ?? PA.ink,
+    textAlign: opts.align,
+    border: "none",
+    borderBottom: "1px solid transparent",
+    outline: "none",
+    background: "transparent",
+    padding: "0 1px",
+    margin: 0,
+    borderRadius: 2,
+    width: opts.width ?? "100%",
+  };
+}
+
+function lightToolBtn({
+  icon,
+  onClick,
+  title,
+  disabled,
+  danger,
+}: {
+  icon: "up" | "down" | "trash";
+  onClick: () => void;
+  title: string;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className="cvbtn-light"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 26,
+        height: 26,
+        border: "none",
+        background: "transparent",
+        color: danger ? T.danger : PA.ink2,
+        borderRadius: 6,
+        cursor: disabled ? "default" : "pointer",
+        padding: 0,
+      }}
+    >
+      <Icon name={icon} size={14} />
+    </button>
+  );
+}
 
 function SectionTools({ section, index, total }: { section: EditorSection; index: number; total: number }) {
   const st = useEditorStore();
   return (
-    <div className="absolute top-2 right-0 flex flex-col opacity-0 group-hover:opacity-100 transition-opacity">
-      <button
-        type="button"
-        title="Move up"
-        disabled={index === 0}
-        onClick={() => st.moveSection(section.id, -1)}
-        className="p-1 text-cv-ink3 hover:text-cv-ink2 disabled:opacity-30"
-      >
-        <IconChevUp className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        title="Move down"
-        disabled={index === total - 1}
-        onClick={() => st.moveSection(section.id, 1)}
-        className="p-1 text-cv-ink3 hover:text-cv-ink2 disabled:opacity-30"
-      >
-        <IconChevDown className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        title="Delete section"
-        onClick={() => st.deleteSection(section.id)}
-        className="p-1 text-cv-ink3 hover:text-cv-danger"
-      >
-        <IconTrash className="w-4 h-4" />
-      </button>
+    <div
+      className="cvtools"
+      style={{
+        position: "absolute",
+        top: 8,
+        right: 0,
+        display: "flex",
+        flexDirection: "column",
+        gap: 1,
+        background: PA.surface,
+        border: `1px solid ${PA.bd}`,
+        borderRadius: 8,
+        padding: 2,
+        boxShadow: "0 2px 8px rgba(0,0,0,.15)",
+      }}
+    >
+      {lightToolBtn({ icon: "up", title: "Move up", disabled: index === 0, onClick: () => st.moveSection(section.id, -1) })}
+      {lightToolBtn({ icon: "down", title: "Move down", disabled: index === total - 1, onClick: () => st.moveSection(section.id, 1) })}
+      {lightToolBtn({ icon: "trash", title: "Delete section", danger: true, onClick: () => st.deleteSection(section.id) })}
     </div>
   );
 }
 
 function PaperBody({ section, serif }: { section: EditorSection; serif: boolean }) {
   const st = useEditorStore();
-  const bodyFont = serif ? "font-newsreader" : "font-geist";
+  const bodyFont = serif ? PA.serifF : PA.ui;
   switch (section.kind) {
     case "summary":
       return (
         <AutoTextarea
-          className={`cv-paper-field w-full ${bodyFont} text-[13.5px] leading-relaxed text-cv-ink`}
+          className="cvf cvf-paper"
+          style={paperStyle({ fontFamily: bodyFont, size: 13.5 })}
           value={section.text ?? ""}
           placeholder="Summary…"
           onChange={(e) => st.updateSection(section.id, { text: e.target.value })}
@@ -55,102 +131,156 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
       );
     case "bullets":
       return (
-        <ul className="list-disc pl-5 space-y-0.5">
+        <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
           {section.items.map((it, i) => (
-            <li key={i} className={`${bodyFont} text-[13.5px] text-cv-ink`}>
-              <input
-                className="cv-paper-field w-full"
+            <li key={i} className="cvitem" style={{ marginBottom: 2, display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <AutoTextarea
+                className="cvf cvf-paper"
+                style={paperStyle({ fontFamily: bodyFont, size: 13.5 })}
                 value={it}
                 onChange={(e) => st.updateItem(section.id, i, e.target.value)}
               />
+              <button
+                type="button"
+                className="cvih cvbtn-light"
+                onClick={() => st.removeItem(section.id, i)}
+                title="Remove item"
+                style={{ border: "none", background: "transparent", color: PA.ink3, cursor: "pointer", width: 18, height: 18, borderRadius: 4, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+              >
+                <Icon name="x" size={10} />
+              </button>
             </li>
           ))}
         </ul>
       );
     case "skills":
       return (
-        <div className="space-y-0.5">
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 3 }}>
           {section.entries.map((e) => (
-            <div key={e.id} className={`${bodyFont} text-[13.5px] text-cv-ink`}>
-              <input
-                className="cv-paper-field font-semibold"
-                value={e.heading ?? ""}
-                placeholder="Category"
-                onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
-              />
-              <span>: </span>
-              <input
-                className="cv-paper-field w-3/5"
-                value={e.bullets.join(", ")}
-                placeholder="a, b, c"
-                onChange={(ev) =>
-                  st.updateEntry(section.id, e.id, {
-                    bullets: ev.target.value.split(",").map((x) => x.trim()).filter(Boolean),
-                  })
-                }
-              />
+            <div key={e.id} style={{ display: "flex", gap: 7, alignItems: "baseline", font: `400 13.5px ${bodyFont}`, color: PA.ink }}>
+              <span style={{ flex: "none" }}>
+                <input
+                  className="cvf cvf-paper"
+                  style={paperStyle({ fontFamily: bodyFont, weight: 600, width: chWidth(e.heading, "Group") })}
+                  value={e.heading ?? ""}
+                  placeholder="Group"
+                  onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
+                />
+                <span style={{ fontWeight: 600 }}>:</span>
+              </span>
+              <span style={{ flex: 1 }}>
+                <input
+                  className="cvf cvf-paper"
+                  style={paperStyle({ fontFamily: bodyFont, width: "100%" })}
+                  value={e.bullets.join(", ")}
+                  placeholder="a, b, c"
+                  onChange={(ev) =>
+                    st.updateEntry(section.id, e.id, {
+                      bullets: ev.target.value.split(",").map((x) => x.trim()).filter(Boolean),
+                    })
+                  }
+                />
+              </span>
             </div>
           ))}
         </div>
       );
     default:
       return (
-        <div className="space-y-2">
-          {section.entries.map((e) => (
-            <div key={e.id}>
-              <div className="flex justify-between items-baseline gap-2">
-                <input
-                  className={`cv-paper-field font-semibold ${bodyFont} text-[14px] text-cv-ink flex-1`}
-                  value={e.heading ?? ""}
-                  placeholder="Title"
-                  onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
-                />
-                <input
-                  className="cv-paper-field font-geist-mono text-[11px] text-cv-ink2 text-right"
-                  value={e.dates ?? ""}
-                  placeholder="Dates"
-                  onChange={(ev) => st.updateEntry(section.id, e.id, { dates: ev.target.value })}
-                />
-              </div>
-              {(e.subheading !== undefined || section.kind !== "projects") && (
-                <div className="flex justify-between items-baseline gap-2">
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 4 }}>
+          {section.entries.map((e) => {
+            const showSub = e.subheading !== undefined || section.kind !== "projects";
+            return (
+              <div key={e.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
                   <input
-                    className={`cv-paper-field italic ${bodyFont} text-[13px] text-cv-ink2 flex-1`}
-                    value={e.subheading ?? ""}
-                    placeholder="Subheading"
-                    onChange={(ev) => st.updateEntry(section.id, e.id, { subheading: ev.target.value })}
+                    className="cvf cvf-paper"
+                    style={paperStyle({ fontFamily: bodyFont, weight: 600, size: 14, width: "100%" })}
+                    value={e.heading ?? ""}
+                    placeholder="Title"
+                    onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
                   />
-                  <input
-                    className="cv-paper-field text-[12px] text-cv-ink2 text-right"
-                    value={e.location ?? ""}
-                    placeholder="Location"
-                    onChange={(ev) => st.updateEntry(section.id, e.id, { location: ev.target.value })}
-                  />
+                  {e.dates !== undefined && (
+                    <input
+                      className="cvf cvf-paper"
+                      style={{ ...paperStyle({ fontFamily: PA.mono, size: 11.5, color: PA.ink2, align: "right", width: chWidth(e.dates, "dates") }), flex: "none" }}
+                      value={e.dates ?? ""}
+                      placeholder="dates"
+                      onChange={(ev) => st.updateEntry(section.id, e.id, { dates: ev.target.value })}
+                    />
+                  )}
                 </div>
-              )}
-              {e.text !== undefined && (
-                <AutoTextarea
-                  className={`cv-paper-field w-full ${bodyFont} text-[13px] text-cv-ink`}
-                  value={e.text ?? ""}
-                  placeholder="Description"
-                  onChange={(ev) => st.updateEntry(section.id, e.id, { text: ev.target.value })}
-                />
-              )}
-              {e.bullets.length > 0 && (
-                <ul className="list-disc pl-5">
-                  {e.bullets.map((b, i) => (
-                    <li key={i} className={`${bodyFont} text-[13px] text-cv-ink`}>
+                {showSub && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, font: `400 12.5px ${bodyFont}`, fontStyle: "italic", color: PA.ink2 }}>
+                    <input
+                      className="cvf cvf-paper"
+                      style={paperStyle({ fontFamily: bodyFont, size: 12.5, color: PA.ink2, italic: true, width: "100%" })}
+                      value={e.subheading ?? ""}
+                      placeholder="Subheading"
+                      onChange={(ev) => st.updateEntry(section.id, e.id, { subheading: ev.target.value })}
+                    />
+                    {e.location !== undefined && (
                       <input
-                        className="cv-paper-field w-full"
-                        value={b}
-                        onChange={(ev) => st.updateBullet(section.id, e.id, i, ev.target.value)}
+                        className="cvf cvf-paper"
+                        style={{ ...paperStyle({ fontFamily: bodyFont, size: 12, color: PA.ink2, align: "right", width: chWidth(e.location, "location") }), flex: "none" }}
+                        value={e.location ?? ""}
+                        placeholder="location"
+                        onChange={(ev) => st.updateEntry(section.id, e.id, { location: ev.target.value })}
                       />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ))}
+                    )}
+                  </div>
+                )}
+                {e.text !== undefined && (
+                  <AutoTextarea
+                    className="cvf cvf-paper"
+                    style={paperStyle({ fontFamily: bodyFont, size: 13 })}
+                    value={e.text ?? ""}
+                    placeholder="Description"
+                    onChange={(ev) => st.updateEntry(section.id, e.id, { text: ev.target.value })}
+                  />
+                )}
+                {e.bullets.length > 0 && (
+                  <ul style={{ margin: "3px 0 0", paddingLeft: 20 }}>
+                    {e.bullets.map((b, i) => (
+                      <li key={i} className="cvitem" style={{ marginBottom: 1, display: "flex", gap: 6, font: `400 13px ${bodyFont}`, color: PA.ink }}>
+                        <AutoTextarea
+                          className="cvf cvf-paper"
+                          style={paperStyle({ fontFamily: bodyFont, size: 13 })}
+                          value={b}
+                          onChange={(ev) => st.updateBullet(section.id, e.id, i, ev.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="cvih cvbtn-light"
+                          onClick={() => st.removeBullet(section.id, e.id, i)}
+                          title="Remove bullet"
+                          style={{ border: "none", background: "transparent", color: PA.ink3, cursor: "pointer", width: 18, height: 18, flex: "none", borderRadius: 4, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                        >
+                          <Icon name="x" size={10} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {e.links.length > 0 && (
+                  <div style={{ font: `400 12px ${PA.ui}`, color: PA.a, marginTop: 2 }}>
+                    {e.links.map((l, i) => (
+                      <input
+                        key={i}
+                        className="cvf cvf-paper"
+                        style={paperStyle({ fontFamily: PA.ui, size: 12, color: PA.a, width: chWidth(l, "link") })}
+                        value={l}
+                        placeholder="link"
+                        onChange={(ev) =>
+                          st.updateEntry(section.id, e.id, { links: e.links.map((x, j) => (j === i ? ev.target.value : x)) })
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       );
   }
@@ -161,66 +291,129 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
   const st = useEditorStore();
   const serif = useEditorStore((s) => s.paperSerif);
   const selectedId = useEditorStore((s) => s.selectedId);
-  const nameFont = serif ? "font-newsreader" : "font-geist";
+  const nameFont = serif ? PA.serifF : PA.ui;
 
-  return (
-    <div className="flex justify-center px-6 py-9 pb-32">
-      <div
-        className="w-[760px] bg-white rounded shadow-[0_1px_2px_rgba(40,34,24,.05),0_16px_40px_rgba(40,34,24,.07)] px-[60px] py-[54px] min-h-[900px]"
-      >
+  const sheet = (
+    <div
+      style={{
+        width: 760,
+        maxWidth: "100%",
+        margin: "0 auto",
+        background: PA.surface,
+        border: `1px solid ${PA.bd}`,
+        borderRadius: 4,
+        boxShadow: "0 1px 2px rgba(0,0,0,.2), 0 24px 50px rgba(0,0,0,.45)",
+        padding: "54px 60px 70px",
+        minHeight: 900,
+        fontFamily: nameFont,
+      }}
+    >
+      <div style={{ textAlign: "center", marginBottom: 6 }}>
         <input
-          className={`cv-paper-field w-full text-center ${nameFont} text-[30px] font-medium text-cv-ink`}
+          className="cvf cvf-paper"
+          style={paperStyle({ fontFamily: nameFont, weight: 500, size: 30, align: "center" })}
           value={cv.contact.name}
           placeholder="Your Name"
           onChange={(e) => st.updateContact({ name: e.target.value })}
         />
-        <div className="flex flex-wrap justify-center items-center gap-x-2 gap-y-1 mt-1 text-[12.5px] text-cv-ink2">
-          {(["email", "phone"] as const).map((f) =>
-            cv.contact[f] !== undefined ? (
-              <ContentInput
-                key={f}
-                className="cv-paper-field text-center"
-                value={cv.contact[f] ?? ""}
-                onChange={(e) => st.updateContact({ [f]: e.target.value })}
-              />
-            ) : null
-          )}
-          {cv.contact.links.map((l, i) => (
-            <span key={i} className="text-cv-accent">
-              · {l}
-            </span>
-          ))}
-          {cv.contact.location !== undefined && (
-            <ContentInput
-              className="cv-paper-field text-center"
+      </div>
+      <div style={{ textAlign: "center", font: `400 12.5px ${PA.ui}`, color: PA.ink2, marginBottom: 26, display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: 2 }}>
+        {(["email", "phone"] as const).map((f) =>
+          cv.contact[f] !== undefined ? (
+            <input
+              key={f}
+              className="cvf cvf-paper"
+              style={paperStyle({ fontFamily: PA.ui, size: 12.5, color: PA.ink2, align: "center", width: chWidth(cv.contact[f], f) })}
+              value={cv.contact[f] ?? ""}
+              onChange={(e) => st.updateContact({ [f]: e.target.value })}
+            />
+          ) : null
+        )}
+        {cv.contact.links.map((l, i) => (
+          <span key={i} style={{ color: PA.a, margin: "0 2px" }}>
+            ·{" "}
+            <input
+              className="cvf cvf-paper"
+              style={paperStyle({ fontFamily: PA.ui, size: 12.5, color: PA.a, align: "center", width: chWidth(l, "link") })}
+              value={l}
+              placeholder="link"
+              onChange={(e) =>
+                st.updateContact({ links: cv.contact.links.map((x, j) => (j === i ? e.target.value : x)) })
+              }
+            />
+          </span>
+        ))}
+        {cv.contact.location !== undefined && (
+          <span>
+            ·{" "}
+            <input
+              className="cvf cvf-paper"
+              style={paperStyle({ fontFamily: PA.ui, size: 12.5, color: PA.ink2, align: "center", width: chWidth(cv.contact.location, "location") })}
               value={cv.contact.location ?? ""}
               onChange={(e) => st.updateContact({ location: e.target.value })}
             />
-          )}
-        </div>
+          </span>
+        )}
+      </div>
 
-        {cv.sections.map((s, i) => {
-          const isSel = selectable && selectedId === s.id;
-          return (
-            <div
-              key={s.id}
-              onClick={selectable ? () => st.setSelected(s.id) : undefined}
-              className={`group relative mt-5 pt-4 border-t border-cv-border2 ${
-                selectable ? "cursor-pointer rounded px-2 -mx-2 transition-shadow" : ""
-              } ${isSel ? "shadow-[0_0_0_2px_#3B5BD9,0_0_0_6px_#E2E6F9]" : ""}`}
-            >
+      {cv.sections.map((s, i) => {
+        const isSel = selectable && selectedId === s.id;
+        return (
+          <div
+            key={s.id}
+            className="cvsec cvpapersec"
+            onClick={selectable ? () => st.setSelected(s.id) : undefined}
+            style={{
+              position: "relative",
+              marginTop: i === 0 ? 4 : 18,
+              paddingTop: 14,
+              borderTop: `1px solid ${PA.bd}`,
+              boxShadow: isSel ? `0 0 0 2px ${PA.a}, 0 0 0 6px color-mix(in srgb, ${PA.a} 15%, transparent)` : "none",
+              borderRadius: isSel ? 6 : 0,
+              padding: isSel ? "14px 10px 8px" : "14px 0 0",
+              cursor: selectable ? "pointer" : "default",
+            }}
+          >
+            <div style={{ marginBottom: 7 }}>
               <input
-                className="cv-paper-field font-geist uppercase tracking-[0.13em] text-[11.5px] font-semibold text-cv-ink2 mb-1"
-                style={{ width: `calc(${(s.name || "").length}ch + ${(s.name || "").length * 0.14}em + 10px)` }}
+                className="cvf cvf-paper"
+                style={paperStyle({ fontFamily: PA.ui, weight: 600, size: 11.5, color: PA.ink, width: chWidth(s.name, "Section") })}
                 value={s.name}
-                placeholder="SECTION"
+                placeholder="Section"
                 onChange={(e) => st.updateSection(s.id, { name: e.target.value })}
               />
-              <PaperBody section={s} serif={serif} />
-              <SectionTools section={s} index={i} total={cv.sections.length} />
             </div>
-          );
-        })}
+            <PaperBody section={s} serif={serif} />
+            <SectionTools section={s} index={i} total={cv.sections.length} />
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <div style={{ padding: "34px 24px 120px" }}>
+      <div style={{ position: "relative", maxWidth: 880, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, justifyContent: "center" }}>
+          <span
+            style={{ width: 6, height: 6, borderRadius: 6, background: T.accent2, boxShadow: `0 0 8px ${T.accent2}`, animation: "cyblink 2.4s ease-in-out infinite", flex: "none" }}
+          />
+          <span style={{ font: `500 10.5px ${T.mono}`, letterSpacing: ".18em", color: T.ink3, textTransform: "uppercase" }}>
+            EXPORT_PREVIEW · READ-ONLY LAYOUT
+          </span>
+        </div>
+        <div
+          style={{
+            position: "relative",
+            padding: 18,
+            border: `1px dashed ${T.bd2}`,
+            borderRadius: T.chamfer ? 0 : 10,
+            clipPath: T.chamfer ? chamferPath(18) : undefined,
+          }}
+        >
+          {cornerMarks(T, T.bd2, 11)}
+          {sheet}
+        </div>
       </div>
     </div>
   );

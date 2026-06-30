@@ -1,20 +1,15 @@
-// View A — Blocks (primary): a centered column of a ContactCard + one SectionCard per
-// section. Sections reorder via drag (armed only from the grip) or up/down arrows. The card
-// body dispatches on the section's editor `kind`.
-import { useState } from "react";
+// View A — Blocks (primary): a centered column of a ContactCard ("IDENTITY") + one
+// SectionCard ("MOD_0N") per section. Sections reorder via drag (armed only from the grip)
+// or up/down arrows. The card body dispatches on the section's editor `kind`.
+import { useState, type CSSProperties } from "react";
 import { useEditorStore } from "../../editorStore";
+import { cornerMarks, panelBase } from "../../theme/chrome";
+import { Grip, Icon, type IconName } from "../../theme/Icon";
+import { EDITOR_THEME } from "../../theme/tokens";
 import type { EditorEntry, EditorSection, SectionKind } from "../../types";
-import {
-  AutoTextarea,
-  IconChevDown,
-  IconChevUp,
-  IconGrip,
-  IconPlus,
-  IconTrash,
-  IconX,
-  KIND_ICON,
-  KIND_LABEL,
-} from "./ui";
+import { AutoTextarea, KIND_CODE, KIND_ICON, KIND_LABEL } from "./ui";
+
+const T = EDITOR_THEME;
 
 const ADD_KINDS: { kind: SectionKind; desc: string }[] = [
   { kind: "summary", desc: "A short professional summary paragraph." },
@@ -25,18 +20,39 @@ const ADD_KINDS: { kind: SectionKind; desc: string }[] = [
   { kind: "bullets", desc: "A flat list of highlights." },
 ];
 
+function cardField(
+  opts: { weight?: number; size?: number; color?: string; pad?: string; align?: CSSProperties["textAlign"] } = {}
+): CSSProperties {
+  return {
+    font: `${opts.weight ?? 400} ${opts.size ?? 14}px/1.55 ${T.ui}`,
+    color: opts.color ?? T.ink,
+    textAlign: opts.align,
+    border: "1px solid transparent",
+    borderRadius: 8,
+    outline: "none",
+    background: "transparent",
+    padding: opts.pad ?? "6px 9px",
+    width: "100%",
+    margin: 0,
+  };
+}
+
 function ToolBtn({
+  icon,
   onClick,
   title,
   disabled,
   danger,
-  children,
+  size = 28,
+  iconSize = 15,
 }: {
+  icon: IconName;
   onClick: () => void;
   title: string;
   disabled?: boolean;
   danger?: boolean;
-  children: React.ReactNode;
+  size?: number;
+  iconSize?: number;
 }) {
   return (
     <button
@@ -44,94 +60,158 @@ function ToolBtn({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`p-1 rounded-md transition-colors disabled:opacity-30 ${
-        danger ? "text-cv-ink3 hover:text-cv-danger" : "text-cv-ink3 hover:text-cv-ink2"
-      } hover:bg-cv-sunk`}
+      className="cvbtn"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: size,
+        height: size,
+        border: "none",
+        background: "transparent",
+        color: danger ? T.danger : T.ink2,
+        borderRadius: T.btnRadius,
+        cursor: disabled ? "default" : "pointer",
+        padding: 0,
+        flex: "none",
+      }}
     >
-      {children}
+      <Icon name={icon} size={iconSize} />
     </button>
   );
 }
 
 // --- contact ----------------------------------------------------------------------------
 
-function ContactCard() {
-  const cv = useEditorStore((s) => s.cv)!;
-  const updateContact = useEditorStore((s) => s.updateContact);
-  const c = cv.contact;
-
-  const Row = ({ label, field }: { label: string; field: "email" | "phone" | "location" }) => (
-    <label className="flex items-center gap-2 bg-cv-subtle rounded-lg px-2.5 py-1.5">
-      <span className="font-geist-mono text-[10.5px] text-cv-ink3 w-14 shrink-0">{label}</span>
-      <input
-        className="flex-1 bg-transparent outline-none text-sm text-cv-ink placeholder:text-cv-ink3"
-        value={c[field] ?? ""}
-        placeholder="—"
-        onChange={(e) => updateContact({ [field]: e.target.value })}
-      />
-    </label>
-  );
-
+function ContactRow({
+  label,
+  field,
+  value,
+  onChange,
+}: {
+  label: string;
+  field: "email" | "phone" | "location";
+  value: string;
+  onChange: (field: "email" | "phone" | "location", v: string) => void;
+}) {
   return (
-    <div className="bg-cv-surface border border-cv-border rounded-2xl p-5 shadow-sm">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="font-geist-mono text-[10.5px] tracking-widest text-cv-ink3">CONTACT</span>
-        <span className="flex-1 h-px bg-cv-border" />
-      </div>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        background: T.subtle,
+        border: `1px solid ${T.bd}`,
+        borderRadius: T.btnRadius,
+        padding: "2px 6px",
+      }}
+    >
+      <span style={{ font: `500 11px ${T.mono}`, color: T.ink3, width: 58, flex: "none", paddingLeft: 4, letterSpacing: ".04em" }}>
+        {label.toUpperCase()}
+      </span>
       <input
-        className="w-full bg-transparent outline-none font-geist font-semibold text-[23px] text-cv-ink placeholder:text-cv-ink3 mb-3"
-        value={c.name}
-        placeholder="Your name"
-        onChange={(e) => updateContact({ name: e.target.value })}
-      />
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <Row label="email" field="email" />
-        <Row label="phone" field="phone" />
-        <Row label="location" field="location" />
-      </div>
-      <LinkList
-        links={c.links}
-        onChange={(links) => updateContact({ links })}
-        label="Links"
+        className="cvf cvf-card"
+        style={cardField({ pad: "4px 6px" })}
+        value={value}
+        placeholder="—"
+        onChange={(e) => onChange(field, e.target.value)}
       />
     </div>
   );
 }
 
-function LinkList({
-  links,
-  onChange,
-  label,
-}: {
-  links: string[];
-  onChange: (links: string[]) => void;
-  label: string;
-}) {
+function ContactCard() {
+  const cv = useEditorStore((s) => s.cv)!;
+  const updateContact = useEditorStore((s) => s.updateContact);
+  const c = cv.contact;
+
   return (
-    <div className="mt-3">
-      <span className="font-geist-mono text-[10.5px] tracking-wide text-cv-ink3">{label}</span>
-      <div className="mt-1.5 space-y-1.5">
-        {links.map((l, i) => (
-          <div key={i} className="flex items-center gap-1.5 group">
-            <input
-              className="cv-field flex-1 px-2.5 py-1.5 text-sm text-cv-ink outline-none"
-              value={l}
-              placeholder="github.com/…"
-              onChange={(e) => onChange(links.map((x, j) => (j === i ? e.target.value : x)))}
-            />
-            <ToolBtn title="Remove link" onClick={() => onChange(links.filter((_, j) => j !== i))}>
-              <IconX className="w-3.5 h-3.5" />
-            </ToolBtn>
-          </div>
-        ))}
-        <button
-          type="button"
-          onClick={() => onChange([...links, ""])}
-          className="text-xs text-cv-ink2 hover:text-cv-accent transition-colors"
-        >
-          + Add link
-        </button>
+    <div
+      className="cvsec"
+      style={{ position: "relative", ...panelBase(T, { chamfer: 16 }), padding: T.pad + 3, marginBottom: T.secGap, boxShadow: T.shadowSm }}
+    >
+      {cornerMarks(T, T.bd2)}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <span style={{ font: `600 10.5px ${T.mono}`, letterSpacing: ".16em", color: T.ink3, textTransform: "uppercase" }}>IDENTITY</span>
+        <span style={{ flex: 1, height: 1, background: T.bd }} />
+        <span style={{ font: `400 10px ${T.mono}`, color: T.ink3, letterSpacing: ".08em" }}>OPERATOR_ID</span>
       </div>
+      <input
+        className="cvf cvf-card"
+        style={cardField({ weight: 600, size: 23, pad: "2px 8px" })}
+        value={c.name}
+        placeholder="Full name"
+        onChange={(e) => updateContact({ name: e.target.value })}
+      />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+        <ContactRow label="email" field="email" value={c.email ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
+        <ContactRow label="phone" field="phone" value={c.phone ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
+        <ContactRow label="location" field="location" value={c.location ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
+      </div>
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.bd}` }}>
+        <div style={{ font: `600 11px ${T.disp}`, letterSpacing: ".06em", color: T.ink3, marginBottom: 4 }}>CHANNELS</div>
+        <LinkList links={c.links} onChange={(links) => updateContact({ links })} />
+      </div>
+    </div>
+  );
+}
+
+function LinkList({ links, onChange }: { links: string[]; onChange: (links: string[]) => void }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {links.map((l, i) => (
+        <div key={i} className="cvitem" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <Icon name="link" size={13} color={T.accent2} />
+          <input
+            className="cvf cvf-card"
+            style={{ ...cardField({ size: 13, color: T.accent2, pad: "4px 7px" }), flex: 1 }}
+            value={l}
+            placeholder="github.com/…"
+            onChange={(e) => onChange(links.map((x, j) => (j === i ? e.target.value : x)))}
+          />
+          <button
+            type="button"
+            className="cvih cvbtn"
+            title="Remove link"
+            onClick={() => onChange(links.filter((_, j) => j !== i))}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: T.ink3,
+              cursor: "pointer",
+              width: 22,
+              height: 24,
+              borderRadius: 6,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: "none",
+            }}
+          >
+            <Icon name="x" size={11} />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="cvbtn"
+        onClick={() => onChange([...links, ""])}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          border: "none",
+          background: "transparent",
+          color: T.ink2,
+          cursor: "pointer",
+          font: `500 12.5px ${T.ui}`,
+          padding: "4px 7px",
+          borderRadius: 7,
+          alignSelf: "flex-start",
+        }}
+      >
+        <Icon name="plus" size={12} /> Add link
+      </button>
     </div>
   );
 }
@@ -146,25 +226,50 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
     setDraft("");
   };
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
       {tags.map((t, i) => (
         <span
           key={i}
-          className="group inline-flex items-center gap-1 bg-cv-accent-soft text-cv-accent rounded-md px-2 py-0.5 text-xs"
+          className="cvchip"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            padding: "3px 4px 3px 9px",
+            background: T.aSoft,
+            border: `1px solid ${T.aBorder}`,
+            borderRadius: T.btnRadius,
+            font: `500 12.5px ${T.ui}`,
+            color: T.ink,
+          }}
         >
           {t}
           <button
             type="button"
+            className="cvx cvbtn"
             onClick={() => onChange(tags.filter((_, j) => j !== i))}
-            className="opacity-0 group-hover:opacity-100 transition-opacity"
             title="Remove"
+            style={{
+              border: "none",
+              background: "transparent",
+              color: T.ink3,
+              cursor: "pointer",
+              padding: 0,
+              width: 16,
+              height: 16,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 4,
+            }}
           >
-            <IconX className="w-3 h-3" />
+            <Icon name="x" size={10} />
           </button>
         </span>
       ))}
       <input
-        className="bg-transparent outline-none text-xs text-cv-ink placeholder:text-cv-ink3 min-w-[80px] flex-1 py-0.5"
+        className="cvf"
+        style={{ border: "none", outline: "none", background: "transparent", font: `400 13px ${T.ui}`, color: T.ink, padding: "3px 2px", minWidth: 64, flex: 1 }}
         value={draft}
         placeholder="Add skill…"
         onChange={(e) => setDraft(e.target.value)}
@@ -182,116 +287,183 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
   );
 }
 
+// --- bullet list (entry-level) -----------------------------------------------------------
+
+function BulletList({ section, entry }: { section: EditorSection; entry: EditorEntry }) {
+  const st = useEditorStore();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {entry.bullets.map((b, i) => (
+        <div key={i} className="cvitem" style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+          <span style={{ width: 5, height: 5, borderRadius: 5, background: T.a, marginTop: 10, flex: "none", boxShadow: `0 0 4px ${T.a}` }} />
+          <AutoTextarea
+            className="cvf cvf-card"
+            style={{ ...cardField({ pad: "4px 7px" }), flex: 1 }}
+            value={b}
+            placeholder="Achievement…"
+            onChange={(e) => st.updateBullet(section.id, entry.id, i, e.target.value)}
+          />
+          <button
+            type="button"
+            className="cvih cvbtn"
+            title="Remove bullet"
+            onClick={() => st.removeBullet(section.id, entry.id, i)}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: T.ink3,
+              cursor: "pointer",
+              width: 24,
+              height: 26,
+              borderRadius: 6,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: "none",
+              marginTop: 2,
+            }}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="cvbtn"
+        onClick={() => st.addBullet(section.id, entry.id)}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          border: "none",
+          background: "transparent",
+          color: T.ink2,
+          cursor: "pointer",
+          font: `500 12.5px ${T.ui}`,
+          padding: "4px 7px",
+          borderRadius: 7,
+          marginLeft: 13,
+        }}
+      >
+        <Icon name="plus" size={12} /> Add point
+      </button>
+    </div>
+  );
+}
+
 // --- entry editor (experience / projects / education) -----------------------------------
+
+const ENTRY_FIELDS: Record<
+  string,
+  { sub: boolean; dates: boolean; loc: boolean; bul: boolean; text: boolean; links: boolean; ph: string; subph?: string }
+> = {
+  experience: { sub: true, dates: true, loc: true, bul: true, text: false, links: false, ph: "Role / title", subph: "Company" },
+  projects: { sub: false, dates: false, loc: false, bul: true, text: true, links: true, ph: "Project name" },
+  education: { sub: true, dates: true, loc: true, bul: false, text: false, links: false, ph: "Degree", subph: "Institution" },
+};
 
 function EntryEditor({ section, entry }: { section: EditorSection; entry: EditorEntry }) {
   const st = useEditorStore();
   const { id: sid } = section;
   const set = (patch: Partial<EditorEntry>) => st.updateEntry(sid, entry.id, patch);
   const idx = section.entries.findIndex((e) => e.id === entry.id);
+  const f = ENTRY_FIELDS[section.kind] ?? ENTRY_FIELDS.experience;
 
   return (
-    <div className="group relative bg-cv-subtle border border-cv-border rounded-xl border-l-2 border-l-cv-border2 px-3 py-2.5">
-      <div className="absolute top-1.5 right-1.5 flex opacity-0 group-hover:opacity-100 transition-opacity">
-        <ToolBtn title="Move up" disabled={idx === 0} onClick={() => st.moveEntry(sid, entry.id, -1)}>
-          <IconChevUp className="w-4 h-4" />
-        </ToolBtn>
-        <ToolBtn
-          title="Move down"
-          disabled={idx === section.entries.length - 1}
-          onClick={() => st.moveEntry(sid, entry.id, 1)}
-        >
-          <IconChevDown className="w-4 h-4" />
-        </ToolBtn>
-        <ToolBtn title="Delete entry" danger onClick={() => st.deleteEntry(sid, entry.id)}>
-          <IconTrash className="w-4 h-4" />
-        </ToolBtn>
-      </div>
-
-      <div className="flex gap-2 pr-16">
-        <input
-          className="cv-field flex-1 px-2 py-1 text-sm font-semibold text-cv-ink outline-none"
-          value={entry.heading ?? ""}
-          placeholder={section.kind === "education" ? "Degree" : "Title"}
-          onChange={(e) => set({ heading: e.target.value })}
-        />
-        {section.kind !== "projects" && (
+    <div
+      className="cvsec"
+      style={{
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+        gap: 7,
+        padding: "11px 12px",
+        paddingLeft: 14,
+        ...panelBase(T, { bg: T.subtle, chamfer: 9 }),
+        borderLeft: `2px solid ${T.aBorder}`,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, paddingRight: 76 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <input
-            className="cv-field w-[138px] px-2 py-1 text-xs text-cv-ink2 outline-none"
-            value={entry.dates ?? ""}
-            placeholder="Dates"
-            onChange={(e) => set({ dates: e.target.value })}
+            className="cvf cvf-card"
+            style={cardField({ weight: 600, size: 14.5, pad: "4px 8px" })}
+            value={entry.heading ?? ""}
+            placeholder={f.ph}
+            onChange={(e) => set({ heading: e.target.value })}
           />
+        </div>
+        {f.dates && (
+          <div style={{ flex: "none", width: 138 }}>
+            <input
+              className="cvf cvf-card"
+              style={cardField({ size: 12.5, color: T.ink2, align: "right", pad: "5px 8px" })}
+              value={entry.dates ?? ""}
+              placeholder="Dates"
+              onChange={(e) => set({ dates: e.target.value })}
+            />
+          </div>
         )}
       </div>
 
-      {section.kind !== "projects" && (
-        <div className="flex gap-2 mt-1.5">
-          <input
-            className="cv-field flex-1 px-2 py-1 text-sm text-cv-ink2 outline-none"
-            value={entry.subheading ?? ""}
-            placeholder={section.kind === "education" ? "Institution" : "Company"}
-            onChange={(e) => set({ subheading: e.target.value })}
-          />
-          <input
-            className="cv-field w-[138px] px-2 py-1 text-xs text-cv-ink2 outline-none"
-            value={entry.location ?? ""}
-            placeholder="Location"
-            onChange={(e) => set({ location: e.target.value })}
-          />
+      {(f.sub || f.loc) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {f.sub ? (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <input
+                className="cvf cvf-card"
+                style={cardField({ size: 13, color: T.ink2, pad: "4px 8px" })}
+                value={entry.subheading ?? ""}
+                placeholder={f.subph}
+                onChange={(e) => set({ subheading: e.target.value })}
+              />
+            </div>
+          ) : (
+            <div style={{ flex: 1 }} />
+          )}
+          {f.loc && (
+            <div style={{ flex: "none", width: 138 }}>
+              <input
+                className="cvf cvf-card"
+                style={cardField({ size: 12.5, color: T.ink2, align: "right", pad: "4px 8px" })}
+                value={entry.location ?? ""}
+                placeholder="Location"
+                onChange={(e) => set({ location: e.target.value })}
+              />
+            </div>
+          )}
         </div>
       )}
 
-      {section.kind === "projects" && (
+      {f.text && (
         <AutoTextarea
-          className="cv-field w-full px-2 py-1 mt-1.5 text-sm text-cv-ink outline-none"
+          className="cvf cvf-card"
+          style={cardField({ size: 13.5, color: T.ink2, pad: "5px 8px" })}
           value={entry.text ?? ""}
-          placeholder="Description"
+          placeholder="Short description"
           onChange={(e) => set({ text: e.target.value })}
         />
       )}
 
-      {section.kind !== "education" && (
-        <BulletList section={section} entry={entry} />
-      )}
+      {f.bul && <BulletList section={section} entry={entry} />}
 
-      {section.kind === "projects" && (
-        <div className="mt-1.5">
-          <LinkList links={entry.links} onChange={(links) => set({ links })} label="Links" />
-        </div>
-      )}
-    </div>
-  );
-}
+      {f.links && <LinkList links={entry.links} onChange={(links) => set({ links })} />}
 
-function BulletList({ section, entry }: { section: EditorSection; entry: EditorEntry }) {
-  const st = useEditorStore();
-  return (
-    <div className="mt-1.5 space-y-1">
-      {entry.bullets.map((b, i) => (
-        <div key={i} className="group/b flex items-start gap-1.5">
-          <span className="mt-2 w-1 h-1 rounded-full bg-cv-ink3 shrink-0" />
-          <AutoTextarea
-            className="cv-field flex-1 px-2 py-1 text-sm text-cv-ink outline-none"
-            value={b}
-            placeholder="Achievement…"
-            onChange={(e) => st.updateBullet(section.id, entry.id, i, e.target.value)}
-          />
-          <ToolBtn
-            title="Remove bullet"
-            onClick={() => st.removeBullet(section.id, entry.id, i)}
-          >
-            <IconX className="w-3.5 h-3.5 opacity-0 group-hover/b:opacity-100 transition-opacity" />
-          </ToolBtn>
-        </div>
-      ))}
-      <button
-        type="button"
-        onClick={() => st.addBullet(section.id, entry.id)}
-        className="text-xs text-cv-ink2 hover:text-cv-accent transition-colors ml-2.5"
+      <div
+        className="cvtools"
+        style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 1, background: T.surface, border: `1px solid ${T.bd}`, borderRadius: T.btnRadius, padding: 2, boxShadow: T.shadowSm }}
       >
-        + Add bullet
-      </button>
+        <ToolBtn icon="up" size={24} iconSize={13} title="Move up" disabled={idx === 0} onClick={() => st.moveEntry(sid, entry.id, -1)} />
+        <ToolBtn
+          icon="down"
+          size={24}
+          iconSize={13}
+          title="Move down"
+          disabled={idx === section.entries.length - 1}
+          onClick={() => st.moveEntry(sid, entry.id, 1)}
+        />
+        <ToolBtn icon="trash" size={24} iconSize={13} title="Delete entry" danger onClick={() => st.deleteEntry(sid, entry.id)} />
+      </div>
     </div>
   );
 }
@@ -304,82 +476,164 @@ function SectionBody({ section }: { section: EditorSection }) {
     case "summary":
       return (
         <AutoTextarea
-          className="cv-field w-full px-3 py-2 text-sm text-cv-ink outline-none"
+          className="cvf cvf-card"
+          style={cardField({ size: 14, pad: "8px 9px" })}
           value={section.text ?? ""}
-          placeholder="Write a 2–3 sentence summary…"
+          placeholder="Write a short professional summary…"
           onChange={(e) => st.updateSection(section.id, { text: e.target.value })}
         />
       );
     case "bullets":
       return (
-        <div className="space-y-1">
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           {section.items.map((it, i) => (
-            <div key={i} className="group/i flex items-start gap-1.5">
-              <span className="mt-2 w-1 h-1 rounded-full bg-cv-ink3 shrink-0" />
+            <div key={i} className="cvitem" style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <span style={{ width: 5, height: 5, borderRadius: 5, background: T.a, marginTop: 10, flex: "none", boxShadow: `0 0 4px ${T.a}` }} />
               <AutoTextarea
-                className="cv-field flex-1 px-2 py-1 text-sm text-cv-ink outline-none"
+                className="cvf cvf-card"
+                style={{ ...cardField({ pad: "4px 7px" }), flex: 1 }}
                 value={it}
-                placeholder="Highlight…"
+                placeholder="Highlight"
                 onChange={(e) => st.updateItem(section.id, i, e.target.value)}
               />
-              <ToolBtn title="Remove item" onClick={() => st.removeItem(section.id, i)}>
-                <IconX className="w-3.5 h-3.5 opacity-0 group-hover/i:opacity-100 transition-opacity" />
-              </ToolBtn>
+              <button
+                type="button"
+                className="cvih cvbtn"
+                title="Remove item"
+                onClick={() => st.removeItem(section.id, i)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: T.ink3,
+                  cursor: "pointer",
+                  width: 24,
+                  height: 26,
+                  borderRadius: 6,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flex: "none",
+                  marginTop: 2,
+                }}
+              >
+                <Icon name="x" size={12} />
+              </button>
             </div>
           ))}
           <button
             type="button"
+            className="cvbtn"
             onClick={() => st.addItem(section.id)}
-            className="text-xs text-cv-ink2 hover:text-cv-accent transition-colors ml-2.5"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              border: "none",
+              background: "transparent",
+              color: T.ink2,
+              cursor: "pointer",
+              font: `500 12.5px ${T.ui}`,
+              padding: "4px 7px",
+              borderRadius: 7,
+              marginLeft: 13,
+            }}
           >
-            + Add item
+            <Icon name="plus" size={12} /> Add item
           </button>
         </div>
       );
     case "skills":
       return (
-        <div className="space-y-1.5">
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {section.entries.map((e) => (
-            <div key={e.id} className="group/g flex items-start gap-2 bg-cv-subtle rounded-lg p-2">
-              <input
-                className="w-[132px] shrink-0 bg-transparent outline-none text-sm font-semibold text-cv-ink placeholder:text-cv-ink3"
-                value={e.heading ?? ""}
-                placeholder="Category"
-                onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
-              />
-              <div className="flex-1">
-                <TagEditor
-                  tags={e.bullets}
-                  onChange={(bullets) => st.updateEntry(section.id, e.id, { bullets })}
+            <div
+              key={e.id}
+              className="cvitem"
+              style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 8px", borderRadius: T.btnRadius, background: T.subtle, border: `1px solid ${T.bd}` }}
+            >
+              <div style={{ flex: "none", width: 132 }}>
+                <input
+                  className="cvf cvf-card"
+                  style={cardField({ weight: 600, size: 13, pad: "3px 7px" })}
+                  value={e.heading ?? ""}
+                  placeholder="Category"
+                  onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
                 />
               </div>
-              <ToolBtn title="Remove category" danger onClick={() => st.deleteEntry(section.id, e.id)}>
-                <IconTrash className="w-4 h-4 opacity-0 group-hover/g:opacity-100 transition-opacity" />
-              </ToolBtn>
+              <div style={{ flex: 1, minWidth: 0, paddingTop: 1 }}>
+                <TagEditor tags={e.bullets} onChange={(bullets) => st.updateEntry(section.id, e.id, { bullets })} />
+              </div>
+              <button
+                type="button"
+                className="cvih cvbtn"
+                title="Remove category"
+                onClick={() => st.deleteEntry(section.id, e.id)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: T.ink3,
+                  cursor: "pointer",
+                  width: 24,
+                  height: 24,
+                  borderRadius: 6,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flex: "none",
+                }}
+              >
+                <Icon name="trash" size={12} />
+              </button>
             </div>
           ))}
           <button
             type="button"
+            className="cvbtn"
             onClick={() => st.addEntry(section.id)}
-            className="text-xs text-cv-ink2 hover:text-cv-accent transition-colors"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              border: "none",
+              background: "transparent",
+              color: T.ink2,
+              cursor: "pointer",
+              font: `500 12.5px ${T.ui}`,
+              padding: "5px 7px",
+              borderRadius: 7,
+              alignSelf: "flex-start",
+            }}
           >
-            + Add category
+            <Icon name="plus" size={12} /> Add category
           </button>
         </div>
       );
     default:
       return (
-        <div className="space-y-2">
+        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
           {section.entries.map((e) => (
             <EntryEditor key={e.id} section={section} entry={e} />
           ))}
           <button
             type="button"
+            className="cvbtn"
             onClick={() => st.addEntry(section.id)}
-            className="w-full text-sm text-cv-ink2 hover:text-cv-accent border border-dashed border-cv-border2 rounded-lg py-1.5 transition-colors"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 7,
+              border: `1px dashed ${T.bd2}`,
+              background: "transparent",
+              color: T.ink2,
+              cursor: "pointer",
+              font: `600 12.5px ${T.ui}`,
+              padding: "9px",
+              borderRadius: T.btnRadius,
+              justifyContent: "center",
+            }}
           >
-            + Add{" "}
-            {section.kind === "education" ? "education" : section.kind === "projects" ? "project" : "role"}
+            <Icon name="plus" size={13} />
+            Add {section.kind === "education" ? "education" : section.kind === "projects" ? "project" : "role"}
           </button>
         </div>
       );
@@ -393,68 +647,90 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
   const dragId = useEditorStore((s) => s.dragId);
   const overId = useEditorStore((s) => s.overId);
   const armed = useEditorStore((s) => s.armed);
-  const KindIcon = KIND_ICON[section.kind];
+  const isDrag = dragId === section.id;
+  const isOver = overId === section.id && !!dragId && dragId !== section.id;
 
   // Armed only from the grip (store state, so the `draggable` attribute actually re-renders).
   return (
-    <div
-      draggable={armed && dragId === section.id}
-      onDragStart={(e) => {
-        st.setDrag(section.id);
-        e.dataTransfer.effectAllowed = "move";
-      }}
-      onDragOver={(e) => {
-        e.preventDefault();
-        if (overId !== section.id) st.setOver(section.id);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        if (dragId && dragId !== section.id) st.reorderSection(dragId, index);
-        st.endDrag();
-      }}
-      onDragEnd={() => st.endDrag()}
-      className={`bg-cv-surface border rounded-2xl p-[18px] shadow-sm transition-shadow ${
-        dragId === section.id ? "opacity-40" : ""
-      } ${overId === section.id && dragId && dragId !== section.id ? "border-cv-accent ring-[3px] ring-cv-accent-soft2" : "border-cv-border"}`}
-    >
-      <div className="group flex items-center gap-2">
-        <button
-          type="button"
-          title="Drag to reorder"
-          onMouseDown={() => st.arm(section.id)}
-          onMouseUp={() => st.endDrag()}
-          className="cursor-grab active:cursor-grabbing text-cv-ink3 hover:text-cv-ink2 shrink-0"
-        >
-          <IconGrip className="w-4 h-4" />
-        </button>
-        <span className="inline-flex items-center gap-1 bg-cv-accent-soft text-cv-accent rounded-md px-1.5 py-0.5 text-[11px] shrink-0">
-          <KindIcon className="w-3.5 h-3.5" />
-          {KIND_LABEL[section.kind]}
-        </span>
-        <input
-          className="flex-1 bg-transparent outline-none font-geist font-semibold text-base text-cv-ink placeholder:text-cv-ink3"
-          value={section.name}
-          placeholder="Section name"
-          onChange={(e) => st.updateSection(section.id, { name: e.target.value })}
-        />
-        <div className="flex opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-          <ToolBtn title="Move up" disabled={index === 0} onClick={() => st.moveSection(section.id, -1)}>
-            <IconChevUp className="w-4 h-4" />
-          </ToolBtn>
-          <ToolBtn
-            title="Move down"
-            disabled={index === total - 1}
-            onClick={() => st.moveSection(section.id, 1)}
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <div
+        className="cvsec"
+        draggable={armed && dragId === section.id}
+        onDragStart={(e) => {
+          st.setDrag(section.id);
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (overId !== section.id) st.setOver(section.id);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (dragId && dragId !== section.id) st.reorderSection(dragId, index);
+          st.endDrag();
+        }}
+        onDragEnd={() => st.endDrag()}
+        style={{
+          position: "relative",
+          ...panelBase(T, { chamfer: 14, border: isOver ? T.a : T.bd }),
+          padding: T.pad + 1,
+          boxShadow: isOver ? `0 0 0 3px ${T.aSoft2}, 0 0 22px ${T.aSoft2}` : T.shadowSm,
+          opacity: isDrag ? 0.4 : 1,
+          transition: "box-shadow .12s,border-color .12s,opacity .12s",
+        }}
+      >
+        {cornerMarks(T, isOver ? T.a : T.bd2)}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <div
+            onMouseDown={() => st.arm(section.id)}
+            onMouseUp={() => st.endDrag()}
+            title="Drag to reorder"
+            style={{ cursor: "grab", padding: "6px 3px", marginLeft: -4, display: "flex", flex: "none" }}
           >
-            <IconChevDown className="w-4 h-4" />
-          </ToolBtn>
-          <ToolBtn title="Delete section" danger onClick={() => st.deleteSection(section.id)}>
-            <IconTrash className="w-4 h-4" />
-          </ToolBtn>
+            <Grip color={T.ink3} size={16} />
+          </div>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "4px 9px 4px 7px",
+              background: T.aSoft,
+              color: T.a,
+              borderRadius: T.btnRadius,
+              font: `600 11px ${T.disp}`,
+              letterSpacing: ".04em",
+              flex: "none",
+              border: `1px solid ${T.aBorder}`,
+            }}
+          >
+            <Icon name={KIND_ICON[section.kind]} size={13} />
+            {KIND_LABEL[section.kind].toUpperCase()}
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <input
+              className="cvf cvf-card"
+              style={cardField({ weight: 600, size: 16, pad: "4px 8px" })}
+              value={section.name}
+              placeholder="Section title"
+              onChange={(e) => st.updateSection(section.id, { name: e.target.value })}
+            />
+          </div>
+          <span style={{ font: `400 10px ${T.mono}`, color: T.ink3, letterSpacing: ".08em", flex: "none", marginRight: 4 }}>
+            MOD_{String(index + 1).padStart(2, "0")}
+          </span>
+          <div className="cvtools" style={{ display: "flex", gap: 1, flex: "none" }}>
+            <ToolBtn icon="up" title="Move section up" disabled={index === 0} onClick={() => st.moveSection(section.id, -1)} />
+            <ToolBtn icon="down" title="Move section down" disabled={index === total - 1} onClick={() => st.moveSection(section.id, 1)} />
+            <ToolBtn icon="trash" title="Delete section" danger onClick={() => st.deleteSection(section.id)} />
+          </div>
         </div>
-      </div>
-      <div className="mt-3">
         <SectionBody section={section} />
+      </div>
+      <div className="cvgap" style={{ display: "flex", justifyContent: "center", height: T.secGap, alignItems: "center", position: "relative" }}>
+        <div className="cvadd">
+          <AddButton anchor={section.id} />
+        </div>
       </div>
     </div>
   );
@@ -462,31 +738,106 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
 
 // --- add-section menu -------------------------------------------------------------------
 
-export function AddSectionMenu({ anchor }: { anchor: string | null }) {
+function AddSectionMenu({ anchor }: { anchor: string | null }) {
   const st = useEditorStore();
   const addOpen = useEditorStore((s) => s.addOpen);
   if (addOpen !== anchor) return null;
   return (
-    <div className="absolute z-30 mt-1 w-72 bg-cv-surface border border-cv-border rounded-2xl shadow-xl p-1.5 animate-cvfade">
-      {ADD_KINDS.map(({ kind, desc }) => {
-        const Icon = KIND_ICON[kind];
-        return (
-          <button
-            key={kind}
-            type="button"
-            onClick={() => st.addSection(kind, anchor === "end" ? null : anchor)}
-            className="w-full flex items-start gap-2.5 text-left rounded-xl px-2.5 py-2 hover:bg-cv-subtle transition-colors"
+    <div
+      style={{
+        position: "absolute",
+        zIndex: 30,
+        top: "100%",
+        marginTop: 6,
+        left: anchor === "end" ? "50%" : 0,
+        transform: anchor === "end" ? "translateX(-50%)" : "none",
+        animation: "cvfade .14s ease",
+        width: 300,
+        ...panelBase(T, { chamfer: 14 }),
+        boxShadow: T.shadowMd,
+        padding: 6,
+      }}
+    >
+      {cornerMarks(T, T.a, 9)}
+      <div style={{ font: `600 10px ${T.mono}`, letterSpacing: ".12em", color: T.ink3, textTransform: "uppercase", padding: "6px 9px 7px" }}>
+        SELECT MODULE TYPE
+      </div>
+      {ADD_KINDS.map(({ kind, desc }) => (
+        <button
+          key={kind}
+          type="button"
+          className="cvkindbtn"
+          onClick={() => st.addSection(kind, anchor === "end" ? null : anchor)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 11,
+            width: "100%",
+            textAlign: "left",
+            padding: "9px 11px",
+            border: "1px solid transparent",
+            borderRadius: T.btnRadius,
+            background: "transparent",
+            cursor: "pointer",
+          }}
+        >
+          <div
+            style={{
+              width: 30,
+              height: 30,
+              ...panelBase(T, { bg: T.aSoft, chamfer: 8, border: T.aBorder }),
+              color: T.a,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: "none",
+            }}
           >
-            <span className="mt-0.5 inline-flex items-center justify-center w-7 h-7 rounded-lg bg-cv-accent-soft text-cv-accent shrink-0">
-              <Icon className="w-4 h-4" />
-            </span>
-            <span>
-              <span className="block text-sm font-medium text-cv-ink">{KIND_LABEL[kind]}</span>
-              <span className="block text-xs text-cv-ink3">{desc}</span>
-            </span>
-          </button>
-        );
-      })}
+            <Icon name={KIND_ICON[kind]} size={15} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, font: `600 13px ${T.disp}`, color: T.ink }}>
+              {KIND_LABEL[kind].toUpperCase()}
+              <span style={{ font: `400 9.5px ${T.mono}`, color: T.ink3 }}>{KIND_CODE[kind]}</span>
+            </div>
+            <div style={{ font: `400 11.5px ${T.ui}`, color: T.ink3 }}>{desc}</div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AddButton({ anchor, full }: { anchor: string; full?: boolean }) {
+  const st = useEditorStore();
+  const addOpen = useEditorStore((s) => s.addOpen);
+  const open = addOpen === anchor;
+  return (
+    <div style={{ position: "relative", display: full ? "block" : "inline-block" }}>
+      <button
+        type="button"
+        className="cvghost"
+        onClick={() => st.setAddOpen(open ? null : anchor)}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          width: full ? "100%" : "auto",
+          padding: full ? "12px" : "7px 13px",
+          border: `1px ${full ? "dashed" : "solid"} ${T.bd2}`,
+          borderRadius: T.btnRadius,
+          background: open ? T.sunk : T.surface,
+          cursor: "pointer",
+          font: `600 12px ${T.disp}`,
+          letterSpacing: ".04em",
+          color: T.ink2,
+        }}
+      >
+        <Icon name="plus" size={14} />
+        {full ? "INJECT MODULE" : "ADD"}
+      </button>
+      <AddSectionMenu anchor={anchor} />
     </div>
   );
 }
@@ -495,25 +846,14 @@ export function AddSectionMenu({ anchor }: { anchor: string | null }) {
 
 export function BlocksView() {
   const cv = useEditorStore((s) => s.cv)!;
-  const st = useEditorStore();
-  const addOpen = useEditorStore((s) => s.addOpen);
 
   return (
-    <div className="max-w-[760px] mx-auto px-6 pt-7 pb-32 space-y-[18px]">
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "28px 24px 120px", position: "relative", zIndex: 1 }}>
       <ContactCard />
       {cv.sections.map((s, i) => (
         <SectionCard key={s.id} section={s} index={i} total={cv.sections.length} />
       ))}
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => st.setAddOpen(addOpen === "end" ? null : "end")}
-          className="w-full flex items-center justify-center gap-1.5 text-sm text-cv-ink2 hover:text-cv-accent border border-dashed border-cv-border2 rounded-2xl py-3 transition-colors"
-        >
-          <IconPlus className="w-4 h-4" /> Add section
-        </button>
-        <AddSectionMenu anchor="end" />
-      </div>
+      <AddButton anchor="end" full />
     </div>
   );
 }
