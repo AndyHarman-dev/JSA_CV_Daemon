@@ -149,6 +149,7 @@ class ClaudeCliBackend(AgentBackend):
                 "claude",
                 "--output-format", "text",
                 "--resume", session_id,
+                "--tools", "",
                 "-p", nudge,
             ]
             raw2 = await asyncio.to_thread(self._run, nudge_cmd, session_id)
@@ -175,6 +176,7 @@ class ClaudeCliBackend(AgentBackend):
             "--model", self._model,
             "--system-prompt", system_prompt,
             "--session-id", session_id,
+            "--tools", "",
             "-p", initial_user_msg,
         ]
         raw = await asyncio.to_thread(self._run, cmd, session_id)
@@ -227,6 +229,7 @@ class ClaudeCliBackend(AgentBackend):
             "claude",
             "--output-format", "text",
             "--resume", handle.external_id,
+            "--tools", "",
             "-p", text,
         ]
         raw = await asyncio.to_thread(self._run, cmd, handle.external_id)
