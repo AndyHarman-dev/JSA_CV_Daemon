@@ -1,16 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { JobState } from "../types";
+import { SHELL_THEME } from "../theme/tokens";
+import { panelBase, cornerMarks } from "../theme/chrome";
+import { Icon } from "../theme/Icon";
 
-const WS_STATUS_DOT: Record<
-  "connecting" | "open" | "closed",
-  { color: string; label: string }
-> = {
-  connecting: { color: "bg-yellow-400", label: "Connecting" },
-  open: { color: "bg-green-500", label: "Connected" },
-  closed: { color: "bg-red-500", label: "Disconnected" },
-};
+const T = SHELL_THEME;
 
 const RUNNING_STATES: JobState[] = ["running", "pending", "cv_done", "cl_done"];
 const INBOX_STATES: JobState[] = ["awaiting_input"];
@@ -18,45 +14,99 @@ const REVIEW_STATES: JobState[] = ["review"];
 const DONE_STATES: JobState[] = ["approved"];
 const FAILED_STATES: JobState[] = ["failed"];
 
-interface CountBadgeProps {
-  label: string;
-  count: number;
-  className: string;
+const BACKEND_LABELS: Record<string, string> = {
+  "claude-cli": "CLAUDE CLI",
+  "google-cli": "GOOGLE CLI",
+  anthropic: "ANTHROPIC API",
+};
+
+function backendLabel(id: string): string {
+  return BACKEND_LABELS[id] ?? id.toUpperCase();
 }
 
-function CountBadge({ label, count, className }: CountBadgeProps) {
+function CountChip({ label, count, color }: { label: string; count: number; color: string }) {
   if (count === 0) return null;
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${className}`}>
-      {label}: {count}
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "4px 10px",
+        borderRadius: T.btnRadius,
+        background: T.sunk,
+        border: `1px solid color-mix(in srgb, ${color} 40%, ${T.bd})`,
+        font: `500 11px ${T.mono}`,
+        color,
+        letterSpacing: ".04em",
+      }}
+    >
+      {label}
+      <span style={{ color: T.ink, fontWeight: 700 }}>{count}</span>
     </span>
   );
 }
+
+type BackendState =
+  | { status: "loading" }
+  | { status: "ok"; active: string; list: string[] }
+  | { status: "error" };
 
 export function Header() {
   const wsStatus = useStore((s) => s.wsStatus);
   const jobs = useStore((s) => s.jobs);
   const setEditorOpen = useStore((s) => s.setEditorOpen);
-  const dot = WS_STATUS_DOT[wsStatus];
+  const lastBackendSwitch = useStore((s) => s.lastBackendSwitch);
 
-  type BackendState = { status: "loading" } | { status: "ok"; value: string } | { status: "error" };
   const [backendState, setBackendState] = useState<BackendState>({ status: "loading" });
+  const [backendMenuOpen, setBackendMenuOpen] = useState(false);
+  const backendMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api
       .config()
       .then((cfg) => {
         const b = cfg["backend"];
-        setBackendState(
-          typeof b === "string"
-            ? { status: "ok", value: b }
-            : { status: "error" }
-        );
+        const rawList = cfg["backends"];
+        if (typeof b !== "string") {
+          setBackendState({ status: "error" });
+          return;
+        }
+        const list = Array.isArray(rawList)
+          ? rawList.filter((x): x is string => typeof x === "string")
+          : [b];
+        setBackendState({ status: "ok", active: b, list: list.length > 0 ? list : [b] });
       })
       .catch(() => {
         setBackendState({ status: "error" });
       });
   }, []);
+
+  // Keep the active-backend indicator fresh after a runtime failover, without altering
+  // applyEvent's per-event-type behavior — the store just records the latest event.
+  useEffect(() => {
+    if (!lastBackendSwitch) return;
+    setBackendState((prev) => {
+      if (prev.status !== "ok") return prev;
+      const reordered = [
+        lastBackendSwitch.to_backend,
+        ...prev.list.filter((id) => id !== lastBackendSwitch.to_backend),
+      ];
+      return { status: "ok", active: lastBackendSwitch.to_backend, list: reordered };
+    });
+  }, [lastBackendSwitch]);
+
+  // Close the backend dropdown when clicking outside of it.
+  useEffect(() => {
+    if (!backendMenuOpen) return;
+    function onMouseDown(e: MouseEvent) {
+      if (backendMenuRef.current && !backendMenuRef.current.contains(e.target as Node)) {
+        setBackendMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [backendMenuOpen]);
 
   const jobList = Object.values(jobs);
 
@@ -69,6 +119,7 @@ export function Header() {
   const review = countByStates(REVIEW_STATES);
   const done = countByStates(DONE_STATES);
   const failed = countByStates(FAILED_STATES);
+  const workers = Math.min(running, 5);
 
   async function nuclearReload() {
     if ("caches" in window) {
@@ -82,77 +133,326 @@ export function Header() {
     window.location.href = `/?v=${Date.now()}`;
   }
 
+  const uplink =
+    wsStatus === "open"
+      ? { label: "UPLINK: SYNCED", color: T.accent2 }
+      : wsStatus === "connecting"
+      ? { label: "UPLINK: RECONNECTING", color: T.a }
+      : { label: "UPLINK: LOST", color: T.danger };
+
   return (
-    <header className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200 flex-shrink-0 gap-4">
-      {/* Left: App name + backend */}
-      <div className="flex items-center gap-3 flex-shrink-0">
-        <span className="font-bold text-gray-800 text-sm tracking-tight md:hidden">
-          JSA
-        </span>
-        <span className="font-bold text-gray-800 text-sm tracking-tight hidden md:inline">
-          JSA — Job Search Assistant
-        </span>
-        {backendState.status === "loading" && (
-          <span className="text-xs text-gray-400">…</span>
-        )}
-        {backendState.status === "ok" && (
-          <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-500 text-xs font-mono">
-            {backendState.value}
-          </span>
-        )}
-        {/* status === "error": hide gracefully — render nothing */}
-      </div>
-
-      {/* Center: Aggregate counts */}
-      <div className="hidden md:flex items-center gap-2 flex-wrap">
-        <CountBadge
-          label="Running"
-          count={running}
-          className="bg-blue-100 text-blue-700"
-        />
-        <CountBadge
-          label="Inbox"
-          count={inbox}
-          className="bg-yellow-100 text-yellow-700"
-        />
-        <CountBadge
-          label="Review"
-          count={review}
-          className="bg-purple-100 text-purple-700"
-        />
-        <CountBadge
-          label="Done"
-          count={done}
-          className="bg-green-100 text-green-700"
-        />
-        <CountBadge
-          label="Failed"
-          count={failed}
-          className="bg-red-100 text-red-700"
-        />
-      </div>
-
-      {/* Right: Structure Editor + WS status + hard reload */}
-      <div className="flex items-center gap-3 flex-shrink-0">
+    <header
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 18,
+        padding: "10px 18px",
+        background: "rgba(10,14,19,.85)",
+        backdropFilter: "blur(10px)",
+        borderBottom: `1px solid ${T.bd}`,
+        boxShadow: "0 1px 14px rgba(0,0,0,.4)",
+        flexShrink: 0,
+        zIndex: 20,
+        flexWrap: "wrap",
+      }}
+    >
+      {/* Left: logo / wordmark — opens the CV Structure Editor */}
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <button
           type="button"
+          className="jghost"
           onClick={() => setEditorOpen(true)}
           title="Open the CV Structure Editor"
-          className="px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-colors"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            border: "none",
+            background: "transparent",
+            padding: "4px 8px 4px 4px",
+            margin: 0,
+            borderRadius: T.btnRadius,
+            cursor: "pointer",
+            textAlign: "left",
+          }}
         >
-          Structure Editor
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              ...panelBase(T, { bg: T.a, chamfer: 8 }),
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#06080B",
+              boxShadow: `0 0 16px ${T.a}66`,
+              flex: "none",
+            }}
+          >
+            <Icon name="bolt" size={16} />
+          </div>
+          <div style={{ lineHeight: 1.2 }}>
+            <div style={{ font: `700 14.5px ${T.disp}`, color: T.ink, letterSpacing: ".02em" }}>
+              JSA<span style={{ color: T.a }}> // </span>DAEMON
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                font: `500 10px ${T.mono}`,
+                color: T.ink3,
+                letterSpacing: ".08em",
+              }}
+            >
+              JOB_SEARCH_AUTOMATION · LOCAL
+              <span style={{ color: T.a }}>⇄ EDITOR</span>
+            </div>
+          </div>
         </button>
-        <div className="flex items-center gap-1.5">
-          <div className={`w-2.5 h-2.5 rounded-full ${dot.color}`} />
-          <span className="text-xs text-gray-500">{dot.label}</span>
+      </div>
+
+      {/* Center: backend cluster + workers meter + count chips */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ position: "relative" }} ref={backendMenuRef}>
+          <button
+            type="button"
+            className="jghost"
+            onClick={() => setBackendMenuOpen((open) => !open)}
+            title="Active backend / failover queue"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 7,
+              padding: "5px 10px",
+              border: `1px solid ${T.bd}`,
+              borderRadius: T.btnRadius,
+              background: T.sunk,
+              color: T.ink2,
+              cursor: "pointer",
+            }}
+          >
+            <span style={{ color: T.accent2, display: "flex" }}>
+              <Icon name="server" size={13} />
+            </span>
+            <span style={{ font: `500 10.5px ${T.mono}`, color: T.ink3, letterSpacing: ".06em" }}>
+              BACKEND
+            </span>
+            {backendState.status === "ok" && (
+              <>
+                <span style={{ font: `600 11px ${T.mono}`, color: T.ink }}>
+                  {backendLabel(backendState.active)}
+                </span>
+                {backendState.list.length > 1 && (
+                  <span
+                    style={{
+                      font: `500 9.5px ${T.mono}`,
+                      color: T.ink3,
+                      background: T.surface,
+                      border: `1px solid ${T.bd}`,
+                      borderRadius: T.btnRadius,
+                      padding: "1px 5px",
+                    }}
+                  >
+                    +{backendState.list.length - 1}
+                  </span>
+                )}
+              </>
+            )}
+            {backendState.status === "loading" && (
+              <span style={{ font: `500 11px ${T.mono}`, color: T.ink3 }}>…</span>
+            )}
+            <span
+              style={{
+                color: T.ink3,
+                transform: backendMenuOpen ? "rotate(180deg)" : "none",
+                transition: "transform .12s",
+                display: "flex",
+              }}
+            >
+              <Icon name="chevron" size={9} />
+            </span>
+          </button>
+          {backendMenuOpen && backendState.status === "ok" && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                marginTop: 6,
+                width: 240,
+                zIndex: 30,
+                ...panelBase(T, { chamfer: 10 }),
+                boxShadow: T.shadowMd,
+                padding: 5,
+              }}
+            >
+              {cornerMarks(T, T.bd2, 8)}
+              <div
+                style={{
+                  font: `600 9.5px ${T.mono}`,
+                  letterSpacing: ".12em",
+                  color: T.ink3,
+                  textTransform: "uppercase",
+                  padding: "5px 9px 7px",
+                }}
+              >
+                BACKEND FAILOVER QUEUE
+              </div>
+              {backendState.list.map((id, i) => {
+                const isActive = i === 0;
+                const color = isActive ? T.accent2 : T.ink3;
+                return (
+                  <div
+                    key={id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 9,
+                      padding: "7px 9px",
+                      borderRadius: T.btnRadius,
+                      background: isActive ? T.aSoft : "transparent",
+                    }}
+                  >
+                    <span style={{ font: `600 10px ${T.mono}`, color: T.ink3, width: 14, flex: "none" }}>
+                      {i + 1}
+                    </span>
+                    {isActive ? (
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: 6,
+                          background: color,
+                          boxShadow: `0 0 6px ${color}`,
+                          animation: "jsblink 2s ease-in-out infinite",
+                          flex: "none",
+                        }}
+                      />
+                    ) : (
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: 6,
+                          border: `1.5px solid ${color}`,
+                          flex: "none",
+                        }}
+                      />
+                    )}
+                    <span style={{ font: `500 12px ${T.ui}`, color: isActive ? T.ink : T.ink2, flex: 1 }}>
+                      {backendLabel(id)}
+                    </span>
+                    <span style={{ font: `500 9px ${T.mono}`, color, letterSpacing: ".05em" }}>
+                      {isActive ? "ACTIVE" : "STANDBY"}
+                    </span>
+                  </div>
+                );
+              })}
+              <div
+                style={{
+                  font: `400 10.5px/1.5 ${T.ui}`,
+                  color: T.ink3,
+                  padding: "8px 9px 4px",
+                  borderTop: `1px solid ${T.bd}`,
+                  marginTop: 3,
+                }}
+              >
+                On repeated failure, the daemon fails over to the next backend in this order.
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            padding: "4px 10px",
+            background: T.sunk,
+            border: `1px solid ${T.bd}`,
+            borderRadius: T.btnRadius,
+          }}
+        >
+          <Icon name="bolt" size={12} color={T.a} />
+          <span style={{ font: `500 10px ${T.mono}`, color: T.ink3, letterSpacing: ".06em" }}>
+            WORKERS
+          </span>
+          <div style={{ display: "flex", gap: 2 }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <span
+                key={i}
+                style={{
+                  width: 5,
+                  height: 11,
+                  borderRadius: 1,
+                  background: i < workers ? T.a : T.bd,
+                  boxShadow: i < workers ? `0 0 5px ${T.a}` : "none",
+                }}
+              />
+            ))}
+          </div>
+          <span style={{ font: `500 10px ${T.mono}`, color: T.ink2 }}>{workers}/5</span>
+        </div>
+
+        <CountChip label="INBOX" count={inbox} color={T.a} />
+        <CountChip label="REVIEW" count={review} color={T.violet} />
+        <CountChip label="DONE" count={done} color={T.green} />
+        <CountChip label="FAILED" count={failed} color={T.danger} />
+      </div>
+
+      {/* Right: UPLINK status + hard reload */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "none" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "5px 10px",
+            background: T.sunk,
+            border: `1px solid ${T.bd}`,
+            borderRadius: T.btnRadius,
+          }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 7,
+              background: uplink.color,
+              boxShadow: `0 0 6px ${uplink.color}`,
+              animation: "jsblink 2.4s ease-in-out infinite",
+              flex: "none",
+            }}
+          />
+          <span style={{ font: `500 10.5px ${T.mono}`, color: T.ink2, letterSpacing: ".06em" }}>
+            {uplink.label}
+          </span>
         </div>
         <button
           type="button"
-          onClick={() => { void nuclearReload(); }}
+          className="jbtn"
+          onClick={() => {
+            void nuclearReload();
+          }}
           title="Hard reload — clears all browser caches and reloads"
-          className="text-base leading-none text-gray-400 hover:text-gray-700 transition-colors"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 28,
+            height: 28,
+            border: `1px solid ${T.bd}`,
+            borderRadius: T.btnRadius,
+            background: "transparent",
+            color: T.ink2,
+            cursor: "pointer",
+          }}
         >
-          ↺
+          <Icon name="refresh" size={13} />
         </button>
       </div>
     </header>

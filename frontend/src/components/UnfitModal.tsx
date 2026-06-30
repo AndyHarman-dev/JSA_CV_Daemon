@@ -2,6 +2,11 @@ import { useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { JobDTO } from "../types";
+import { SHELL_THEME } from "../theme/tokens";
+import { panelBase, cornerMarks } from "../theme/chrome";
+import { Icon } from "../theme/Icon";
+
+const T = SHELL_THEME;
 
 interface UnfitModalProps {
   job: JobDTO;
@@ -35,40 +40,106 @@ export function UnfitModal({ job }: UnfitModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
-        <h2 className="text-lg font-bold text-gray-900">
-          You may not be a fit for this role
-        </h2>
-        <p className="mt-1 text-sm text-gray-500">
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 50,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(3,5,8,.72)",
+        backdropFilter: "blur(4px)",
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          position: "relative",
+          width: 460,
+          maxWidth: "100%",
+          ...panelBase(T, { chamfer: 16 }),
+          boxShadow: T.shadowMd,
+          padding: "24px 26px",
+        }}
+      >
+        {cornerMarks(T, T.a, 11)}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <span style={{ color: T.a }}>
+            <Icon name="alert" size={18} />
+          </span>
+          <div style={{ font: `600 16px ${T.disp}`, color: T.ink, letterSpacing: ".02em" }}>
+            FIT_ASSESSMENT: MISMATCH
+          </div>
+        </div>
+        <div style={{ font: `400 11.5px ${T.mono}`, color: T.ink3, marginBottom: 14 }}>
           {job.company} — {job.role}
-        </p>
+        </div>
 
-        <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div
+          style={{
+            ...panelBase(T, { bg: T.aSoft, border: `1px solid ${T.aBorder}`, chamfer: 8 }),
+            padding: "11px 13px",
+            font: `400 13.5px/1.55 ${T.ui}`,
+            color: T.ink,
+            marginBottom: 14,
+          }}
+        >
           {job.fit_reason || "The assessment flagged a significant mismatch."}
         </div>
 
-        <p className="mt-4 text-sm text-gray-600">
-          You can dismiss this job, or ignore the assessment and tailor your
-          application anyway.
+        <p style={{ font: `400 13px/1.5 ${T.ui}`, color: T.ink2, margin: "0 0 18px" }}>
+          Dismiss this job, or override the assessment and tailor your application anyway.
         </p>
 
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {error && <p style={{ font: `400 13px ${T.ui}`, color: T.danger, marginBottom: 12 }}>{error}</p>}
 
-        <div className="mt-5 flex justify-end gap-2">
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button
             type="button"
+            className="jghost"
             disabled={busy !== null}
-            onClick={() => { run("ignore").catch(console.error); }}
-            className="text-sm px-4 py-2 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            onClick={() => {
+              run("ignore").catch(console.error);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              border: `1px solid ${T.bd2}`,
+              borderRadius: T.btnRadius,
+              background: "transparent",
+              color: T.ink,
+              font: `600 11.5px ${T.disp}`,
+              letterSpacing: ".03em",
+              cursor: busy !== null ? "default" : "pointer",
+              opacity: busy !== null ? 0.5 : 1,
+            }}
           >
-            {busy === "ignore" ? "Continuing…" : "Ignore"}
+            {busy === "ignore" ? "Continuing…" : "Ignore & Continue"}
           </button>
           <button
             type="button"
+            className="jdanger jbtn"
             disabled={busy !== null}
-            onClick={() => { run("dismiss").catch(console.error); }}
-            className="text-sm px-4 py-2 rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50"
+            onClick={() => {
+              run("dismiss").catch(console.error);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              border: "1px solid rgba(255,70,85,.4)",
+              borderRadius: T.btnRadius,
+              background: "transparent",
+              color: T.danger,
+              font: `600 11.5px ${T.disp}`,
+              letterSpacing: ".03em",
+              cursor: busy !== null ? "default" : "pointer",
+              opacity: busy !== null ? 0.5 : 1,
+            }}
           >
             {busy === "dismiss" ? "Dismissing…" : "Dismiss Job"}
           </button>

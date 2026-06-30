@@ -165,8 +165,8 @@ describe("JobDetail — back button", () => {
 
     render(<JobDetail />);
 
-    // Placeholder "← Select a job" is shown
-    expect(screen.getByText(/Select a job/i)).toBeInTheDocument();
+    // Placeholder "NO PROCESS SELECTED" is shown
+    expect(screen.getByText(/NO PROCESS SELECTED/i)).toBeInTheDocument();
 
     // Back button exists in the placeholder so mobile users can escape if
     // selectedId is set but the job is missing; it carries md:hidden so it
@@ -178,56 +178,38 @@ describe("JobDetail — back button", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Header.tsx — responsive title and badge container
+// Header.tsx — responsive layout
+//
+// The cyberpunk redesign's header no longer hides the wordmark/cluster behind
+// `md:` breakpoints; instead the header (and its center cluster) wrap via
+// flex-wrap so every surface stays visible and reflows on narrow viewports.
 // ---------------------------------------------------------------------------
 
-describe("Header — responsive title and badge container", () => {
-  it("short title 'JSA' span is present with md:hidden class", async () => {
+describe("Header — responsive layout", () => {
+  it("wordmark and subtitle render unconditionally (no responsive hiding)", async () => {
     const { Header } = await import("../components/Header");
     render(<Header />);
 
-    // getByText with exact match will find only the short span ("JSA"), not the full span
-    const shortTitle = screen.getByText("JSA");
-    expect(shortTitle).toBeInTheDocument();
-    expect(shortTitle).toHaveClass("md:hidden");
+    const subtitle = screen.getByText("JOB_SEARCH_AUTOMATION · LOCAL");
+    expect(subtitle).toBeInTheDocument();
+    // No `hidden`/`md:*` visibility classes — always rendered, never breakpoint-gated
+    expect(subtitle.closest("button")?.className ?? "").not.toMatch(/\bhidden\b/);
   });
 
-  it("full title 'JSA — Job Search Assistant' span is present with hidden md:inline class", async () => {
-    const { Header } = await import("../components/Header");
-    render(<Header />);
-
-    const fullTitle = screen.getByText("JSA — Job Search Assistant");
-    expect(fullTitle).toBeInTheDocument();
-    expect(fullTitle).toHaveClass("hidden");
-    expect(fullTitle).toHaveClass("md:inline");
-  });
-
-  it("badges container has hidden and md:flex classes", async () => {
+  it("header and center cluster wrap (flex-wrap) instead of hiding content on narrow viewports", async () => {
     const { Header } = await import("../components/Header");
 
-    // Seed a running job so at least one CountBadge renders inside the container
+    // Seed a running job so the center cluster has chips/meter to wrap
     const job = makeJob({ id: "j1", state: "running" });
     useStore.setState({ jobs: { j1: job } });
 
-    render(<Header />);
+    const { container } = render(<Header />);
 
-    // Find the badge text and walk up to its container div
-    const badgeText = screen.getByText(/Running:/i);
-    // CountBadge renders a <span>; the container div wraps all badges
-    // Go up until we find the div with hidden md:flex
-    let el: HTMLElement | null = badgeText.parentElement;
-    let containerFound = false;
-    while (el !== null) {
-      if (el.tagName === "DIV" && el.className.includes("hidden") && el.className.includes("md:flex")) {
-        containerFound = true;
-        break;
-      }
-      el = el.parentElement;
-    }
+    const header = container.querySelector("header");
+    expect(header).not.toBeNull();
+    expect(header).toHaveStyle({ flexWrap: "wrap" });
 
-    expect(containerFound).toBe(true);
-    expect(el).not.toBeNull();
-    expect(el).toHaveClass("hidden");
-    expect(el).toHaveClass("md:flex");
+    // Workers meter (always visible — replaces the old breakpoint-gated badge container)
+    expect(screen.getByText("WORKERS")).toBeInTheDocument();
   });
 });

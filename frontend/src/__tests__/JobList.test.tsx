@@ -20,6 +20,14 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   };
 }
 
+/** Group headers render their label text inside an h2 (the StatusBadge text — when it
+ *  happens to share a word, e.g. "Review" — is uppercase, so plain getByText is safe). */
+function groupHeader(label: string): HTMLElement {
+  const el = screen.getByText(label);
+  expect(el.closest("h2")).not.toBeNull();
+  return el;
+}
+
 beforeEach(() => {
   useStore.setState({
     jobs: {},
@@ -48,8 +56,9 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    expect(screen.getByText("Running")).toBeInTheDocument();
-    expect(screen.getByText("Beta — Dev")).toBeInTheDocument();
+    groupHeader("Running");
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.getByText("Dev")).toBeInTheDocument();
   });
 
   it("shows a running job under the Running section", () => {
@@ -58,10 +67,11 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    // "Running" appears both as group header (h2) and as StatusBadge text
-    const runningElements = screen.getAllByText("Running");
-    expect(runningElements.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Corp — Lead")).toBeInTheDocument();
+    groupHeader("Running");
+    expect(screen.getByText("Corp")).toBeInTheDocument();
+    expect(screen.getByText("Lead")).toBeInTheDocument();
+    // StatusBadge renders the uppercase "RUNNING" label distinct from the group header
+    expect(screen.getByText("RUNNING")).toBeInTheDocument();
   });
 
   it("shows an unfit job under the Needs Review section", () => {
@@ -70,12 +80,11 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    // "Needs Review" appears as both the group header (h2) and the StatusBadge.
-    const header = screen
-      .getAllByText("Needs Review")
-      .find((el) => el.tagName === "H2");
-    expect(header).toBeDefined();
-    expect(screen.getByText("Bad Robot — Principal")).toBeInTheDocument();
+    groupHeader("Needs Review");
+    expect(screen.getByText("Bad Robot")).toBeInTheDocument();
+    expect(screen.getByText("Principal")).toBeInTheDocument();
+    // StatusBadge renders the uppercase "NEEDS REVIEW" label
+    expect(screen.getByText("NEEDS REVIEW")).toBeInTheDocument();
   });
 
   it("shows an awaiting_input job under the Inbox section", () => {
@@ -89,8 +98,9 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    expect(screen.getByText("Inbox")).toBeInTheDocument();
-    expect(screen.getByText("Inbox Co — Analyst")).toBeInTheDocument();
+    groupHeader("Inbox");
+    expect(screen.getByText("Inbox Co")).toBeInTheDocument();
+    expect(screen.getByText("Analyst")).toBeInTheDocument();
   });
 
   it("shows an approved job under the Done section", () => {
@@ -104,8 +114,9 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    expect(screen.getByText("Done")).toBeInTheDocument();
-    expect(screen.getByText("Done Inc — Manager")).toBeInTheDocument();
+    groupHeader("Done");
+    expect(screen.getByText("Done Inc")).toBeInTheDocument();
+    expect(screen.getByText("Manager")).toBeInTheDocument();
   });
 
   it("shows a failed job under the Failed section", () => {
@@ -119,13 +130,10 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    // "Failed" appears both as group header (h2) and as StatusBadge text
-    const failedElements = screen.getAllByText("Failed");
-    expect(failedElements.length).toBeGreaterThanOrEqual(1);
-    // Verify the group header is an h2
-    const h2 = failedElements.find((el) => el.tagName === "H2");
-    expect(h2).toBeDefined();
-    expect(screen.getByText("Fail Ltd — QA")).toBeInTheDocument();
+    groupHeader("Failed");
+    expect(screen.getByText("Fail Ltd")).toBeInTheDocument();
+    expect(screen.getByText("QA")).toBeInTheDocument();
+    expect(screen.getByText("FAILED")).toBeInTheDocument();
   });
 
   it("shows a review job under the Review section", () => {
@@ -139,12 +147,10 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    // "Review" appears both as group header (h2) and as StatusBadge text
-    const reviewElements = screen.getAllByText("Review");
-    expect(reviewElements.length).toBeGreaterThanOrEqual(1);
-    const h2 = reviewElements.find((el) => el.tagName === "H2");
-    expect(h2).toBeDefined();
-    expect(screen.getByText("Review Corp — Scientist")).toBeInTheDocument();
+    groupHeader("Review");
+    expect(screen.getByText("Review Corp")).toBeInTheDocument();
+    expect(screen.getByText("Scientist")).toBeInTheDocument();
+    expect(screen.getByText("REVIEW")).toBeInTheDocument();
   });
 
   it("clicking a job row calls selectJob with the correct id", () => {
@@ -153,35 +159,36 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    const btn = screen.getByText("Click Co — Dev").closest("button");
+    const btn = screen.getByText("Click Co").closest("button");
     expect(btn).not.toBeNull();
     fireEvent.click(btn!);
 
     expect(useStore.getState().selectedId).toBe("clickable");
   });
 
-  it("selected job row has highlighted background classes", () => {
+  it("selected job row has an accent left-bar and accent border", () => {
     const job = makeJob({ id: "sel1", company: "Selected Co", role: "Dev" });
     useStore.setState({ jobs: { sel1: job }, selectedId: "sel1" });
 
     render(<JobList />);
 
-    const btn = screen.getByText("Selected Co — Dev").closest("button");
+    const btn = screen.getByText("Selected Co").closest("button");
     expect(btn).not.toBeNull();
-    expect(btn).toHaveClass("bg-blue-50");
-    expect(btn).toHaveClass("border-blue-200");
+    // Accent left-bar marker is only rendered when selected
+    expect(btn!.querySelector("span")).not.toBeNull();
+    expect(btn).toHaveStyle({ background: "rgb(16, 21, 29)" }); // T.surface
   });
 
-  it("non-selected job row does not have highlighted background classes", () => {
+  it("non-selected job row does not have the accent left-bar marker", () => {
     const job1 = makeJob({ id: "j1", company: "Selected Co", role: "Dev" });
     const job2 = makeJob({ id: "j2", company: "Other Co", role: "Eng" });
     useStore.setState({ jobs: { j1: job1, j2: job2 }, selectedId: "j1" });
 
     render(<JobList />);
 
-    const btn = screen.getByText("Other Co — Eng").closest("button");
+    const btn = screen.getByText("Other Co").closest("button");
     expect(btn).not.toBeNull();
-    expect(btn).not.toHaveClass("bg-blue-50");
+    expect(btn).toHaveStyle({ background: "transparent" });
   });
 
   it("jobs are grouped correctly when multiple states are present", () => {
@@ -196,14 +203,10 @@ describe("JobList", () => {
 
     render(<JobList />);
 
-    expect(screen.getByText("Inbox")).toBeInTheDocument();
-    // "Running" may appear as group header + badge; verify the h2 header is present
-    const runningEls = screen.getAllByText("Running");
-    const h2Running = runningEls.find((el) => el.tagName === "H2");
-    expect(h2Running).toBeDefined();
+    groupHeader("Inbox");
+    groupHeader("Running");
     expect(screen.queryByText("Done")).toBeNull();
-    // "Failed" is only in the badge, not as a group header — so query specifically
-    const failedH2 = screen.queryAllByText("Failed").find((el) => el.tagName === "H2");
-    expect(failedH2).toBeUndefined();
+    // "Failed" is not present anywhere — no failed jobs and no group header
+    expect(screen.queryByText("Failed")).toBeNull();
   });
 });

@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
+import { SHELL_THEME } from "../theme/tokens";
+import { Icon } from "../theme/Icon";
+
+const T = SHELL_THEME;
 
 type ChatBoxProps =
   | { kind: "answer"; jobId: string; followUpId: number; onSubmitted?: () => void }
@@ -14,7 +18,7 @@ export function ChatBox(props: ChatBoxProps) {
 
   const placeholder =
     props.kind === "answer" ? "Type your answer…" : "Describe the revision you want…";
-  const buttonLabel = props.kind === "answer" ? "Submit Answer" : "Request Revision";
+  const buttonLabel = props.kind === "answer" ? "SUBMIT_ANSWER" : "REQUEST_REVISION";
 
   async function handleSubmit() {
     if (!text.trim() || submitting) return;
@@ -36,42 +40,79 @@ export function ChatBox(props: ChatBoxProps) {
     }
   }
 
+  const hasText = text.trim().length > 0;
+
   return (
-    <div className="flex flex-col gap-2">
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <textarea
-        className="w-full rounded border border-gray-300 px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+        className="jta"
         rows={4}
         placeholder={placeholder}
         value={text}
         onChange={(e) => setText(e.target.value)}
         disabled={submitting}
+        style={{
+          width: "100%",
+          resize: "vertical",
+          background: T.sunk,
+          border: `1px solid ${T.bd2}`,
+          borderRadius: T.btnRadius,
+          padding: "10px 12px",
+          font: `400 13.5px/1.5 ${T.ui}`,
+          color: T.ink,
+          outline: "none",
+        }}
       />
       {props.kind === "revise" && (
         <select
-          className="self-start rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
           value={target}
           onChange={(e) => setTarget(e.target.value as "cv" | "cl")}
           disabled={submitting}
+          style={{
+            alignSelf: "flex-start",
+            background: T.sunk,
+            border: `1px solid ${T.bd2}`,
+            borderRadius: T.btnRadius,
+            padding: "5px 8px",
+            font: `400 12.5px ${T.ui}`,
+            color: T.ink,
+          }}
         >
           <option value="cv">CV / Resume</option>
           <option value="cl">Cover Letter</option>
         </select>
       )}
-      {error && (
-        <p className="text-sm text-red-600">{error}</p>
-      )}
-      <button
-        type="button"
-        className="self-start rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        disabled={!text.trim() || submitting}
-        onClick={() => {
-          handleSubmit().catch((err: unknown) => {
-            console.error("ChatBox submit error:", err);
-          });
-        }}
-      >
-        {submitting ? "Submitting…" : buttonLabel}
-      </button>
+      {error && <p style={{ font: `400 12.5px ${T.ui}`, color: T.danger, margin: 0 }}>{error}</p>}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          type="button"
+          className="jprimary"
+          disabled={!hasText || submitting}
+          onClick={() => {
+            handleSubmit().catch((err: unknown) => {
+              console.error("ChatBox submit error:", err);
+            });
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            padding: "9px 17px",
+            border: "none",
+            borderRadius: T.btnRadius,
+            background: T.a,
+            color: "#06080B",
+            font: `600 12.5px ${T.disp}`,
+            letterSpacing: ".04em",
+            cursor: hasText && !submitting ? "pointer" : "default",
+            opacity: hasText && !submitting ? 1 : 0.5,
+            boxShadow: hasText ? `0 1px 14px ${T.a}55` : "none",
+          }}
+        >
+          <Icon name="send" size={13} />
+          {submitting ? "Submitting…" : buttonLabel}
+        </button>
+      </div>
     </div>
   );
 }

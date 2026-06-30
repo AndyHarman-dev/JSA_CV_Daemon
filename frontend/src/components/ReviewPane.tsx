@@ -3,6 +3,11 @@ import { api } from "../api";
 import { useStore } from "../store";
 import type { JobState } from "../types";
 import { ChatBox } from "./ChatBox";
+import { SHELL_THEME } from "../theme/tokens";
+import { panelBase, cornerMarks } from "../theme/chrome";
+import { Icon } from "../theme/Icon";
+
+const T = SHELL_THEME;
 
 interface Props {
   jobId: string;
@@ -13,9 +18,10 @@ type TabKey = "cv" | "cl";
 interface DocPaths {
   pdfUrl: string | null;
   docxUrl: string | null;
+  version: number;
 }
 
-const emptyPaths: DocPaths = { pdfUrl: null, docxUrl: null };
+const emptyPaths: DocPaths = { pdfUrl: null, docxUrl: null, version: 1 };
 
 /** Convert an absolute filesystem path stored in the DB to a /api/files/<relpath> URL. */
 function toFileUrl(absPath: string | null | undefined): string | null {
@@ -69,10 +75,12 @@ export function ReviewPane({ jobId }: Props) {
         setCvPaths({
           pdfUrl: toFileUrl(latestCv?.pdf_path),
           docxUrl: toFileUrl(latestCv?.docx_path),
+          version: latestCv?.version ?? 1,
         });
         setClPaths({
           pdfUrl: toFileUrl(latestCl?.pdf_path),
           docxUrl: toFileUrl(latestCl?.docx_path),
+          version: latestCl?.version ?? 1,
         });
         setPathsLoading(false);
       })
@@ -111,96 +119,231 @@ export function ReviewPane({ jobId }: Props) {
   }
 
   const activePaths = activeTab === "cv" ? cvPaths : clPaths;
+  const activeVersionLabel = activeTab === "cv" ? "CV / RESUME" : "COVER_LETTER";
+
+  function tabButton(key: TabKey, label: string) {
+    const on = activeTab === key;
+    return (
+      <button
+        type="button"
+        className="jtab"
+        onClick={() => setActiveTab(key)}
+        style={{
+          padding: "8px 4px",
+          marginRight: 22,
+          border: "none",
+          borderBottom: `2px solid ${on ? T.a : "transparent"}`,
+          background: "transparent",
+          color: on ? T.a : T.ink2,
+          font: `600 12.5px ${T.disp}`,
+          letterSpacing: ".03em",
+          cursor: "pointer",
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Tab bar */}
-      <div className="flex border-b border-gray-200">
-        <button
-          type="button"
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === "cv"
-              ? "border-blue-500 text-blue-600"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-          onClick={() => setActiveTab("cv")}
-        >
-          CV / Resume
-        </button>
-        <button
-          type="button"
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === "cl"
-              ? "border-blue-500 text-blue-600"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-          onClick={() => setActiveTab("cl")}
-        >
-          Cover Letter
-        </button>
+      <div style={{ display: "flex", borderBottom: `1px solid ${T.bd}` }}>
+        {tabButton("cv", "CV / RESUME")}
+        {tabButton("cl", "COVER_LETTER")}
       </div>
 
-      {/* Document preview — PDF iframe */}
-      {pathsLoading ? (
-        <div className="flex items-center justify-center h-[60vh] rounded border border-gray-200 bg-gray-50">
-          <span className="text-sm text-gray-500">Loading preview…</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ font: `400 10.5px ${T.mono}`, color: T.ink3, letterSpacing: ".06em" }}>
+          VERSION
+        </span>
+        <span style={{ font: `600 11px ${T.mono}`, color: T.accent2 }}>v{activePaths.version}</span>
+      </div>
+
+      {/* Document preview — real PDF iframe wrapped in a bracketed viewport frame */}
+      <div
+        style={{
+          position: "relative",
+          ...panelBase(T, { chamfer: 16 }),
+          background: T.sunk,
+          border: `1px dashed ${T.bd2}`,
+          padding: 10,
+        }}
+      >
+        {cornerMarks(T, T.bd2)}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            marginBottom: 8,
+            font: `500 9.5px ${T.mono}`,
+            letterSpacing: ".08em",
+            color: T.ink3,
+            textTransform: "uppercase",
+          }}
+        >
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 6,
+              background: T.accent2,
+              boxShadow: `0 0 6px ${T.accent2}`,
+              animation: "jsblink 2s ease-in-out infinite",
+              flex: "none",
+            }}
+          />
+          EXPORT_PREVIEW · READ-ONLY LAYOUT — {activeVersionLabel}
         </div>
-      ) : activePaths.pdfUrl ? (
-        <iframe
-          key={activePaths.pdfUrl}
-          src={activePaths.pdfUrl}
-          className="w-full h-[60vh] rounded border border-gray-200"
-          title={activeTab === "cv" ? "CV / Resume Preview" : "Cover Letter Preview"}
-        />
-      ) : (
-        <div className="flex items-center justify-center h-32 rounded border border-gray-200 bg-gray-50">
-          <span className="text-sm text-gray-400 italic">
+        {pathsLoading ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: "58vh",
+              color: T.ink3,
+              font: `400 13px ${T.ui}`,
+            }}
+          >
+            Loading preview…
+          </div>
+        ) : activePaths.pdfUrl ? (
+          <iframe
+            key={activePaths.pdfUrl}
+            src={activePaths.pdfUrl}
+            title={activeTab === "cv" ? "CV / Resume Preview" : "Cover Letter Preview"}
+            style={{ width: "100%", height: "58vh", border: `1px solid ${T.bd}`, background: "#fff" }}
+          />
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: 128,
+              color: T.ink3,
+              font: `400 13px ${T.ui}`,
+              fontStyle: "italic",
+            }}
+          >
             Preview rendering in progress…
-          </span>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
 
       {/* Download button + format popup — shown for both review and approved states */}
       {!pathsLoading && (activePaths.pdfUrl || activePaths.docxUrl) && (
-        <div className="relative self-start" ref={downloadRef}>
+        <div style={{ position: "relative", alignSelf: "flex-start" }} ref={downloadRef}>
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+            className="jghost"
             onClick={() => setShowDownloadMenu((open) => !open)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 7,
+              padding: "7px 13px",
+              border: `1px solid ${T.bd2}`,
+              borderRadius: T.btnRadius,
+              background: T.surface,
+              color: T.ink,
+              font: `600 11.5px ${T.disp}`,
+              letterSpacing: ".03em",
+              cursor: "pointer",
+            }}
           >
-            ↓ Download
+            <Icon name="download" size={13} />
+            DOWNLOAD
+            <span
+              style={{
+                color: T.ink3,
+                transform: showDownloadMenu ? "rotate(180deg)" : "none",
+                transition: "transform .12s",
+                display: "flex",
+              }}
+            >
+              <Icon name="chevron" size={9} />
+            </span>
           </button>
           {showDownloadMenu && (
-            <div className="absolute left-0 top-full z-10 mt-1 w-44 rounded border border-gray-200 bg-white p-1 shadow-lg">
-              <div className="flex items-center justify-between px-2 py-1">
-                <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                  Choose format
-                </span>
-                <button
-                  type="button"
-                  className="rounded px-1 text-gray-400 hover:text-gray-700"
-                  aria-label="Close"
-                  onClick={() => setShowDownloadMenu(false)}
-                >
-                  ✕
-                </button>
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                marginTop: 6,
+                width: 210,
+                zIndex: 30,
+                ...panelBase(T, { chamfer: 10 }),
+                boxShadow: T.shadowMd,
+                padding: 5,
+                animation: "jsfade .12s ease",
+              }}
+            >
+              {cornerMarks(T, T.bd2, 8)}
+              <div
+                style={{
+                  font: `600 9.5px ${T.mono}`,
+                  letterSpacing: ".12em",
+                  color: T.ink3,
+                  textTransform: "uppercase",
+                  padding: "5px 9px 6px",
+                }}
+              >
+                CHOOSE FORMAT
               </div>
               {activePaths.pdfUrl && (
                 <button
                   type="button"
-                  className="block w-full rounded px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  className="jbtn"
                   onClick={() => downloadFormat(activePaths.pdfUrl)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 11px",
+                    border: "none",
+                    borderRadius: T.btnRadius,
+                    background: "transparent",
+                    color: T.ink,
+                    font: `500 12.5px ${T.ui}`,
+                    cursor: "pointer",
+                  }}
                 >
-                  PDF
+                  <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
+                    PDF
+                  </span>
+                  <span>{activeTab === "cv" ? "CV / Resume" : "Cover Letter"} · pdf</span>
                 </button>
               )}
               {activePaths.docxUrl && (
                 <button
                   type="button"
-                  className="block w-full rounded px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  className="jbtn"
                   onClick={() => downloadFormat(activePaths.docxUrl)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 11px",
+                    border: "none",
+                    borderRadius: T.btnRadius,
+                    background: "transparent",
+                    color: T.ink,
+                    font: `500 12.5px ${T.ui}`,
+                    cursor: "pointer",
+                  }}
                 >
-                  DOCX
+                  <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
+                    DOCX
+                  </span>
+                  <span>{activeTab === "cv" ? "CV / Resume" : "Cover Letter"} · docx</span>
                 </button>
               )}
             </div>
@@ -210,37 +353,87 @@ export function ReviewPane({ jobId }: Props) {
 
       {/* State-specific actions */}
       {state === "approved" ? (
-        <div className="rounded border border-green-300 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
-          ✓ Approved
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            font: `600 12.5px ${T.disp}`,
+            color: T.green,
+            border: `1px solid color-mix(in srgb, ${T.green} 40%, ${T.bd})`,
+            background: `color-mix(in srgb, ${T.green} 10%, ${T.surface})`,
+            borderRadius: T.btnRadius,
+            padding: "10px 14px",
+            width: "fit-content",
+          }}
+        >
+          <Icon name="check" size={14} />
+          APPROVED · PDFS WRITTEN TO OUTPUT/
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {approveError && (
-            <p className="text-sm text-red-600">{approveError}</p>
+            <p style={{ font: `400 12.5px ${T.ui}`, color: T.danger, margin: 0 }}>{approveError}</p>
           )}
           <button
             type="button"
-            className="self-start rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="jprimary"
             disabled={approving}
             onClick={() => {
               handleApprove().catch((err: unknown) => {
                 console.error("ReviewPane approve error:", err);
               });
             }}
+            style={{
+              alignSelf: "flex-start",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 20px",
+              border: "none",
+              borderRadius: T.btnRadius,
+              background: T.green,
+              color: "#06150C",
+              font: `600 13px ${T.disp}`,
+              letterSpacing: ".04em",
+              cursor: approving ? "default" : "pointer",
+              opacity: approving ? 0.6 : 1,
+              boxShadow: `0 1px 14px ${T.green}55`,
+            }}
           >
             {approving ? (
-              <span className="flex items-center gap-2">
-                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              <>
+                <span
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: 12,
+                    border: "2px solid rgba(6,21,12,.4)",
+                    borderTopColor: "#06150C",
+                    animation: "jsspin .7s linear infinite",
+                  }}
+                />
                 Approving…
-              </span>
+              </>
             ) : (
-              "Approve"
+              <>
+                <Icon name="check" size={15} />
+                APPROVE & EXPORT
+              </>
             )}
           </button>
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
-              Request Revision
-            </h4>
+            <div
+              style={{
+                font: `600 10px ${T.mono}`,
+                letterSpacing: ".14em",
+                color: T.ink3,
+                textTransform: "uppercase",
+                marginBottom: 8,
+              }}
+            >
+              REQUEST_REVISION
+            </div>
             <ChatBox kind="revise" jobId={jobId} />
           </div>
         </div>

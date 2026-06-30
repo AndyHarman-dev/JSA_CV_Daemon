@@ -3,56 +3,57 @@ import { render, screen } from "@testing-library/react";
 import { StatusBadge } from "../components/StatusBadge";
 
 describe("StatusBadge", () => {
-  it('renders "Pending" for state "pending"', () => {
+  it('renders "PENDING" for state "pending"', () => {
     render(<StatusBadge state="pending" />);
-    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.getByText("PENDING")).toBeInTheDocument();
   });
 
-  it('renders "Running" for state "running"', () => {
+  it('renders "RUNNING" for state "running"', () => {
     render(<StatusBadge state="running" />);
-    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("RUNNING")).toBeInTheDocument();
   });
 
-  it('renders a spinner svg element for state "running"', () => {
+  it('renders a spinning indicator dot for state "running"', () => {
     const { container } = render(<StatusBadge state="running" />);
-    const svg = container.querySelector("svg");
-    expect(svg).not.toBeNull();
-    expect(svg).toHaveClass("animate-spin");
+    const dot = container.querySelector('span > span');
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveStyle({ animation: "jsspin .7s linear infinite" });
   });
 
-  it('renders "Needs Input" for state "awaiting_input"', () => {
+  it('renders "NEEDS INPUT" for state "awaiting_input"', () => {
     render(<StatusBadge state="awaiting_input" />);
-    expect(screen.getByText("Needs Input")).toBeInTheDocument();
+    expect(screen.getByText("NEEDS INPUT")).toBeInTheDocument();
   });
 
-  it('renders "Approved" for state "approved"', () => {
+  it('renders "APPROVED" for state "approved"', () => {
     render(<StatusBadge state="approved" />);
-    expect(screen.getByText("Approved")).toBeInTheDocument();
+    expect(screen.getByText("APPROVED")).toBeInTheDocument();
   });
 
-  it('renders "Failed" for state "failed"', () => {
+  it('renders "FAILED" for state "failed"', () => {
     render(<StatusBadge state="failed" />);
-    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("FAILED")).toBeInTheDocument();
   });
 
-  it('renders "CV Done" for state "cv_done"', () => {
+  it('renders "CV DONE" for state "cv_done"', () => {
     render(<StatusBadge state="cv_done" />);
-    expect(screen.getByText("CV Done")).toBeInTheDocument();
+    expect(screen.getByText("CV DONE")).toBeInTheDocument();
   });
 
-  it('renders "CL Done" for state "cl_done"', () => {
+  it('renders "CL DONE" for state "cl_done"', () => {
     render(<StatusBadge state="cl_done" />);
-    expect(screen.getByText("CL Done")).toBeInTheDocument();
+    expect(screen.getByText("CL DONE")).toBeInTheDocument();
   });
 
-  it('renders "Review" for state "review"', () => {
+  it('renders "REVIEW" for state "review"', () => {
     render(<StatusBadge state="review" />);
-    expect(screen.getByText("Review")).toBeInTheDocument();
+    expect(screen.getByText("REVIEW")).toBeInTheDocument();
   });
 
-  it("does not render a spinner for non-running states", () => {
+  it("does not render a spinning indicator for non-running states", () => {
     const { container } = render(<StatusBadge state="pending" />);
-    expect(container.querySelector("svg")).toBeNull();
+    const dot = container.querySelector('span > span');
+    expect(dot).not.toHaveStyle({ animation: "jsspin .7s linear infinite" });
   });
 
   it("applies additional className prop to the span", () => {

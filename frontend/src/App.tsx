@@ -5,6 +5,10 @@ import { Header } from "./components/Header";
 import { JobList } from "./components/JobList";
 import { JobDetail } from "./components/JobDetail";
 import { CvEditor } from "./components/cv-editor/CvEditor";
+import { SHELL_THEME } from "./theme/tokens";
+import { Ambient } from "./theme/Ambient";
+
+const T = SHELL_THEME;
 
 function App() {
   const refetchAll = useStore((s) => s.refetchAll);
@@ -19,14 +23,19 @@ function App() {
   }, [refetchAll]);
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div
+      className="flex flex-col h-screen"
+      style={{ background: T.canvas, color: T.ink, position: "relative", overflow: "hidden" }}
+    >
+      <style>{`:root{--a:${T.a}}`}</style>
       {editorOpen && <CvEditor />}
+      <Ambient T={T} label="JSA_DAEMON" />
       <Header />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden" style={{ position: "relative", zIndex: 1 }}>
         {/* Left rail — always visible on desktop; hidden on mobile when a job is selected */}
         <aside
           className={`
-            w-full md:w-80 flex-shrink-0 bg-white border-r border-gray-200 overflow-y-auto
+            w-full md:w-[290px] flex-shrink-0 overflow-y-auto
             ${selectedId !== undefined ? "hidden md:block" : "block"}
           `}
         >

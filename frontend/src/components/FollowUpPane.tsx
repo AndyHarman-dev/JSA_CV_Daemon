@@ -3,6 +3,11 @@ import { api } from "../api";
 import type { FollowUpDTO } from "../types";
 import { ChatBox } from "./ChatBox";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { SHELL_THEME } from "../theme/tokens";
+import { panelBase } from "../theme/chrome";
+import { Icon } from "../theme/Icon";
+
+const T = SHELL_THEME;
 
 interface Props {
   jobId: string;
@@ -35,15 +40,25 @@ export function FollowUpPane({ jobId }: Props) {
 
   if (loading) {
     return (
-      <div className="text-sm text-gray-500 px-1">
-        Loading follow-up…
-      </div>
+      <div style={{ font: `400 13px ${T.ui}`, color: T.ink3 }}>Loading follow-up…</div>
     );
   }
 
   if (error) {
     return (
-      <div className="rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
+      <div
+        style={{
+          position: "relative",
+          ...panelBase(T, {
+            bg: `color-mix(in srgb, ${T.danger} 8%, ${T.surface})`,
+            border: `1px solid color-mix(in srgb, ${T.danger} 45%, ${T.bd})`,
+            chamfer: 10,
+          }),
+          padding: "11px 14px",
+          font: `400 13px/1.5 ${T.ui}`,
+          color: T.ink,
+        }}
+      >
         {error}
       </div>
     );
@@ -51,26 +66,38 @@ export function FollowUpPane({ jobId }: Props) {
 
   if (followUp === null) {
     return (
-      <div className="text-sm text-gray-500 px-1">
+      <div style={{ font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: "italic" }}>
         Waiting for follow-up data…
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-500">
-        Follow-up Question
-      </h3>
-      <div className="rounded border border-yellow-300 bg-yellow-50 px-4 py-3">
-        <MarkdownPreview markdown={followUp.question} className="text-gray-800" />
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div
+        style={{
+          font: `600 10px ${T.mono}`,
+          letterSpacing: ".14em",
+          color: T.a,
+          textTransform: "uppercase",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <Icon name="inbox" size={12} />
+        AGENT_QUERY · BLOCKING
       </div>
-      <ChatBox
-        kind="answer"
-        jobId={jobId}
-        followUpId={followUp.id}
-        onSubmitted={fetchFollowUp}
-      />
+      <div
+        style={{
+          position: "relative",
+          ...panelBase(T, { bg: T.aSoft, border: `1px solid ${T.aBorder}`, chamfer: 10 }),
+          padding: "13px 15px",
+        }}
+      >
+        <MarkdownPreview markdown={followUp.question} />
+      </div>
+      <ChatBox kind="answer" jobId={jobId} followUpId={followUp.id} onSubmitted={fetchFollowUp} />
     </div>
   );
 }

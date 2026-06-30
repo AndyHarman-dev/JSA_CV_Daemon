@@ -6,12 +6,49 @@ import { StageTimeline } from "./StageTimeline";
 import { FollowUpPane } from "./FollowUpPane";
 import { ReviewPane } from "./ReviewPane";
 import { UnfitModal } from "./UnfitModal";
+import { SHELL_THEME } from "../theme/tokens";
+import { panelBase, cornerMarks } from "../theme/chrome";
+import { Icon } from "../theme/Icon";
 
-const TIER_CLASSES: Record<string, string> = {
-  A: "bg-green-100 text-green-700",
-  B: "bg-blue-100 text-blue-700",
-  C: "bg-gray-100 text-gray-600",
-};
+const T = SHELL_THEME;
+
+const TIER_COLOR: Record<string, string> = { A: T.green, B: T.accent2, C: T.ink3 };
+
+interface ActionBtnProps {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  icon?: "refresh" | "x" | "trash";
+}
+
+function ActionBtn({ label, onClick, disabled, danger, icon }: ActionBtnProps) {
+  return (
+    <button
+      type="button"
+      className={danger ? "jdanger jbtn" : "jghost"}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 12px",
+        border: `1px solid ${danger ? "rgba(255,70,85,.4)" : T.bd2}`,
+        borderRadius: T.btnRadius,
+        background: "transparent",
+        color: danger ? T.danger : T.ink,
+        font: `600 11.5px ${T.disp}`,
+        letterSpacing: ".03em",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {icon && <Icon name={icon} size={12} />}
+      {label}
+    </button>
+  );
+}
 
 export function JobDetail() {
   const selectedId = useStore((s) => s.selectedId);
@@ -35,16 +72,47 @@ export function JobDetail() {
 
   if (selectedId === undefined || job === undefined) {
     return (
-      <div className="flex flex-col flex-1 p-4">
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, height: "100%", padding: 16, position: "relative", zIndex: 1 }}>
         <button
           type="button"
           onClick={() => selectJob(undefined)}
-          className="md:hidden flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 mb-4 -ml-1"
+          className="md:hidden"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            marginBottom: 16,
+            marginLeft: -4,
+            border: "none",
+            background: "transparent",
+            color: T.a,
+            font: `500 13px ${T.ui}`,
+            cursor: "pointer",
+          }}
         >
-          ← Back
+          <Icon name="back" size={13} /> Back
         </button>
-        <div className="flex flex-1 items-center justify-center text-gray-400 text-lg select-none">
-          ← Select a job
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ textAlign: "center", color: T.ink3 }}>
+            <div
+              style={{
+                width: 50,
+                height: 50,
+                ...panelBase(T, { chamfer: 12 }),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 14px",
+                color: T.ink3,
+              }}
+            >
+              <Icon name="work" size={22} />
+            </div>
+            <div style={{ font: `600 14px ${T.disp}`, letterSpacing: ".04em", color: T.ink2 }}>
+              NO PROCESS SELECTED
+            </div>
+            <div style={{ font: `400 11.5px ${T.mono}`, marginTop: 6 }}>← choose a job from the queue</div>
+          </div>
         </div>
       </div>
     );
@@ -133,138 +201,197 @@ export function JobDetail() {
   const showRetry = job.state === "failed";
 
   return (
-    <div className="flex flex-col gap-4 p-4 md:p-6 overflow-y-auto">
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 26px 80px", position: "relative", zIndex: 1 }}>
       {/* Mobile back button */}
       <button
         type="button"
         onClick={() => selectJob(undefined)}
-        className="md:hidden flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 mb-1 -ml-1"
+        className="md:hidden"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginBottom: -4,
+          marginLeft: -4,
+          border: "none",
+          background: "transparent",
+          color: T.a,
+          font: `500 13px ${T.ui}`,
+          cursor: "pointer",
+        }}
       >
-        ← Back
+        <Icon name="back" size={13} /> Back
       </button>
+
       {/* Header */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <h2 className="text-xl font-bold text-gray-900">
-          {job.company} — {job.role}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <h2 style={{ font: `600 19px ${T.disp}`, color: T.ink, margin: 0, letterSpacing: ".01em" }}>
+          {job.company}
+          <span style={{ color: T.ink3, fontWeight: 400 }}> — </span>
+          {job.role}
         </h2>
         <span
-          className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-            TIER_CLASSES[job.tier] ?? TIER_CLASSES["C"]
-          }`}
+          style={{
+            font: `600 10px ${T.mono}`,
+            color: TIER_COLOR[job.tier] ?? T.ink3,
+            border: `1px solid ${T.bd2}`,
+            borderRadius: T.btnRadius,
+            padding: "3px 7px",
+          }}
         >
-          Tier {job.tier}
+          TIER {job.tier}
         </span>
         <StatusBadge state={job.state} />
-        {showCancel && (
-          <button
-            type="button"
-            className="text-sm px-3 py-1 rounded border border-red-500 text-red-600 hover:bg-red-50 disabled:opacity-50"
-            disabled={deleting}
-            onClick={() => {
-              handleDelete().catch((err: unknown) => {
-                console.error("JobDetail delete error:", err);
-              });
-            }}
-          >
-            {deleting ? "Deleting…" : "Delete"}
-          </button>
-        )}
-        {showDismiss && (
-          <button
-            type="button"
-            className="text-sm px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50"
-            disabled={dismissing}
-            onClick={() => {
-              handleDismiss().catch((err: unknown) => {
-                console.error("JobDetail dismiss error:", err);
-              });
-            }}
-          >
-            {dismissing ? "Dismissing…" : "Dismiss"}
-          </button>
-        )}
-        {showRequeue && (
-          <button
-            type="button"
-            className="text-sm px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-            disabled={requeuing}
-            onClick={() => {
-              handleRequeue().catch((err: unknown) => {
-                console.error("JobDetail requeue error:", err);
-              });
-            }}
-          >
-            {requeuing ? "Re-queuing…" : "Re-queue"}
-          </button>
-        )}
-        {showRetry && (
-          <button
-            type="button"
-            className="text-sm px-3 py-1 rounded border border-indigo-400 text-indigo-700 bg-white hover:bg-indigo-50 disabled:opacity-50"
-            disabled={retrying}
-            onClick={() => {
-              handleRetry().catch((err: unknown) => {
-                console.error("JobDetail retry error:", err);
-              });
-            }}
-          >
-            {retrying ? "Retrying…" : "Retry"}
-          </button>
-        )}
+        <div style={{ display: "flex", gap: 7, marginLeft: "auto", flexWrap: "wrap" }}>
+          {showRetry && (
+            <ActionBtn
+              label={retrying ? "Retrying…" : "Retry"}
+              icon="refresh"
+              disabled={retrying}
+              onClick={() => {
+                handleRetry().catch((err: unknown) => {
+                  console.error("JobDetail retry error:", err);
+                });
+              }}
+            />
+          )}
+          {showRequeue && (
+            <ActionBtn
+              label={requeuing ? "Re-queuing…" : "Re-queue"}
+              icon="refresh"
+              disabled={requeuing}
+              onClick={() => {
+                handleRequeue().catch((err: unknown) => {
+                  console.error("JobDetail requeue error:", err);
+                });
+              }}
+            />
+          )}
+          {showDismiss && (
+            <ActionBtn
+              label={dismissing ? "Dismissing…" : "Dismiss"}
+              icon="x"
+              danger
+              disabled={dismissing}
+              onClick={() => {
+                handleDismiss().catch((err: unknown) => {
+                  console.error("JobDetail dismiss error:", err);
+                });
+              }}
+            />
+          )}
+          {showCancel && (
+            <ActionBtn
+              label={deleting ? "Deleting…" : "Delete"}
+              icon="trash"
+              danger
+              disabled={deleting}
+              onClick={() => {
+                handleDelete().catch((err: unknown) => {
+                  console.error("JobDetail delete error:", err);
+                });
+              }}
+            />
+          )}
+        </div>
       </div>
+
       {showNuclearConfirm && (
-        <div className="mt-2 p-3 border border-red-400 rounded bg-red-50 text-sm">
-          <p className="text-red-700 font-medium mb-2">
-            This will permanently delete all progress for this job and restart from scratch.
-          </p>
-          <div className="flex gap-2">
-            <button
+        <div
+          style={{
+            position: "relative",
+            padding: "12px 14px",
+            ...panelBase(T, {
+              bg: `color-mix(in srgb, ${T.danger} 8%, ${T.surface})`,
+              border: `1px solid ${T.danger}`,
+              chamfer: 10,
+            }),
+          }}
+        >
+          <div style={{ font: `500 13px ${T.ui}`, color: T.ink }}>
+            This will permanently wipe all progress for this job and restart from scratch.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <ActionBtn
+              label="Yes, restart"
+              danger
               onClick={() => { handleNuclearConfirm().catch(console.error); }}
-              className="px-3 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
-            >
-              Yes, restart from scratch
-            </button>
-            <button
-              onClick={() => setShowNuclearConfirm(false)}
-              className="px-3 py-1 border border-gray-400 rounded text-xs hover:bg-gray-100"
-            >
-              Cancel
-            </button>
+            />
+            <ActionBtn label="Cancel" onClick={() => setShowNuclearConfirm(false)} />
           </div>
         </div>
       )}
-      {dismissError && (
-        <p className="text-sm text-red-600">{dismissError}</p>
-      )}
-      {requeueError && (
-        <p className="text-sm text-red-600">{requeueError}</p>
-      )}
-      {deleteError && (
-        <p className="text-sm text-red-600">{deleteError}</p>
-      )}
-      {retryError && (
-        <p className="text-sm text-red-600">{retryError}</p>
-      )}
 
-      {/* Stage timeline */}
+      {dismissError && <p style={{ font: `400 13px ${T.ui}`, color: T.danger, margin: 0 }}>{dismissError}</p>}
+      {requeueError && <p style={{ font: `400 13px ${T.ui}`, color: T.danger, margin: 0 }}>{requeueError}</p>}
+      {deleteError && <p style={{ font: `400 13px ${T.ui}`, color: T.danger, margin: 0 }}>{deleteError}</p>}
+      {retryError && <p style={{ font: `400 13px ${T.ui}`, color: T.danger, margin: 0 }}>{retryError}</p>}
+
+      {/* Pipeline progress */}
       <div>
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
-          Pipeline Progress
-        </h3>
-        <StageTimeline job={job} />
+        <div
+          style={{
+            font: `600 10px ${T.mono}`,
+            letterSpacing: ".14em",
+            color: T.ink3,
+            textTransform: "uppercase",
+            marginBottom: 6,
+          }}
+        >
+          PIPELINE_PROGRESS
+        </div>
+        <div style={{ ...panelBase(T, { chamfer: 12 }), padding: "10px 14px", position: "relative" }}>
+          {cornerMarks(T, T.bd2)}
+          <StageTimeline job={job} />
+        </div>
       </div>
 
       {/* Job Description collapsible section */}
       <div>
         <button
           type="button"
-          className="text-xs font-semibold uppercase tracking-wider text-gray-500 flex items-center gap-1 mb-1 hover:text-gray-700"
           onClick={() => setJdOpen((prev) => !prev)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            font: `600 10px ${T.mono}`,
+            letterSpacing: ".14em",
+            color: T.ink3,
+            textTransform: "uppercase",
+            padding: 0,
+            marginBottom: 6,
+          }}
         >
-          {jdOpen ? "▼" : "▶"} Job Description
+          <span
+            style={{
+              transform: jdOpen ? "rotate(90deg)" : "none",
+              transition: "transform .12s",
+              display: "flex",
+            }}
+          >
+            <Icon name="chevron" size={11} />
+          </span>
+          JOB_DESCRIPTION.TXT
         </button>
         {jdOpen && (
-          <pre className="whitespace-pre-wrap text-xs text-gray-700 bg-gray-50 rounded border border-gray-200 p-3 max-h-64 overflow-y-auto">
+          <pre
+            style={{
+              margin: 0,
+              whiteSpace: "pre-wrap",
+              font: `400 12px/1.6 ${T.mono}`,
+              color: T.ink2,
+              background: T.sunk,
+              border: `1px solid ${T.bd}`,
+              borderRadius: T.btnRadius,
+              padding: "12px 14px",
+              maxHeight: 256,
+              overflow: "auto",
+            }}
+          >
             {job.jd}
           </pre>
         )}
@@ -272,9 +399,30 @@ export function JobDetail() {
 
       {/* Error box */}
       {(job.error || job.state === "failed") && (
-        <div className="rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <span className="font-semibold">Error: </span>
-          {job.error || "An unknown error occurred."}
+        <div
+          style={{
+            position: "relative",
+            display: "flex",
+            gap: 10,
+            ...panelBase(T, {
+              bg: `color-mix(in srgb, ${T.danger} 8%, ${T.surface})`,
+              border: `1px solid color-mix(in srgb, ${T.danger} 45%, ${T.bd})`,
+              chamfer: 10,
+            }),
+            padding: "11px 14px",
+          }}
+        >
+          <span style={{ color: T.danger, flex: "none", marginTop: 1 }}>
+            <Icon name="alert" size={16} />
+          </span>
+          <div>
+            <div style={{ font: `600 11px ${T.mono}`, color: T.danger, letterSpacing: ".06em", marginBottom: 3 }}>
+              EXCEPTION
+            </div>
+            <div style={{ font: `400 13px/1.5 ${T.ui}`, color: T.ink }}>
+              {job.error || "An unknown error occurred."}
+            </div>
+          </div>
         </div>
       )}
 

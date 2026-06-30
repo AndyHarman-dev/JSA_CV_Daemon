@@ -24,7 +24,7 @@ describe("ChatBox kind='answer'", () => {
   it("renders a textarea and Submit Answer button", () => {
     render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
     expect(screen.getByRole("textbox")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Submit Answer/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /SUBMIT_ANSWER/i })).toBeInTheDocument();
   });
 
   it("does not render a target select for kind='answer'", () => {
@@ -34,14 +34,14 @@ describe("ChatBox kind='answer'", () => {
 
   it("submit button is disabled when textarea is empty", () => {
     render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
-    expect(screen.getByRole("button", { name: /Submit Answer/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /SUBMIT_ANSWER/i })).toBeDisabled();
   });
 
   it("submit button is enabled after typing text", async () => {
     const user = userEvent.setup();
     render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
     await user.type(screen.getByRole("textbox"), "my answer");
-    expect(screen.getByRole("button", { name: /Submit Answer/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /SUBMIT_ANSWER/i })).not.toBeDisabled();
   });
 
   it("calls api.answerFollowUp with correct args on submit", async () => {
@@ -50,7 +50,7 @@ describe("ChatBox kind='answer'", () => {
 
     render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
     await user.type(screen.getByRole("textbox"), "my answer");
-    await user.click(screen.getByRole("button", { name: /Submit Answer/i }));
+    await user.click(screen.getByRole("button", { name: /SUBMIT_ANSWER/i }));
 
     await waitFor(() => {
       expect(api.answerFollowUp).toHaveBeenCalledWith("job1", 42, "my answer");
@@ -64,7 +64,7 @@ describe("ChatBox kind='answer'", () => {
     render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "my answer");
-    await user.click(screen.getByRole("button", { name: /Submit Answer/i }));
+    await user.click(screen.getByRole("button", { name: /SUBMIT_ANSWER/i }));
 
     await waitFor(() => {
       expect(textarea).toHaveValue("");
@@ -79,7 +79,7 @@ describe("ChatBox kind='answer'", () => {
 
     render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
     await user.type(screen.getByRole("textbox"), "my answer");
-    await user.click(screen.getByRole("button", { name: /Submit Answer/i }));
+    await user.click(screen.getByRole("button", { name: /SUBMIT_ANSWER/i }));
 
     await waitFor(() => {
       expect(screen.getByText("server error")).toBeInTheDocument();
@@ -93,7 +93,7 @@ describe("ChatBox kind='answer'", () => {
 
     render(<ChatBox kind="answer" jobId="job1" followUpId={42} onSubmitted={onSubmitted} />);
     await user.type(screen.getByRole("textbox"), "some answer");
-    await user.click(screen.getByRole("button", { name: /Submit Answer/i }));
+    await user.click(screen.getByRole("button", { name: /SUBMIT_ANSWER/i }));
 
     await waitFor(() => {
       expect(onSubmitted).toHaveBeenCalledOnce();
@@ -106,7 +106,7 @@ describe("ChatBox kind='revise'", () => {
     render(<ChatBox kind="revise" jobId="job1" />);
     expect(screen.getByRole("textbox")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Request Revision/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /REQUEST_REVISION/i })).toBeInTheDocument();
   });
 
   it("target select has CV / Resume and Cover Letter options", () => {
@@ -119,7 +119,7 @@ describe("ChatBox kind='revise'", () => {
 
   it("submit button is disabled when textarea is empty", () => {
     render(<ChatBox kind="revise" jobId="job1" />);
-    expect(screen.getByRole("button", { name: /Request Revision/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /REQUEST_REVISION/i })).toBeDisabled();
   });
 
   it("calls api.revise with target='cv' by default", async () => {
@@ -128,7 +128,7 @@ describe("ChatBox kind='revise'", () => {
 
     render(<ChatBox kind="revise" jobId="job1" />);
     await user.type(screen.getByRole("textbox"), "make it shorter");
-    await user.click(screen.getByRole("button", { name: /Request Revision/i }));
+    await user.click(screen.getByRole("button", { name: /REQUEST_REVISION/i }));
 
     await waitFor(() => {
       expect(api.revise).toHaveBeenCalledWith("job1", "cv", "make it shorter");
@@ -142,7 +142,7 @@ describe("ChatBox kind='revise'", () => {
     render(<ChatBox kind="revise" jobId="job1" />);
     await user.selectOptions(screen.getByRole("combobox"), "cl");
     await user.type(screen.getByRole("textbox"), "be more formal");
-    await user.click(screen.getByRole("button", { name: /Request Revision/i }));
+    await user.click(screen.getByRole("button", { name: /REQUEST_REVISION/i }));
 
     await waitFor(() => {
       expect(api.revise).toHaveBeenCalledWith("job1", "cl", "be more formal");
@@ -155,7 +155,7 @@ describe("ChatBox kind='revise'", () => {
 
     render(<ChatBox kind="revise" jobId="job1" />);
     await user.type(screen.getByRole("textbox"), "some text");
-    await user.click(screen.getByRole("button", { name: /Request Revision/i }));
+    await user.click(screen.getByRole("button", { name: /REQUEST_REVISION/i }));
 
     await waitFor(() => {
       expect(screen.getByText("revise failed")).toBeInTheDocument();
@@ -169,7 +169,7 @@ describe("ChatBox kind='revise'", () => {
     render(<ChatBox kind="revise" jobId="job1" />);
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "adjust the tone");
-    await user.click(screen.getByRole("button", { name: /Request Revision/i }));
+    await user.click(screen.getByRole("button", { name: /REQUEST_REVISION/i }));
 
     await waitFor(() => {
       expect(textarea).toHaveValue("");

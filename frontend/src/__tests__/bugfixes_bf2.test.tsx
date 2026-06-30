@@ -75,14 +75,15 @@ beforeEach(() => {
 // 1. StatusBadge — "dismissed" state
 // ===========================================================================
 describe('StatusBadge — dismissed state', () => {
-  it('renders label "Dismissed" for state "dismissed"', () => {
+  it('renders label "DISMISSED" for state "dismissed"', () => {
     render(<StatusBadge state="dismissed" />);
-    expect(screen.getByText("Dismissed")).toBeInTheDocument();
+    expect(screen.getByText("DISMISSED")).toBeInTheDocument();
   });
 
   it('does not render a spinner for state "dismissed"', () => {
     const { container } = render(<StatusBadge state="dismissed" />);
-    expect(container.querySelector("svg")).toBeNull();
+    const dot = container.querySelector('span > span');
+    expect(dot).not.toHaveStyle({ animation: "jsspin .7s linear infinite" });
   });
 });
 
@@ -96,10 +97,9 @@ describe('JobList — Dismissed group', () => {
 
     render(<JobList />);
 
-    // "Dismissed" appears both as h2 group header and as StatusBadge text
-    const dismissedElements = screen.getAllByText("Dismissed");
-    const h2 = dismissedElements.find((el) => el.tagName === "H2");
-    expect(h2).toBeDefined();
+    // "Dismissed" group label lives inside an h2 (the badge itself reads "DISMISSED")
+    const label = screen.getByText("Dismissed");
+    expect(label.closest("h2")).not.toBeNull();
   });
 
   it('shows the dismissed job inside the Dismissed group', () => {
@@ -108,7 +108,8 @@ describe('JobList — Dismissed group', () => {
 
     render(<JobList />);
 
-    expect(screen.getByText("Dismissed Co — Dev")).toBeInTheDocument();
+    expect(screen.getByText("Dismissed Co")).toBeInTheDocument();
+    expect(screen.getByText("Dev")).toBeInTheDocument();
   });
 
   it('does NOT show "Dismissed" group when there are no dismissed jobs', () => {
@@ -239,7 +240,7 @@ describe('JobDetail — JD collapsible', () => {
 
     render(<JobDetail />);
 
-    expect(screen.getByRole("button", { name: /Job Description/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /JOB_DESCRIPTION/ })).toBeInTheDocument();
   });
 
   it('does NOT show JD text initially (collapsed)', () => {
@@ -265,7 +266,7 @@ describe('JobDetail — JD collapsible', () => {
 
     render(<JobDetail />);
 
-    const toggleBtn = screen.getByRole("button", { name: /Job Description/ });
+    const toggleBtn = screen.getByRole("button", { name: /JOB_DESCRIPTION/ });
     fireEvent.click(toggleBtn);
 
     expect(screen.getByText("UNIQUE_JD_BODY_TEXT for this test job")).toBeInTheDocument();
@@ -281,7 +282,7 @@ describe('JobDetail — JD collapsible', () => {
 
     render(<JobDetail />);
 
-    const toggleBtn = screen.getByRole("button", { name: /Job Description/ });
+    const toggleBtn = screen.getByRole("button", { name: /JOB_DESCRIPTION/ });
     fireEvent.click(toggleBtn); // open
     fireEvent.click(toggleBtn); // close
 
@@ -302,7 +303,7 @@ describe('StageTimeline — dismissed state', () => {
     const job = makeJob({ state: "dismissed" });
     const { container } = render(<StageTimeline job={job} />);
 
-    const dots = container.querySelectorAll(".rounded-full.border-2");
+    const dots = container.querySelectorAll('[data-testid="stage-dot"]');
     expect(dots.length).toBe(7);
   });
 
@@ -310,9 +311,8 @@ describe('StageTimeline — dismissed state', () => {
     const job = makeJob({ state: "dismissed" });
     const { container } = render(<StageTimeline job={job} />);
 
-    const dots = container.querySelectorAll(".rounded-full.border-2");
-    // dismissed maps to activeIdx=0, so step 0 is active (border-blue-500 + ring-2)
-    expect(dots[0]).toHaveClass("border-blue-500");
-    expect(dots[0]).toHaveClass("ring-2");
+    const dots = container.querySelectorAll('[data-testid="stage-dot"]');
+    // dismissed maps to activeIdx=0, so step 0 is active
+    expect(dots[0]).toHaveAttribute("data-state", "active");
   });
 });

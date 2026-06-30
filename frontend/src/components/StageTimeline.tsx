@@ -1,17 +1,21 @@
 import type { JobDTO, JobState, Stage } from "../types";
+import { SHELL_THEME } from "../theme/tokens";
+import { Icon } from "../theme/Icon";
+
+const T = SHELL_THEME;
 
 interface StageTimelineProps {
   job: JobDTO;
 }
 
 const STEPS: { label: string; key: string }[] = [
-  { label: "Pending", key: "pending" },
-  { label: "CV Adjust", key: "cv_adjust" },
-  { label: "CV Done", key: "cv_done" },
-  { label: "Cover Letter", key: "cover_letter" },
-  { label: "CL Done", key: "cl_done" },
-  { label: "Review", key: "review" },
-  { label: "Approved", key: "approved" },
+  { label: "PENDING", key: "pending" },
+  { label: "CV_ADJUST", key: "cv_adjust" },
+  { label: "CV_DONE", key: "cv_done" },
+  { label: "COVER_LETTER", key: "cover_letter" },
+  { label: "CL_DONE", key: "cl_done" },
+  { label: "REVIEW", key: "review" },
+  { label: "APPROVED", key: "approved" },
 ];
 
 function getActiveStepIndex(state: JobState, currentStage: Stage | null): number {
@@ -54,43 +58,68 @@ export function StageTimeline({ job }: StageTimelineProps) {
   const activeIdx = getActiveStepIndex(job.state, job.current_stage);
 
   return (
-    <div className="flex items-center gap-0 w-full overflow-x-auto py-2">
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 0, overflowX: "auto", padding: "6px 2px 2px" }}>
       {STEPS.map((step, idx) => {
         const isComplete = idx < activeIdx;
         const isActive = idx === activeIdx;
-        const isDimmed = idx > activeIdx;
+        const color = isComplete ? T.accent2 : isActive ? T.a : T.ink3;
 
         return (
-          <div key={step.key} className="flex items-center">
+          <div key={step.key} style={{ display: "flex", alignItems: "flex-start", flex: "none" }}>
             {/* Connector line (not before first step) */}
             {idx > 0 && (
               <div
-                className={`h-0.5 w-6 flex-shrink-0 ${
-                  idx <= activeIdx ? "bg-blue-500" : "bg-gray-300"
-                }`}
+                style={{
+                  height: 2,
+                  width: 28,
+                  marginTop: 7,
+                  flex: "none",
+                  background: idx <= activeIdx ? T.accent2 : T.bd,
+                  boxShadow: idx <= activeIdx ? `0 0 4px ${T.accent2}` : "none",
+                }}
               />
             )}
-            {/* Step dot + label */}
-            <div className="flex flex-col items-center flex-shrink-0">
+            {/* Step node + label */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "none", width: 86 }}>
               <div
-                className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${
-                  isComplete
-                    ? "bg-blue-500 border-blue-500"
-                    : isActive
-                    ? "bg-white border-blue-500 ring-2 ring-blue-300"
-                    : isDimmed
-                    ? "bg-white border-gray-300"
-                    : "bg-white border-gray-300"
-                }`}
-              />
+                data-testid="stage-dot"
+                data-state={isComplete ? "complete" : isActive ? "active" : "pending"}
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: T.chamfer ? 3 : 16,
+                  flex: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: isComplete ? T.accent2 : "transparent",
+                  border: `2px solid ${color}`,
+                  boxShadow: isActive ? `0 0 8px ${T.a}` : "none",
+                }}
+              >
+                {isComplete ? (
+                  <Icon name="check" size={9} color="#06080B" />
+                ) : isActive ? (
+                  <span
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 5,
+                      background: T.a,
+                      animation: "jsblink 1s ease-in-out infinite",
+                    }}
+                  />
+                ) : null}
+              </div>
               <span
-                className={`mt-1 text-xs whitespace-nowrap ${
-                  isComplete
-                    ? "text-blue-600 font-medium"
-                    : isActive
-                    ? "text-blue-700 font-semibold"
-                    : "text-gray-400"
-                }`}
+                style={{
+                  marginTop: 6,
+                  font: `500 9.5px ${T.mono}`,
+                  letterSpacing: ".04em",
+                  color,
+                  textAlign: "center",
+                  whiteSpace: "nowrap",
+                }}
               >
                 {step.label}
               </span>

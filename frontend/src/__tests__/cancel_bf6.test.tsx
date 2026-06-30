@@ -229,7 +229,7 @@ describe("JobDetail — deleteError display on failure", () => {
     });
   });
 
-  it("error text is displayed with red styling (text-red-600 class)", async () => {
+  it("error text is displayed with danger (red) styling", async () => {
     vi.mocked(api.deleteJob).mockRejectedValue(new Error("HTTP 400: not running"));
 
     const job = makeJob({ id: "j1", state: "running" });
@@ -242,7 +242,8 @@ describe("JobDetail — deleteError display on failure", () => {
 
     await waitFor(() => {
       const errorEl = screen.getByText("HTTP 400: not running");
-      expect(errorEl).toHaveClass("text-red-600");
+      // Inline-styled (theme-driven) red — SHELL_THEME.danger === #FF4655
+      expect(errorEl).toHaveStyle({ color: "rgb(255, 70, 85)" });
     });
   });
 

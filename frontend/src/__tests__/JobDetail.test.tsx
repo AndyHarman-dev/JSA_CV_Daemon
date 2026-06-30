@@ -55,6 +55,11 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   };
 }
 
+/** The job title h2 splits company/em-dash/role across text nodes and a span. */
+function getTitleByContent(text: string): HTMLElement {
+  return screen.getByText((_content, element) => element?.tagName === "H2" && element.textContent === text);
+}
+
 beforeEach(() => {
   useStore.setState({
     jobs: {},
@@ -66,13 +71,13 @@ beforeEach(() => {
 describe("JobDetail", () => {
   it("shows placeholder text when no job is selected", () => {
     render(<JobDetail />);
-    expect(screen.getByText(/Select a job/i)).toBeInTheDocument();
+    expect(screen.getByText(/NO PROCESS SELECTED/i)).toBeInTheDocument();
   });
 
   it("shows placeholder when selectedId is set but job is not in the map", () => {
     useStore.setState({ selectedId: "nonexistent" });
     render(<JobDetail />);
-    expect(screen.getByText(/Select a job/i)).toBeInTheDocument();
+    expect(screen.getByText(/NO PROCESS SELECTED/i)).toBeInTheDocument();
   });
 
   it("shows company and role for a selected pending job", () => {
@@ -81,7 +86,7 @@ describe("JobDetail", () => {
 
     render(<JobDetail />);
 
-    expect(screen.getByText("TechCorp — SWE")).toBeInTheDocument();
+    expect(getTitleByContent("TechCorp — SWE")).toBeInTheDocument();
   });
 
   it("shows the tier badge for the selected job", () => {
@@ -90,7 +95,7 @@ describe("JobDetail", () => {
 
     render(<JobDetail />);
 
-    expect(screen.getByText("Tier B")).toBeInTheDocument();
+    expect(screen.getByText("TIER B")).toBeInTheDocument();
   });
 
   it("shows status badge for the selected job", () => {
@@ -99,10 +104,10 @@ describe("JobDetail", () => {
 
     render(<JobDetail />);
 
-    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("RUNNING")).toBeInTheDocument();
   });
 
-  it("shows error message in red box when job has failed with an error", () => {
+  it("shows error message in the EXCEPTION box when job has failed with an error", () => {
     const job = makeJob({
       id: "j1",
       state: "failed",
@@ -114,11 +119,8 @@ describe("JobDetail", () => {
 
     const errorMsg = screen.getByText("agent timed out after 30s");
     expect(errorMsg).toBeInTheDocument();
-
-    // Error box should have red styling
-    const errorBox = errorMsg.closest("div");
-    expect(errorBox).not.toBeNull();
-    expect(errorBox).toHaveClass("bg-red-50");
+    // Labeled EXCEPTION panel renders alongside the message
+    expect(screen.getByText("EXCEPTION")).toBeInTheDocument();
   });
 
   it("does not show the error box when job has no error", () => {
@@ -127,7 +129,7 @@ describe("JobDetail", () => {
 
     render(<JobDetail />);
 
-    expect(screen.queryByText(/Error:/)).toBeNull();
+    expect(screen.queryByText("EXCEPTION")).toBeNull();
   });
 
   it("shows the stage timeline for a selected job", () => {
@@ -136,8 +138,8 @@ describe("JobDetail", () => {
 
     render(<JobDetail />);
 
-    // Pipeline Progress heading should be present
-    expect(screen.getByText("Pipeline Progress")).toBeInTheDocument();
+    // PIPELINE_PROGRESS heading should be present
+    expect(screen.getByText("PIPELINE_PROGRESS")).toBeInTheDocument();
   });
 
   it("renders FollowUpPane (not placeholder) for awaiting_input state", () => {
@@ -162,9 +164,8 @@ describe("JobDetail", () => {
     // Phase 10 placeholder is gone; ReviewPane mounts with tab bar
     expect(screen.queryByText(/Review pane coming in Phase 10/)).toBeNull();
     expect(screen.queryByText(/coming in Phase 10/)).toBeNull();
-    // Tab buttons rendered by ReviewPane (use getAllByText since option also has same text)
-    const cvResumeElements = screen.getAllByText("CV / Resume");
-    expect(cvResumeElements.length).toBeGreaterThan(0);
+    // Tab button rendered by ReviewPane
+    expect(screen.getByText("CV / RESUME")).toBeInTheDocument();
   });
 
   it("renders ReviewPane (not placeholder) for approved state", () => {
@@ -176,9 +177,8 @@ describe("JobDetail", () => {
     // Phase 10 placeholder is gone; ReviewPane mounts with tab bar
     expect(screen.queryByText(/Review pane coming in Phase 10/)).toBeNull();
     expect(screen.queryByText(/coming in Phase 10/)).toBeNull();
-    // Tab buttons rendered by ReviewPane
-    const cvResumeElements = screen.getAllByText("CV / Resume");
-    expect(cvResumeElements.length).toBeGreaterThan(0);
+    // Tab button rendered by ReviewPane
+    expect(screen.getByText("CV / RESUME")).toBeInTheDocument();
   });
 
   it("shows a Retry button when job is failed and has an error", () => {
@@ -236,14 +236,14 @@ describe("JobDetail — BF-15 Smart Retry modal", () => {
 
     // Modal warning text should appear
     expect(
-      screen.getByText(/permanently delete all progress/i)
+      screen.getByText(/permanently wipe all progress/i)
     ).toBeInTheDocument();
 
     // api.reset must NOT have been called yet
     expect(api.reset).not.toHaveBeenCalled();
   });
 
-  it("nuclear confirm triggers reset on 'Yes, restart from scratch'", async () => {
+  it("nuclear confirm triggers reset on 'Yes, restart'", async () => {
     const { api } = await import("../api");
     const job = makeJob({
       id: "j3",
@@ -259,7 +259,7 @@ describe("JobDetail — BF-15 Smart Retry modal", () => {
     await userEvent.click(retryBtn);
 
     // Confirm
-    const confirmBtn = screen.getByRole("button", { name: /yes, restart from scratch/i });
+    const confirmBtn = screen.getByRole("button", { name: /yes, restart/i });
     await userEvent.click(confirmBtn);
 
     expect(api.reset).toHaveBeenCalledWith("j3");
@@ -286,7 +286,7 @@ describe("JobDetail — BF-15 Smart Retry modal", () => {
 
     // Modal should be gone
     expect(
-      screen.queryByText(/permanently delete all progress/i)
+      screen.queryByText(/permanently wipe all progress/i)
     ).not.toBeInTheDocument();
 
     // api.reset must NOT have been called
@@ -309,7 +309,7 @@ describe("JobDetail — BF-15 Smart Retry modal", () => {
 
     // No modal should appear
     expect(
-      screen.queryByText(/permanently delete all progress/i)
+      screen.queryByText(/permanently wipe all progress/i)
     ).not.toBeInTheDocument();
 
     // api.reset should have been called immediately

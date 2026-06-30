@@ -20,11 +20,11 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
 }
 
 /**
- * Helper to get the step dot elements from the rendered timeline.
- * The dots are divs with rounded-full and border-2 classes.
+ * Helper to get the step node elements (`data-testid="stage-dot"`) from the rendered
+ * timeline, in order. Each carries `data-state` of "complete" | "active" | "pending".
  */
-function getStepDots(container: HTMLElement): NodeListOf<Element> {
-  return container.querySelectorAll(".rounded-full.border-2");
+function getStepDots(container: HTMLElement): Element[] {
+  return Array.from(container.querySelectorAll('[data-testid="stage-dot"]'));
 }
 
 describe("StageTimeline", () => {
@@ -35,13 +35,12 @@ describe("StageTimeline", () => {
     const dots = getStepDots(container);
     expect(dots.length).toBe(7); // 7 steps total
 
-    // Step 0 (Pending) should be active: has ring-2 and border-blue-500
-    expect(dots[0]).toHaveClass("border-blue-500");
-    expect(dots[0]).toHaveClass("ring-2");
+    // Step 0 (Pending) should be active
+    expect(dots[0]).toHaveAttribute("data-state", "active");
 
-    // Step 1 onward should be dimmed: border-gray-300
-    expect(dots[1]).toHaveClass("border-gray-300");
-    expect(dots[2]).toHaveClass("border-gray-300");
+    // Step 1 onward should be dimmed (pending)
+    expect(dots[1]).toHaveAttribute("data-state", "pending");
+    expect(dots[2]).toHaveAttribute("data-state", "pending");
   });
 
   it('shows steps 0-1 as complete/active for state "cv_done"', () => {
@@ -51,16 +50,10 @@ describe("StageTimeline", () => {
 
     const dots = getStepDots(container);
 
-    // Steps 0 and 1 should be complete: bg-blue-500
-    expect(dots[0]).toHaveClass("bg-blue-500");
-    expect(dots[1]).toHaveClass("bg-blue-500");
-
-    // Step 2 should be active: border-blue-500 with ring
-    expect(dots[2]).toHaveClass("border-blue-500");
-    expect(dots[2]).toHaveClass("ring-2");
-
-    // Step 3 onward should be dimmed
-    expect(dots[3]).toHaveClass("border-gray-300");
+    expect(dots[0]).toHaveAttribute("data-state", "complete");
+    expect(dots[1]).toHaveAttribute("data-state", "complete");
+    expect(dots[2]).toHaveAttribute("data-state", "active");
+    expect(dots[3]).toHaveAttribute("data-state", "pending");
   });
 
   it('shows all steps except last as complete for state "approved"', () => {
@@ -71,29 +64,23 @@ describe("StageTimeline", () => {
     const dots = getStepDots(container);
     expect(dots.length).toBe(7);
 
-    // Steps 0-5 should be complete: bg-blue-500
     for (let i = 0; i < 6; i++) {
-      expect(dots[i]).toHaveClass("bg-blue-500");
-      expect(dots[i]).not.toHaveClass("ring-2");
+      expect(dots[i]).toHaveAttribute("data-state", "complete");
     }
-
-    // Step 6 (Approved) is the active step
-    expect(dots[6]).toHaveClass("border-blue-500");
-    expect(dots[6]).toHaveClass("ring-2");
+    expect(dots[6]).toHaveAttribute("data-state", "active");
   });
 
   it("renders step labels in order", () => {
     const job = makeJob({ state: "pending" });
     const { getAllByText } = render(<StageTimeline job={job} />);
 
-    // Verify specific step labels are present
-    expect(getAllByText("Pending").length).toBeGreaterThan(0);
-    expect(getAllByText("CV Adjust").length).toBeGreaterThan(0);
-    expect(getAllByText("CV Done").length).toBeGreaterThan(0);
-    expect(getAllByText("Cover Letter").length).toBeGreaterThan(0);
-    expect(getAllByText("CL Done").length).toBeGreaterThan(0);
-    expect(getAllByText("Review").length).toBeGreaterThan(0);
-    expect(getAllByText("Approved").length).toBeGreaterThan(0);
+    expect(getAllByText("PENDING").length).toBeGreaterThan(0);
+    expect(getAllByText("CV_ADJUST").length).toBeGreaterThan(0);
+    expect(getAllByText("CV_DONE").length).toBeGreaterThan(0);
+    expect(getAllByText("COVER_LETTER").length).toBeGreaterThan(0);
+    expect(getAllByText("CL_DONE").length).toBeGreaterThan(0);
+    expect(getAllByText("REVIEW").length).toBeGreaterThan(0);
+    expect(getAllByText("APPROVED").length).toBeGreaterThan(0);
   });
 
   it('shows step index 1 as active when state is "running" with cv_adjust stage', () => {
@@ -102,11 +89,9 @@ describe("StageTimeline", () => {
 
     const dots = getStepDots(container);
 
-    // Step 0 complete, step 1 active
-    expect(dots[0]).toHaveClass("bg-blue-500");
-    expect(dots[1]).toHaveClass("border-blue-500");
-    expect(dots[1]).toHaveClass("ring-2");
-    expect(dots[2]).toHaveClass("border-gray-300");
+    expect(dots[0]).toHaveAttribute("data-state", "complete");
+    expect(dots[1]).toHaveAttribute("data-state", "active");
+    expect(dots[2]).toHaveAttribute("data-state", "pending");
   });
 
   it('shows step index 3 as active when state is "running" with cover_letter stage', () => {
@@ -115,13 +100,11 @@ describe("StageTimeline", () => {
 
     const dots = getStepDots(container);
 
-    // Steps 0-2 complete, step 3 active
     for (let i = 0; i < 3; i++) {
-      expect(dots[i]).toHaveClass("bg-blue-500");
+      expect(dots[i]).toHaveAttribute("data-state", "complete");
     }
-    expect(dots[3]).toHaveClass("border-blue-500");
-    expect(dots[3]).toHaveClass("ring-2");
-    expect(dots[4]).toHaveClass("border-gray-300");
+    expect(dots[3]).toHaveAttribute("data-state", "active");
+    expect(dots[4]).toHaveAttribute("data-state", "pending");
   });
 
   it('shows step index 5 active for state "review"', () => {
@@ -130,13 +113,11 @@ describe("StageTimeline", () => {
 
     const dots = getStepDots(container);
 
-    // Steps 0-4 complete, step 5 active
     for (let i = 0; i < 5; i++) {
-      expect(dots[i]).toHaveClass("bg-blue-500");
+      expect(dots[i]).toHaveAttribute("data-state", "complete");
     }
-    expect(dots[5]).toHaveClass("border-blue-500");
-    expect(dots[5]).toHaveClass("ring-2");
-    expect(dots[6]).toHaveClass("border-gray-300");
+    expect(dots[5]).toHaveAttribute("data-state", "active");
+    expect(dots[6]).toHaveAttribute("data-state", "pending");
   });
 
   it('shows step index 4 active for state "cl_done"', () => {
@@ -146,9 +127,8 @@ describe("StageTimeline", () => {
     const dots = getStepDots(container);
 
     for (let i = 0; i < 4; i++) {
-      expect(dots[i]).toHaveClass("bg-blue-500");
+      expect(dots[i]).toHaveAttribute("data-state", "complete");
     }
-    expect(dots[4]).toHaveClass("border-blue-500");
-    expect(dots[4]).toHaveClass("ring-2");
+    expect(dots[4]).toHaveAttribute("data-state", "active");
   });
 });

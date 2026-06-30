@@ -3,11 +3,20 @@ import type { JobDTO, WSEvent } from "./types";
 import { api } from "./api";
 import { useEditorStore } from "./editorStore";
 
+interface BackendSwitchEvent {
+  job_id: string;
+  from_backend: string;
+  to_backend: string;
+}
+
 interface Store {
   jobs: Record<string, JobDTO>;
   selectedId: string | undefined;
   wsStatus: "connecting" | "open" | "closed";
   editorOpen: boolean;
+  // Most recent `backend_switched` WS event — additive signal so surfaces (e.g. Header's
+  // backend cluster) can react without changing applyEvent's per-type behavior for others.
+  lastBackendSwitch: BackendSwitchEvent | null;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setWsStatus(s: Store["wsStatus"]): void;
@@ -22,6 +31,7 @@ export const useStore = create<Store>((set, get) => ({
   selectedId: undefined,
   wsStatus: "connecting",
   editorOpen: false,
+  lastBackendSwitch: null,
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -67,6 +77,13 @@ export const useStore = create<Store>((set, get) => ({
         console.info(
           `[JSA] Backend switched for job ${e.job_id}: ${e.from_backend} → ${e.to_backend}`
         );
+        set({
+          lastBackendSwitch: {
+            job_id: e.job_id,
+            from_backend: e.from_backend,
+            to_backend: e.to_backend,
+          },
+        });
         store.refetchAll().catch((err: unknown) => {
           console.error("refetchAll failed:", err);
         });
