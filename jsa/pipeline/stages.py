@@ -7,17 +7,21 @@ Handles both fresh sessions (pending/cv_done) and resumed sessions
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError
 from jsa.render.registry import renderer_for
+from jsa.render.serialize import cover_letter_to_markdown, cv_to_markdown
+from jsa.schema import CVDocument, CoverLetter, cv_has_summary
 from jsa.db import repo
 from jsa.util import slugify as _slugify
 from jsa.db.models import (
@@ -88,73 +92,209 @@ async def _render_for_review(session: AsyncSession, job: Job, output_dir: Path) 
     await session.commit()
 
 
-def _validate_cv_content(content: str) -> None:
-    """Validate that a cv_adjust FINAL block contains actual CV content.
+class FinalContentError(ValueError):
+    """Raised when a FINAL payload fails stage content validation.
 
-    Called before any DB write for Stage.cv_adjust and Stage.revising_cv.
-    Raises ValueError (→ job marked failed, user can retry) when the content
-    clearly is not a CV:
-    - Too short to be any reasonable CV
-    - Missing all markdown structural markers that a CV would have
-
-    We check structural markers (headings, separators) rather than specific
-    content patterns, to avoid fragile keyword matching.
+    Subclasses ValueError so the existing _run_one handler still marks the job
+    ``failed`` when correction attempts are exhausted. The self-heal loop catches
+    it specifically to re-prompt the agent before giving up.
     """
-    MIN_CV_CHARS = 300
-
-    if len(content) < MIN_CV_CHARS:
-        raise ValueError(
-            f"cv_adjust produced content that is too short ({len(content)} chars; "
-            f"minimum is {MIN_CV_CHARS}). The agent may have emitted a summary or "
-            "description instead of the adjusted CV. Retry the job to re-run."
-        )
-
-    # A valid CV must contain at least one markdown structural marker.
-    # Cover letters and plain-text change-log summaries typically have none.
-    has_heading = bool(re.search(r"^#{1,3} ", content, re.MULTILINE))
-    has_separator = bool(re.search(r"^---\s*$", content, re.MULTILINE))
-    has_bold_name = bool(re.search(r"^\*\*[A-Z]", content, re.MULTILINE))
-
-    if not (has_heading or has_separator or has_bold_name):
-        raise ValueError(
-            "cv_adjust produced content without expected CV structure "
-            "(no markdown headings, '---' separators, or bold name header). "
-            "The agent may have emitted a cover letter or plain-text summary "
-            "instead of the adjusted CV. Retry the job to re-run."
-        )
 
 
-_BAD_CL_PATTERNS: list[tuple[str, str]] = [
-    (r"(?i)^cover letter\s+(drafted|written|delivered|prepared)\s+for\b", "starts with a summary header"),
-    (r"(?i)^\(cover letter\b", "starts with a parenthetical reference to the letter"),
-    (r"(?i)\bdelivered above\b", "references a previous turn"),
-    (r"(?i)\bawaiting\s+(any\s+)?(revision|change|feedback|request)", "contains an awaiting-revision meta-comment"),
-    (r"(?i)^centerpiece\s*:", "starts with a change-description 'Centerpiece:' marker"),
-]
+def _strip_code_fence(text: str) -> str:
+    """Remove a surrounding ```json ...``` (or plain ```) fence if the model added one."""
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
+    return t
 
 
-def _validate_cl_content(content: str) -> None:
-    """Validate that a cover_letter FINAL block contains actual letter content, not meta-commentary.
+def _capture_failed_payload(label: str, job_id: str | None, content: str, reason: str) -> None:
+    """Best-effort dump of a FINAL payload that failed validation, for offline debugging.
 
-    Parallel to _validate_cv_content for the CV stages. Raises ValueError if the model
-    emitted a summary, change-log, or reference comment instead of the letter text.
+    Pydantic truncates ``input_value`` in its error text, so the ``error`` column never
+    holds the full payload. This writes the raw pre-validation FINAL to
+    ``~/.jsa/debug/`` so a failure can be reproduced and the schema/serializer iterated
+    offline. Never raises — debugging aid only.
     """
-    MIN_CL_CHARS = 150
+    if not job_id:
+        return
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ:  # don't litter ~/.jsa during the test suite
+        return
+    try:
+        debug_dir = Path.home() / ".jsa" / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+        path = debug_dir / f"{label}_{job_id}_{ts}.txt"
+        path.write_text(f"# reason: {reason}\n\n{content}", encoding="utf-8")
+    except Exception:  # pragma: no cover - diagnostics must never break the pipeline
+        logger.debug("failed to capture FINAL payload for %s/%s", label, job_id, exc_info=True)
 
-    if len(content) < MIN_CL_CHARS:
-        raise ValueError(
-            f"cover_letter produced content that is too short ({len(content)} chars; "
-            f"minimum is {MIN_CL_CHARS}). The agent may have emitted a summary or "
-            "reference comment instead of the cover letter. Retry the job to re-run."
-        )
 
-    for pattern, description in _BAD_CL_PATTERNS:
-        if re.search(pattern, content.strip(), re.MULTILINE):
-            raise ValueError(
-                f"cover_letter produced meta-commentary instead of actual letter content "
-                f"({description}). The agent may have emitted a summary or change-log "
-                "instead of the letter text. Retry the job to re-run."
+def _parse_structured(
+    content: str, model: type[BaseModel], label: str, job_id: str | None = None
+) -> BaseModel:
+    """Parse a FINAL payload as JSON and validate it against ``model``.
+
+    Raises ``FinalContentError`` (→ self-heal re-prompt, then job ``failed``) on invalid
+    JSON or schema violation; returns the validated model instance otherwise. This
+    replaces the old regex heuristics: a change-log, summary, mixed CV/CL payload, or
+    third-person description cannot satisfy the schema, so it is rejected *structurally*
+    rather than by pattern-matching.
+    """
+    text = _strip_code_fence(content)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        _capture_failed_payload(label, job_id, content, f"invalid JSON: {exc}")
+        raise FinalContentError(
+            f"{label} FINAL block was not valid JSON ({exc}). Re-emit ONLY a single JSON "
+            "object conforming to the schema inside <<<FINAL>>>...<<<END>>>."
+        ) from exc
+    try:
+        return model.model_validate(data)
+    except ValidationError as exc:
+        _capture_failed_payload(label, job_id, content, f"schema violation: {exc}")
+        # Build a concise, model-facing reason from the validators' own messages. Never use
+        # str(exc) here: pydantic embeds the entire input_value (the whole CV payload) per
+        # error, which would echo the document back at the model in the self-heal correction.
+        reasons = "; ".join(
+            e.get("msg", "").removeprefix("Value error, ") for e in exc.errors()
+        ) or "the payload did not conform to the schema"
+        raise FinalContentError(
+            f"{label} JSON did not match the required schema: {reasons}. Re-emit a corrected "
+            "JSON object inside <<<FINAL>>>...<<<END>>>."
+        ) from exc
+
+
+def _validate_final_content(stage: Stage, content: str, job: Job) -> BaseModel | None:
+    """Parse + validate a FINAL payload for the given stage.
+
+    Returns the validated structured object (``CVDocument`` / ``CoverLetter``) for the
+    document stages, or ``None`` for stages without structured output (e.g.
+    fit_assessment). Raises ``FinalContentError`` on invalid JSON / schema violation.
+    Single source of truth used by both the self-heal loop (to decide whether to
+    re-prompt) and _handle_final (the authoritative gate before any DB write).
+    """
+    job_id = job.id if job is not None else None
+    if stage in (Stage.cv_adjust, Stage.revising_cv):
+        return _parse_structured(content, CVDocument, "cv_adjust", job_id)
+    if stage in (Stage.cover_letter, Stage.revising_cl):
+        return _parse_structured(content, CoverLetter, "cover_letter", job_id)
+    return None
+
+
+# How many times to re-prompt the same session when a FINAL block fails content
+# validation before giving up and letting the job fail.
+MAX_FINAL_CORRECTIONS = 2
+
+_CV_CORRECTION = (
+    "Your previous <<<FINAL>>> block was not a valid CV JSON object. Re-emit now: put ONLY "
+    "a single JSON object conforming to the CV schema inside one <<<FINAL>>>...<<<END>>> "
+    "block — a `contact` object (name plus email and/or phone) and an ordered `sections` "
+    "array mirroring the base CV's sections. No Markdown, no prose, no change-log, no "
+    "commentary inside the block, and do not wrap the JSON in code fences."
+)
+_CL_CORRECTION = (
+    "Your previous <<<FINAL>>> block was not a valid cover-letter JSON object. Re-emit now: "
+    "put ONLY a single JSON object conforming to the cover-letter schema inside one "
+    "<<<FINAL>>>...<<<END>>> block — an optional `salutation`, a `paragraphs` array holding "
+    "the letter's body paragraphs, and an optional `signoff`. No Markdown, no commentary, "
+    "and do not wrap the JSON in code fences."
+)
+
+# Soft nudge (not a hard failure): the CV validated fine but has no summary/profile section.
+# The user wants a summary to always appear; the model can always write one from the CV's own
+# content, so we re-prompt for it — but a CV that still lacks one ships as a slightly-thin CV
+# rather than failing the job (a missing summary is thinness, not corruption).
+_CV_SUMMARY_NUDGE = (
+    "Your CV JSON is valid but is missing a Summary section. Re-emit the SAME CV with one "
+    "change: add a section named \"Summary\" as the FIRST entry in `sections`, with a `text` "
+    "value holding a 2–3 sentence professional summary tailored to this role and drawn from "
+    "the candidate's own experience (do not invent facts). Keep everything else identical. "
+    "Emit the complete CV JSON object inside one <<<FINAL>>>...<<<END>>> block — no Markdown, "
+    "no commentary, no code fences."
+)
+
+
+async def _self_heal_final(
+    *,
+    backend: AgentBackend,
+    handle: SessionHandle,
+    stage: Stage,
+    job: Job,
+    reply: AgentReply,
+    accumulated_messages: list[dict],
+) -> tuple[AgentReply, list[dict]]:
+    """Re-prompt the open session when a FINAL block fails content validation.
+
+    Robustness layer for when the model ignores the prompt and emits a change-log,
+    "task complete" summary, or file-write announcement instead of the artifact. On
+    each failure we send a precise correction on the *same* session (preserving full
+    context) and re-validate, up to MAX_FINAL_CORRECTIONS times.
+
+    Returns the (possibly updated) reply and accumulated messages. The caller then
+    dispatches normally: a recovered FINAL proceeds; a correction that turns into
+    NEED_INPUT parks for the user; a still-invalid FINAL falls through to
+    _handle_final, whose validation raises and fails the job (after auto-retries).
+    """
+    if stage not in (Stage.cv_adjust, Stage.revising_cv, Stage.cover_letter, Stage.revising_cl):
+        return reply, accumulated_messages
+
+    correction = (
+        _CV_CORRECTION if stage in (Stage.cv_adjust, Stage.revising_cv) else _CL_CORRECTION
+    )
+
+    is_cv_stage = stage in (Stage.cv_adjust, Stage.revising_cv)
+
+    async def _reprompt(message: str, label: str) -> None:
+        nonlocal reply
+        await bus.publish(
+            event_to_dict(
+                LogEvent(
+                    job_id=job.id,
+                    level="warning",
+                    text=(
+                        f"Stage {stage.value}: {label}; "
+                        f"re-prompting agent (attempt {attempts}/{MAX_FINAL_CORRECTIONS})"
+                    ),
+                )
             )
+        )
+        reply = await backend.send_message(handle, message)
+        accumulated_messages.append({"role": "user", "content": message})
+        accumulated_messages.append({"role": "assistant", "content": reply.raw})
+
+    attempts = 0
+    while reply.kind == "final":
+        try:
+            obj = _validate_final_content(stage, reply.content, job)
+        except FinalContentError as exc:
+            if attempts >= MAX_FINAL_CORRECTIONS:
+                break  # budget exhausted; _handle_final re-validates, raises, fails the job
+            attempts += 1
+            # Forward the concise validator feedback so the model knows *what* to fix.
+            await _reprompt(
+                f"{correction}\n\nValidation feedback on your last attempt: {exc}",
+                f"FINAL failed validation ({exc})",
+            )
+            continue
+        # Valid payload. Soft, non-fatal nudge: a CV with no summary section gets one
+        # re-prompt to add it (if budget remains); an unfixed summary still ships.
+        if is_cv_stage and isinstance(obj, CVDocument) and not cv_has_summary(obj) \
+                and attempts < MAX_FINAL_CORRECTIONS:
+            attempts += 1
+            await _reprompt(_CV_SUMMARY_NUDGE, "valid CV missing a Summary section")
+            continue
+        return reply, accumulated_messages
+
+    return reply, accumulated_messages
 
 
 async def run_stage(
@@ -289,6 +429,20 @@ async def run_stage(
         job.cv_session_id = handle.external_id
     elif stage == Stage.cover_letter:
         job.cl_session_id = handle.external_id
+
+    # Self-heal: if a FINAL block fails content validation (e.g. the agent emitted a
+    # change-log or "done" summary instead of the artifact), re-prompt the SAME session
+    # to re-emit a clean artifact before the reply is dispatched below. Recovered →
+    # proceeds as FINAL; turned into NEED_INPUT → parks; still invalid → _handle_final
+    # raises and fails the job.
+    reply, accumulated_messages = await _self_heal_final(
+        backend=backend,
+        handle=handle,
+        stage=stage,
+        job=job,
+        reply=reply,
+        accumulated_messages=accumulated_messages,
+    )
 
     # Handle the reply
     if reply.kind == "needs_input":
@@ -563,13 +717,10 @@ async def _handle_final(
     # checkpoint() calls session.add(job) + commit, so this persists atomically.
     job.retry_count = 0
 
-    # Validate cv_adjust output before writing anything to the DB.
-    # If the model emitted a cover letter or a change-log instead of a CV,
-    # this raises ValueError → propagates to _run_one → job marked failed.
-    if stage in (Stage.cv_adjust, Stage.revising_cv):
-        _validate_cv_content(reply.content)
-    if stage in (Stage.cover_letter, Stage.revising_cl):
-        _validate_cl_content(reply.content)
+    # Authoritative content gate before writing anything to the DB. If the model
+    # emitted a change-log/summary instead of the artifact (and self-heal could not
+    # recover it), this raises FinalContentError → propagates to _run_one → job failed.
+    structured_obj = _validate_final_content(stage, reply.content, job)
 
     # Determine document stage (revision docs stored under original stage)
     if stage == Stage.revising_cv:
@@ -583,10 +734,19 @@ async def _handle_final(
     existing_docs = await repo.get_documents(session, job.id, doc_stage)
     next_version = len(existing_docs) + 1
 
+    # Serialize the validated structured object to canonical Markdown — the program owns
+    # 100% of layout. Persist both the JSON source-of-truth (`structured`) and the
+    # rendered Markdown; downstream renderers consume `markdown` unchanged.
+    if stage in (Stage.cv_adjust, Stage.revising_cv):
+        canonical_md = cv_to_markdown(structured_obj)
+    else:  # cover_letter / revising_cl
+        canonical_md = cover_letter_to_markdown(structured_obj)
+
     document_data = {
         "stage": doc_stage,
         "version": next_version,
-        "markdown": reply.content,
+        "markdown": canonical_md,
+        "structured": structured_obj.model_dump_json(),
     }
 
     if stage == Stage.cv_adjust:

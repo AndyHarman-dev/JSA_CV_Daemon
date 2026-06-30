@@ -13,6 +13,7 @@ Scenarios:
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -103,25 +104,51 @@ async def _insert_job(factory, **overrides) -> Job:
         return await repo.get_job(s, data["id"])
 
 
-def _final_reply(content: str = "# Document\nContent here.") -> AgentReply:
+def _cv_json(marker: str = "Adjusted CV") -> dict:
+    """A minimal valid CV object. `marker` is embedded in the summary so callers can
+    assert it survives into the serialized Markdown (assertions use substrings)."""
+    return {
+        "contact": {
+            "name": "Jane Doe",
+            "email": "jane.doe@example.com",
+            "phone": "+1-555-867-5309",
+        },
+        "sections": [
+            {"type": "summary", "text": f"{marker}: senior engineer with eight years of experience."},
+            {"type": "experience", "entries": [
+                {"role": "Senior Engineer", "company": "Acme", "dates": "2019–present",
+                 "bullets": ["Built a distributed payment pipeline", "Led a service migration"]},
+            ]},
+        ],
+    }
+
+
+def _final_reply(content: str = "Adjusted CV") -> AgentReply:
+    """A valid cv_adjust FINAL (CV JSON). `content` appears in the serialized Markdown."""
+    payload = json.dumps(_cv_json(content))
     return AgentReply(
-        raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
-        content=content,
+        raw=f"<<<FINAL>>>\n{payload}\n<<<END>>>",
+        content=payload,
         kind="final",
     )
 
 
-_CL_CONTENT = (
-    "Dear Hiring Manager,\n\n"
-    "I am writing to express my strong interest in the role. Over the past several years "
-    "I have built deep expertise directly relevant to this position, and I am confident "
-    "my background aligns well with what your team is looking for.\n\n"
-    "Sincerely,\nCandidate Name"
-)
-
-
 def _cl_final_reply() -> AgentReply:
-    return _final_reply(_CL_CONTENT)
+    """A valid cover_letter FINAL (cover-letter JSON)."""
+    payload = json.dumps({
+        "salutation": "Dear Hiring Manager,",
+        "paragraphs": [
+            "I am writing to express my strong interest in the role. Over the past several "
+            "years I have built deep expertise directly relevant to this position.",
+            "I am confident my background aligns well with what your team is looking for.",
+        ],
+        "signoff": "Sincerely,\nCandidate Name",
+    })
+    return AgentReply(
+        raw=f"<<<FINAL>>>\n{payload}\n<<<END>>>",
+        content=payload,
+        kind="final",
+    )
 
 
 def _needs_input_reply(question: str = "What sector?") -> AgentReply:

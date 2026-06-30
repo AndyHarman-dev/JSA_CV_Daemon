@@ -85,7 +85,8 @@ class Document(Base):
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"))
     stage: Mapped[Stage] = mapped_column(SAEnum(Stage))
     version: Mapped[int] = mapped_column(Integer)
-    markdown: Mapped[str] = mapped_column(Text)
+    markdown: Mapped[str] = mapped_column(Text)  # canonical Markdown serialized from `structured`
+    structured: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON source-of-truth (CVDocument/CoverLetter)
     pdf_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on approval
     docx_path: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on approval
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

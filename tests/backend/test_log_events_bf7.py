@@ -29,6 +29,7 @@ from jsa.pipeline.orchestrator import Orchestrator
 from jsa.pipeline.stages import PausedForInput, run_stage
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend
+from tests.backend.fakes.finals import cl_final, cv_final
 
 
 # ---------------------------------------------------------------------------
@@ -95,25 +96,12 @@ async def _insert_job_in_session(session: AsyncSession, **overrides) -> Job:
     return job
 
 
-def _final_reply(content: str = "# Document\nContent here.") -> AgentReply:
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
-        content=content,
-        kind="final",
-    )
-
-
-_CL_CONTENT = (
-    "Dear Hiring Manager,\n\n"
-    "I am writing to express my strong interest in the role. Over the past several years "
-    "I have built deep expertise directly relevant to this position, and I am confident "
-    "my background aligns well with what your team is looking for.\n\n"
-    "Sincerely,\nCandidate Name"
-)
+def _final_reply(content: str = "Adjusted CV") -> AgentReply:
+    return cv_final(content)
 
 
 def _cl_final_reply() -> AgentReply:
-    return _final_reply(_CL_CONTENT)
+    return cl_final()
 
 
 def _needs_input_reply(question: str = "What is your target role?") -> AgentReply:

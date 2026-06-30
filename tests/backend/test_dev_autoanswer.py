@@ -24,6 +24,7 @@ from jsa.dev.autoresponder import DevAutoResponder
 from jsa.pipeline.orchestrator import Orchestrator
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend
+from tests.backend.fakes.finals import cl_final, cv_final
 
 
 # ---------------------------------------------------------------------------
@@ -103,43 +104,11 @@ def _needs_input_reply(question: str = "Does the strategy look accurate?") -> Ag
 
 
 def _final_cv() -> AgentReply:
-    content = (
-        "# John Doe | john@example.com | github.com/john\n\n"
-        "---\n\n"
-        "## Professional Experience\n\n"
-        "**Senior Software Engineer — Acme Corp (2020–present)**\n"
-        "Led backend systems design, built distributed data pipelines processing 10M "
-        "events/day, and mentored a team of five junior engineers. Drove a 40% "
-        "latency reduction across core API services through targeted profiling.\n\n"
-        "**Software Engineer — Beta Ltd (2017–2020)**\n"
-        "Designed and maintained REST APIs for a SaaS platform with 500k monthly "
-        "active users. Improved CI/CD pipeline throughput by 60% and collaborated "
-        "cross-functionally on quarterly delivery cycles.\n\n"
-        "## Education\n\n"
-        "**BSc Computer Science** — University of Example (2013–2017). First-class.\n\n"
-        "## Skills\n\nPython, Go, SQL, PostgreSQL, Docker, Kubernetes, AWS, Git."
-    )
-    assert len(content) >= 300, f"CV content too short: {len(content)}"
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
-        content=content,
-        kind="final",
-    )
+    return cv_final("Adjusted CV", name="John Doe")
 
 
 def _final_cl() -> AgentReply:
-    content = (
-        "Dear Hiring Manager,\n\n"
-        "I am writing to express my strong interest in the Engineer position at Acme. "
-        "Having worked in this domain for several years, I am confident that my skills "
-        "and experience make me an excellent fit for this role. I look forward to "
-        "discussing how I can contribute to your team.\n\nBest regards,\nJohn Doe"
-    )
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
-        content=content,
-        kind="final",
-    )
+    return cl_final()
 
 
 async def _poll_job_state(

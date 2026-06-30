@@ -17,6 +17,7 @@
     { "match": "your tone",   "answer": "Keep it formal, proceed." },
     { "match": "your writing style",   "answer": "Keep it formal, proceed." },
     { "match": "your preferred writing style",   "answer": "Keep it formal, proceed." },
-    { "match": "writing",   "answer": "Keep it formal, proceed." }
+    { "match": "writing",   "answer": "Keep it formal, proceed." },
+    { "match": "file write permission",   "answer": "Do not write or create any files, just output as markdown text" }
   ]
 }

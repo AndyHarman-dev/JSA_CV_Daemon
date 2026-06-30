@@ -7,6 +7,7 @@ All tests use asyncio_mode = "auto" (configured in pyproject.toml).
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
@@ -28,7 +29,13 @@ from jsa.db.models import (
     RevisionRequest,
     Stage,
 )
-from jsa.pipeline.stages import PausedForInput, _validate_cl_content, run_stage
+from jsa.pipeline.stages import (
+    FinalContentError,
+    MAX_FINAL_CORRECTIONS,
+    PausedForInput,
+    _validate_final_content,
+    run_stage,
+)
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
 
@@ -95,12 +102,75 @@ async def _insert_job(session: AsyncSession, **overrides) -> Job:
     return job
 
 
-def _final_reply(content: str = "# Adjusted CV\n\nThis is the adjusted CV.") -> AgentReply:
+def _raw_final(content: str) -> AgentReply:
+    """A FINAL reply carrying exactly `content` (used for raw JSON / contamination payloads)."""
     return AgentReply(
         raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
         content=content,
         kind="final",
     )
+
+
+def _cv_json(marker: str = "Adjusted CV") -> dict:
+    """A minimal valid CV object. `marker` is embedded in the summary so callers can
+    assert it survives into the serialized Markdown (assertions use substrings)."""
+    return {
+        "contact": {
+            "name": "Jane Doe",
+            "email": "jane.doe@example.com",
+            "phone": "+1-555-867-5309",
+        },
+        "sections": [
+            {"name": "Summary", "text": f"{marker}: senior engineer with eight years of experience."},
+            {"name": "Experience", "entries": [
+                {"role": "Senior Engineer", "company": "Acme", "dates": "2019–present",
+                 "bullets": ["Built a distributed payment pipeline", "Led a service migration"]},
+            ]},
+        ],
+    }
+
+
+def _final_reply(marker: str = "Adjusted CV") -> AgentReply:
+    """A valid cv_adjust FINAL (CV JSON). `marker` appears in the serialized Markdown."""
+    return _raw_final(json.dumps(_cv_json(marker)))
+
+
+def _cv_json_no_summary() -> dict:
+    """A schema-valid CV with NO summary section (triggers the soft summary nudge)."""
+    return {
+        "contact": {"name": "Jane Doe", "email": "jane.doe@example.com"},
+        "sections": [
+            {"name": "Experience", "entries": [
+                {"role": "Senior Engineer", "company": "Acme", "dates": "2019–present",
+                 "bullets": ["Built a distributed payment pipeline"]},
+            ]},
+            {"name": "Skills", "items": ["Python", "Go"]},
+        ],
+    }
+
+
+# A cover letter emitted into the CV shape: valid JSON, contact + one section, but the text
+# is letter prose (≥2 letter formulas). The content-kind guard rejects it as not-a-CV.
+_COVER_LETTER_AS_CV = json.dumps({
+    "contact": {"name": "Jane Doe", "email": "j@x.com"},
+    "sections": [{"name": "", "items": [
+        "I am writing to express my strong interest in the Gameplay Programmer role.",
+        "I would welcome discussing how I can contribute. Sincerely, Jane",
+    ]}],
+})
+
+
+def _cl_json(body: str | None = None) -> dict:
+    body = body or (
+        "I am excited to apply for this role because your mission to build great "
+        "developer tooling resonates with my four years of shipping production systems."
+    )
+    return {"salutation": "Dear Hiring Manager,", "paragraphs": [body], "signoff": "Sincerely,\nAndrei"}
+
+
+def _cl_final_reply(body: str | None = None) -> AgentReply:
+    """A valid cover_letter FINAL (cover-letter JSON)."""
+    return _raw_final(json.dumps(_cl_json(body)))
 
 
 def _needs_input_reply(question: str = "What is your target role?") -> AgentReply:
@@ -198,7 +268,7 @@ class TestCoverLetterHappyPath:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply(_REAL_LETTER)])
+        backend = FakeAgentBackend([_cl_final_reply()])
         await run_stage(job, backend, Stage.cover_letter, session)
 
         refreshed = await repo.get_job(session, job.id)
@@ -213,7 +283,7 @@ class TestCoverLetterHappyPath:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply(_REAL_LETTER)])
+        backend = FakeAgentBackend([_cl_final_reply()])
         await run_stage(job, backend, Stage.cover_letter, session)
 
         docs = await repo.get_documents(session, job.id, stage=Stage.cover_letter)
@@ -229,7 +299,7 @@ class TestCoverLetterHappyPath:
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
-        backend = FakeAgentBackend([_final_reply(_REAL_LETTER)])
+        backend = FakeAgentBackend([_cl_final_reply()])
         await run_stage(job, backend, Stage.cover_letter, session)
 
         result = await session.execute(
@@ -590,56 +660,271 @@ Andrei Kharlanchev
 
 
 class TestValidateClContent:
-    def test_real_letter_passes(self):
-        _validate_cl_content(_REAL_LETTER)  # must not raise
+    """Cover-letter FINAL is now validated as JSON against the CoverLetter schema."""
 
-    def test_too_short_raises(self):
-        with pytest.raises(ValueError, match="too short"):
-            _validate_cl_content("Short note.")
+    def test_valid_cover_letter_json_passes(self):
+        obj = _validate_final_content(Stage.cover_letter, json.dumps(_cl_json()), None)
+        assert obj.__class__.__name__ == "CoverLetter"
 
-    def test_summary_header_raises(self):
-        # Long enough (>150 chars) to reach pattern check rather than length check
-        bad = (
-            "Cover letter drafted for Jane Doe — Software Engineer at Acme.\n\n"
-            "Centerpiece: Strong Python background and five years of backend experience. "
-            "Motivation framed around Acme's mission. Tone/length adjustments offered."
+    def test_fenced_json_tolerated(self):
+        payload = "```json\n" + json.dumps(_cl_json()) + "\n```"
+        _validate_final_content(Stage.revising_cl, payload, None)  # must not raise
+
+    def test_prose_letter_rejected(self):
+        # The model emitting the letter as plain prose (not JSON) now fails to parse.
+        with pytest.raises(FinalContentError):
+            _validate_final_content(Stage.cover_letter, _REAL_LETTER, None)
+
+    def test_third_person_summary_rejected(self):
+        # A description of the letter is not valid cover-letter JSON.
+        bad = "The letter emphasizes the candidate's strengths and aligns them with the role."
+        with pytest.raises(FinalContentError):
+            _validate_final_content(Stage.cover_letter, bad, None)
+
+    def test_too_short_body_rejected(self):
+        payload = json.dumps({"paragraphs": ["Hi."]})
+        with pytest.raises(FinalContentError, match="schema"):
+            _validate_final_content(Stage.cover_letter, payload, None)
+
+    def test_unknown_key_ignored_not_fatal(self):
+        # The schema is tolerant (extra="ignore"): a leaked "centerpiece"/meta field does
+        # not fail validation. Contamination defense lives in the serializer, which renders
+        # only known fields — so the stray key never reaches the output.
+        from jsa.render.serialize import cover_letter_to_markdown
+        payload = json.dumps({"paragraphs": ["x" * 200], "centerpiece": "meta-commentary"})
+        obj = _validate_final_content(Stage.cover_letter, payload, None)
+        md = cover_letter_to_markdown(obj)
+        assert "meta-commentary" not in md and "centerpiece" not in md
+
+
+# ---------------------------------------------------------------------------
+# _validate_cv_content unit tests (positive validation against the base CV)
+# ---------------------------------------------------------------------------
+
+_REAL_CV = """\
+# Jane Doe
+jane.doe@example.com | +1-555-867-5309 | linkedin.com/in/janedoe | Austin, USA
+
+---
+## Summary
+Senior software engineer with eight years building reliable backend services and
+developer tooling. Proven record of leading teams and shipping production systems.
+
+---
+## Experience
+**Acme Corp** — Senior Engineer (2019–present)
+- Built a distributed payment pipeline handling 2M requests/day
+- Led migration to a typed service architecture, cutting incident rate by 40%
+
+---
+## Skills
+Python, Go, PostgreSQL, Kubernetes, CI/CD (Continuous Integration/Continuous Delivery)
+"""
+
+# The real-world failure that motivated this guard: a "task complete" summary the
+# agent emitted *inside* <<<FINAL>>> instead of the CV (carries no contact anchors).
+_SUMMARY_NOT_A_CV = (
+    "**CV Finalized and Ready**\n\n"
+    "Your revised CV has been prepared with all reframing integrated:\n\n"
+    "✅ Reframed 4 bullets to emphasize simulation environment design and telemetry.\n"
+    "✅ Skills, projects, portfolios — unchanged.\n"
+    "✅ ATS keywords added naturally: scenario, telemetry, physics-based, simulation.\n\n"
+    "The file is ready to write to /Users/me/cv-final.md. Next steps: once you approve "
+    "the write, you can proceed to cover letter drafting, or submit the CV as-is."
+)
+
+
+class TestValidateCvContent:
+    """cv_adjust FINAL is now validated as JSON against the CVDocument schema."""
+
+    def test_valid_cv_json_passes(self):
+        obj = _validate_final_content(Stage.cv_adjust, json.dumps(_cv_json()), None)
+        assert obj.__class__.__name__ == "CVDocument"
+
+    def test_markdown_cv_rejected(self):
+        # The base CV is Markdown; emitting Markdown (not JSON) into FINAL now fails.
+        with pytest.raises(FinalContentError):
+            _validate_final_content(Stage.cv_adjust, _REAL_CV, None)
+
+    def test_real_world_summary_rejected(self):
+        # Reproduces the production bug — a "task complete" summary instead of the CV.
+        with pytest.raises(FinalContentError):
+            _validate_final_content(Stage.cv_adjust, _SUMMARY_NOT_A_CV, None)
+
+    def test_contact_name_only_accepted(self):
+        # Tolerant by design: a contact with only a name (no email/phone) is accepted.
+        # Rejecting it would false-fail a whole job over missing contact formatting; the
+        # CV still renders and the user reviews it. `name` + >=1 section is the only gate.
+        payload = json.dumps({"contact": {"name": "Jane"},
+                              "sections": [{"name": "Summary", "text": "hi there friend"}]})
+        obj = _validate_final_content(Stage.cv_adjust, payload, None)
+        assert obj.contact.name == "Jane"
+
+    def test_missing_contact_name_rejected(self):
+        # The one contact anchor that distinguishes a CV from noise is still required.
+        bad = json.dumps({"contact": {"email": "j@x.com"},
+                          "sections": [{"name": "Summary", "text": "hi there friend"}]})
+        with pytest.raises(FinalContentError, match="schema"):
+            _validate_final_content(Stage.cv_adjust, bad, None)
+
+    def test_empty_sections_rejected(self):
+        bad = json.dumps({"contact": {"name": "Jane", "email": "j@x.com"}, "sections": []})
+        with pytest.raises(FinalContentError):
+            _validate_final_content(Stage.cv_adjust, bad, None)
+
+    def test_unknown_section_key_ignored(self):
+        # Tolerant: a leaked change-log field on a section is ignored, not fatal, and the
+        # serializer (rendering only known fields) keeps it out of the output.
+        from jsa.render.serialize import cv_to_markdown
+        payload = json.dumps({"contact": {"name": "Jane", "email": "j@x.com"},
+                              "sections": [{"name": "Summary", "text": "hello there", "changelog": "x"}]})
+        obj = _validate_final_content(Stage.cv_adjust, payload, None)
+        md = cv_to_markdown(obj)
+        assert "hello there" in md and "changelog" not in md
+
+    def test_cover_letter_as_cv_rejected(self):
+        # Content-kind guard (the live bug): the model emitted cover-letter prose into the CV
+        # shape — valid JSON, contact + a section, so it passed the tolerant gate and shipped
+        # a letter labelled "CV". Two+ letter formulas now reject it as the wrong content-kind.
+        with pytest.raises(FinalContentError, match="cover letter"):
+            _validate_final_content(Stage.cv_adjust, _COVER_LETTER_AS_CV, None)
+
+    def test_single_letter_phrase_tolerated(self):
+        # One incidental letter-ish phrase is below the 2-match threshold → accepted. A real
+        # CV summary may legitimately contain a single such phrase; we don't false-reject it.
+        payload = json.dumps({
+            "contact": {"name": "Jane", "email": "j@x.com"},
+            "sections": [
+                {"name": "Summary", "text": "Engineer who I look forward to hearing feedback."},
+                {"name": "Skills", "items": ["Python", "Go"]},
+            ],
+        })
+        obj = _validate_final_content(Stage.cv_adjust, payload, None)
+        assert obj.contact.name == "Jane"
+
+
+# ---------------------------------------------------------------------------
+# Self-heal: a FINAL that fails validation is re-prompted on the same session
+# ---------------------------------------------------------------------------
+
+
+class TestCvAdjustSelfHeal:
+    async def test_recovers_after_bad_final(self, session):
+        """A summary FINAL is re-prompted; the corrected CV JSON is accepted → cv_done."""
+        job = await _insert_job(session, cv_text=_REAL_CV)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = FakeAgentBackend([_raw_final(_SUMMARY_NOT_A_CV), _final_reply("Adjusted CV")])
+        await run_stage(job, backend, Stage.cv_adjust, session)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_done
+
+        docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+        assert len(docs) == 1
+        assert "Jane Doe" in docs[0].markdown  # serialized from the recovered CV JSON
+        assert "CV Finalized" not in docs[0].markdown  # the summary was rejected
+        assert docs[0].structured is not None  # JSON source-of-truth persisted
+
+        # The corrective turn (user + assistant) was recorded in history.
+        result = await session.execute(
+            select(Message).where(Message.job_id == job.id, Message.role == "user")
         )
-        with pytest.raises(ValueError, match="meta-commentary"):
-            _validate_cl_content(bad)
+        user_msgs = [m.content for m in result.scalars().all()]
+        assert any("not a valid CV JSON object" in m for m in user_msgs)
 
-    def test_parenthetical_reference_raises(self):
-        bad = (
-            "(Cover letter delivered above in Russian. Awaiting any revision requests — "
-            "tone, length, emphasis, or an English version. Happy to adjust on request. "
-            "Let me know what changes you would like to see before we finalise.)"
-        )
-        with pytest.raises(ValueError, match="meta-commentary"):
-            _validate_cl_content(bad)
+    async def test_fails_after_exhausting_corrections(self, session):
+        """Persistent bad FINALs exhaust corrections → FinalContentError, job not cv_done."""
+        job = await _insert_job(session, cv_text=_REAL_CV)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
 
-    def test_delivered_above_raises(self):
-        bad = (
-            "The cover letter was delivered above. Here is a summary of the changes made "
-            "during this session. The opening paragraph was rewritten to lead with "
-            "motivation, and the achievements section was tightened to three bullet points."
-        )
-        with pytest.raises(ValueError, match="meta-commentary"):
-            _validate_cl_content(bad)
+        # 1 initial + MAX_FINAL_CORRECTIONS re-prompts, all bad.
+        replies = [_raw_final(_SUMMARY_NOT_A_CV) for _ in range(1 + MAX_FINAL_CORRECTIONS)]
+        backend = FakeAgentBackend(replies)
 
-    def test_awaiting_revision_raises(self):
-        bad = (
-            "Draft complete. Awaiting revision requests from the candidate before "
-            "finalising. The current version addresses all points raised in the brief "
-            "and mirrors the semi-formal tone specified in the style-capture step."
-        )
-        with pytest.raises(ValueError, match="meta-commentary"):
-            _validate_cl_content(bad)
+        with pytest.raises(FinalContentError):
+            await run_stage(job, backend, Stage.cv_adjust, session)
 
-    def test_centerpiece_raises(self):
-        bad = (
-            "Centerpiece: Blueprint↔native-C++ tooling (Promise/Future, UStructSynchronizer).\n\n"
-            "Advocacy framed honestly as instinct (open-source repos + doc/lead work), "
-            "no fabricated tutorials/talks. Motivation reframed to point existing expertise "
-            "at the runtime. Offered tone/length adjustments."
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state != JobState.cv_done
+        docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+        assert docs == []  # nothing was persisted
+
+
+class TestCvAdjustSummaryNudge:
+    """A valid CV with no summary is *nudged* (soft) — never hard-failed."""
+
+    async def test_missing_summary_nudged_then_accepted(self, session):
+        job = await _insert_job(session, cv_text=_REAL_CV)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = FakeAgentBackend([
+            _raw_final(json.dumps(_cv_json_no_summary())),  # valid but no Summary
+            _final_reply("Adjusted CV"),                    # corrected: has a Summary
+        ])
+        await run_stage(job, backend, Stage.cv_adjust, session)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_done
+        docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+        assert "## Summary" in docs[0].markdown
+
+        result = await session.execute(
+            select(Message).where(Message.job_id == job.id, Message.role == "user")
         )
-        with pytest.raises(ValueError, match="meta-commentary"):
-            _validate_cl_content(bad)
+        assert any("missing a Summary" in m.content for m in result.scalars().all())
+
+    async def test_persistent_missing_summary_ships_thin_not_failed(self, session):
+        """A CV that never gains a summary still ships (cv_done): thinness, not corruption."""
+        job = await _insert_job(session, cv_text=_REAL_CV)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        replies = [_raw_final(json.dumps(_cv_json_no_summary()))
+                   for _ in range(1 + MAX_FINAL_CORRECTIONS)]
+        backend = FakeAgentBackend(replies)
+        await run_stage(job, backend, Stage.cv_adjust, session)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_done  # soft: shipped, not failed
+        docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+        assert len(docs) == 1
+        assert "## Summary" not in docs[0].markdown
+
+
+class TestCvAdjustCoverLetterGuard:
+    """A cover letter emitted into the CV shape is corruption — hard-gated → fail if uncorrected."""
+
+    async def test_cover_letter_as_cv_recovers(self, session):
+        job = await _insert_job(session, cv_text=_REAL_CV)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = FakeAgentBackend([_raw_final(_COVER_LETTER_AS_CV), _final_reply("Adjusted CV")])
+        await run_stage(job, backend, Stage.cv_adjust, session)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_done
+        # the concise validator reason ("...cover letter...") was forwarded to the model
+        result = await session.execute(
+            select(Message).where(Message.job_id == job.id, Message.role == "user")
+        )
+        assert any("cover letter" in m.content for m in result.scalars().all())
+
+    async def test_persistent_cover_letter_fails(self, session):
+        job = await _insert_job(session, cv_text=_REAL_CV)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        replies = [_raw_final(_COVER_LETTER_AS_CV) for _ in range(1 + MAX_FINAL_CORRECTIONS)]
+        backend = FakeAgentBackend(replies)
+        with pytest.raises(FinalContentError):
+            await run_stage(job, backend, Stage.cv_adjust, session)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state != JobState.cv_done
+        docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+        assert docs == []

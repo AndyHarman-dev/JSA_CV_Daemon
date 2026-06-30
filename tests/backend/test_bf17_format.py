@@ -6,11 +6,13 @@ PROMPT_PATH = REPO_ROOT / "jsa" / "prompts" / "PROMPT_CDADJUST.md"
 CSS_PATH = REPO_ROOT / "jsa" / "render" / "styles.css"
 
 
-def test_prompt_header_format():
+def test_prompt_specifies_json_contact():
+    # The CV is now emitted as structured JSON; the program (serializer) owns layout.
+    # The prompt must instruct the JSON `contact` object rather than a Markdown header.
     text = PROMPT_PATH.read_text()
-    assert "No profession title" in text
-    assert "# Full Name" in text
-    assert "email@example.com | " in text
+    assert "JSON object" in text
+    assert "`contact`" in text
+    assert "verbatim" in text  # email/phone copied verbatim from the base CV
 
 
 def test_prompt_no_old_title_instruction():
@@ -18,10 +20,11 @@ def test_prompt_no_old_title_instruction():
     assert "only where the original had visual separators" not in text
 
 
-def test_prompt_unconditional_separator():
+def test_prompt_specifies_sections_array():
+    # Section ordering/structure is part of the schema the prompt documents.
     text = PROMPT_PATH.read_text()
-    assert "unconditional" in text
-    assert "before **every**" in text
+    assert "`sections`" in text
+    assert "ordered" in text
 
 
 def test_css_spacing():

@@ -410,6 +410,7 @@ async def checkpoint(
             stage=document["stage"],
             version=document["version"],
             markdown=document["markdown"],
+            structured=document.get("structured"),
         )
         session.add(doc)
 
