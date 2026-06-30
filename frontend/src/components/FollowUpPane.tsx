@@ -95,7 +95,7 @@ export function FollowUpPane({ jobId }: Props) {
           padding: "13px 15px",
         }}
       >
-        <MarkdownPreview markdown={followUp.question} />
+        <MarkdownPreview markdown={followUp.question} style={{ color: T.ink }} />
       </div>
       <ChatBox kind="answer" jobId={jobId} followUpId={followUp.id} onSubmitted={fetchFollowUp} />
     </div>

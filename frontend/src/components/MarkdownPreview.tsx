@@ -1,11 +1,16 @@
+import type { CSSProperties } from "react";
 import { marked } from "marked";
 
 interface Props {
   markdown: string;
   className?: string;
+  // Inline overrides win over the Tailwind defaults below regardless of generated
+  // stylesheet order (unlike passing more Tailwind classes via `className`, which can
+  // silently lose the specificity race) — used by dark-surface callers like FollowUpPane.
+  style?: CSSProperties;
 }
 
-export function MarkdownPreview({ markdown, className }: Props) {
+export function MarkdownPreview({ markdown, className, style }: Props) {
   const html = marked(markdown, { async: false });
 
   return (
@@ -25,6 +30,7 @@ export function MarkdownPreview({ markdown, className }: Props) {
         "[&_hr]:my-4 [&_hr]:border-gray-300",
         className ?? "",
       ].join(" ")}
+      style={style}
       // eslint-disable-next-line react/no-danger
       dangerouslySetInnerHTML={{ __html: html }}
     />

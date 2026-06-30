@@ -47,8 +47,8 @@ body {
   background-clip: padding-box;
 }
 
-/* ---- keyframes (ported 1:1 from the design handoff; shell uses the js* names, the
-   editor uses the cv*/cy* names — both kept distinct to match the reference exactly) ---- */
+/* ---- keyframes (ported 1:1 from the design handoff; shell uses the "js" prefix, the
+   editor uses "cv"/"cy" prefixes — both kept distinct to match the reference exactly) ---- */
 @keyframes jsfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes jsspin { to { transform: rotate(360deg); } }
 @keyframes jsblink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .2; } }
