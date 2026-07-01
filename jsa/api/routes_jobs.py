@@ -334,6 +334,13 @@ async def dismiss_job(request: Request, job_id: str):
         )
     )
 
+    # Best-effort: stop the in-flight agent turn (if any) so it stops consuming
+    # API tokens immediately. The `dismissed` state is already committed above
+    # (DB is authoritative regardless of whether cancellation lands in time);
+    # StaleJobResult (jsa/pipeline/stages.py) is the correctness backstop that
+    # discards a stale result even if this cancellation loses the race.
+    request.app.state.orchestrator.cancel_task(job_id)
+
     return job_dict
 
 

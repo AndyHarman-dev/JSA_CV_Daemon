@@ -55,6 +55,20 @@ class PausedForInput(Exception):
     """
 
 
+class StaleJobResult(Exception):
+    """Raised when the job's DB state changed (dismiss/cancel/delete) while the
+    agent was working, so the just-produced reply is stale and must be
+    discarded rather than checkpointed.
+
+    The orchestrator worker holds its Job ORM object in memory for the whole,
+    potentially slow, agent turn. If another request (e.g. dismiss) commits a
+    state change on a separate session in the meantime, writing this reply's
+    checkpoint would resurrect the job — see checkpoint()'s in-memory-only
+    transition() guard in jsa/db/repo.py. No rows are written when this fires;
+    the orchestrator catches it silently, like PausedForInput.
+    """
+
+
 async def _render_for_review(session: AsyncSession, job: Job, output_dir: Path) -> None:
     """Render both PDF and DOCX for all review documents and persist paths."""
     cv_docs = await repo.get_documents(session, job.id, Stage.cv_adjust)
@@ -455,6 +469,17 @@ async def run_stage(
         accumulated_messages=accumulated_messages,
     )
 
+    # Guard against a stale result: the agent turn above may have run for a long
+    # time, during which the job could have been dismissed/cancelled/deleted on
+    # a separate session. checkpoint()'s transition() guard only validates
+    # against this in-memory `job` object (still `running`), so without this
+    # re-check a stale NEED_INPUT/FINAL would silently overwrite the real DB
+    # state (e.g. resurrect a dismissed job — see StaleJobResult docstring).
+    # Read via a fresh session: this session may hold a stale snapshot.
+    current_state = await repo.get_state_fresh(session, job.id)
+    if current_state != JobState.running:
+        raise StaleJobResult(job.id, current_state)
+
     # Handle the reply
     if reply.kind == "needs_input":
         await _handle_needs_input(
@@ -662,10 +687,24 @@ async def _run_fit_assessment(
     except ProtocolError:
         # A malformed / sentinel-less reply is "unparseable" → fail to the modal
         # (closed), consistent with the verdict contract, rather than failing the job.
+        #
+        # Same stale-result guard as run_stage's post-reply check (see StaleJobResult):
+        # fit_assessment is the FIRST stage and runs before run_stage's guard is ever
+        # reached (that check sits after this whole function returns), so it needs its
+        # own re-check here — this is the exact "dismissed before it ever outputs
+        # anything" window from the reported bug.
+        current_state = await repo.get_state_fresh(session, job.id)
+        if current_state != JobState.running:
+            raise StaleJobResult(job.id, current_state)
         job.fit_reason = _FIT_FALLBACK_REASON
         await checkpoint(session, job, JobState.unfit, None)
         await _publish_fit_outcome(job, is_fit=False)
         return
+
+    # Same guard for the normal (non-ProtocolError) path — see comment above.
+    current_state = await repo.get_state_fresh(session, job.id)
+    if current_state != JobState.running:
+        raise StaleJobResult(job.id, current_state)
 
     accumulated_messages = [
         {"role": "system", "content": system_prompt},
