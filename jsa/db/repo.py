@@ -13,6 +13,21 @@ async def get_job(session: AsyncSession, job_id: str) -> Job | None:
     return result.scalar_one_or_none()
 
 
+async def get_state_fresh(session: AsyncSession, job_id: str) -> JobState | None:
+    """Read Job.state on a brand-new session bound to the same engine.
+
+    A long-lived session (e.g. an orchestrator worker holding a Job object for
+    the duration of a slow agent call) may have an open read transaction that
+    predates a concurrent commit elsewhere (e.g. a dismiss). A same-session
+    SELECT can therefore return a stale snapshot. Opening a fresh session
+    guarantees we see the latest committed state. Returns None if the job no
+    longer exists (e.g. deleted concurrently).
+    """
+    async with AsyncSession(session.bind, expire_on_commit=False) as fresh:
+        result = await fresh.execute(select(Job.state).where(Job.id == job_id))
+        return result.scalar_one_or_none()
+
+
 async def list_jobs(session: AsyncSession, state: JobState | None = None) -> list[Job]:
     """Return all jobs, optionally filtered by state."""
     stmt = select(Job)

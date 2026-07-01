@@ -24,7 +24,7 @@ from jsa.events.schema import (
     event_to_dict,
 )
 from jsa.pipeline import stages
-from jsa.pipeline.stages import PausedForInput
+from jsa.pipeline.stages import PausedForInput, StaleJobResult
 from jsa.pipeline.state_machine import transition
 
 logger = logging.getLogger(__name__)
@@ -111,11 +111,27 @@ class Orchestrator:
         self._output_dir = output_dir
         self._cv_structure_path = cv_structure_path
         self._stopping = False
-        self._tasks: set[asyncio.Task] = set()
+        # Keyed by job_id (not an unkeyed set) so a specific job's in-flight
+        # worker task can be looked up and cancelled — see cancel_task().
+        self._tasks: dict[str, asyncio.Task] = {}
 
     def kick(self) -> None:
         """Wake the run() loop. Called by API routes after answer/revise."""
         self.wakeup.set()
+
+    def cancel_task(self, job_id: str) -> bool:
+        """Best-effort: cancel the in-flight worker task for job_id, if any.
+
+        Returns True if a running task was found and cancelled. This stops the
+        agent turn promptly (saving API cost) but is not the correctness
+        guarantee — StaleJobResult (see stages.py) still protects against a
+        task that races to completion before cancellation lands.
+        """
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            task.cancel()
+            return True
+        return False
 
     async def run(self) -> None:
         """Main dispatch loop.
@@ -198,10 +214,20 @@ class Orchestrator:
                 )
 
                 # Spawn the worker task; sem is released in the task's finally block.
-                # Retain a strong reference to prevent premature GC.
+                # Keying by job_id (rather than an unkeyed set) lets cancel_task()
+                # look up and cancel a specific job's in-flight task (e.g. on dismiss).
                 task = asyncio.create_task(self._run_one(job.id))
-                self._tasks.add(task)
-                task.add_done_callback(self._tasks.discard)
+                self._tasks[job.id] = task
+                # Only pop if the dict still points at *this* task — guards against
+                # popping a newer task if the same job_id got re-dispatched before
+                # this callback ran.
+                task.add_done_callback(
+                    lambda t, jid=job.id: (
+                        self._tasks.pop(jid, None)
+                        if self._tasks.get(jid) is t
+                        else None
+                    )
+                )
 
             await self.wakeup.wait()
 
@@ -251,6 +277,20 @@ class Orchestrator:
         except PausedForInput:
             # Job successfully parked — not an error
             pass
+
+        except StaleJobResult as exc:
+            # The job was dismissed/cancelled/deleted on another session while
+            # this agent turn was in flight. The reply was discarded (no rows
+            # written) — this is expected, benign control flow, not a failure.
+            logger.info("_run_one: job %s result discarded (stale): %s", job_id, exc)
+
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g. dismiss's best-effort cancel_task()).
+            # Don't mark the job failed — StaleJobResult / the dismiss commit
+            # already reflect the correct outcome. Propagate so the task
+            # actually ends cancelled; `finally` below still runs.
+            logger.info("_run_one: job %s task cancelled", job_id)
+            raise
 
         except AgentLimitReached as exc:
             logger.warning("_run_one: job %s hit backend limit: %s", job_id, exc)
