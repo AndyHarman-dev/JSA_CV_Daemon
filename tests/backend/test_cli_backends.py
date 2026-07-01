@@ -166,6 +166,18 @@ class TestClaudeStartSession:
         assert "--system-prompt" in cmd
         assert "my sys prompt" in cmd
 
+    async def test_subprocess_called_with_no_tools_flag(self):
+        """start_session must disable all tools — these are text-only sentinel turns,
+        never a coding/file-writing session (regression guard for stray file writes)."""
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = ClaudeCliBackend(timeout=5.0)
+            await backend.start_session("sys", "user message")
+
+        cmd = mock_run.call_args.args[0]
+        assert "--tools" in cmd
+        assert cmd[cmd.index("--tools") + 1] == ""
+
     async def test_handle_external_id_is_set_after_start(self):
         mock_proc = _make_mock_subprocess(_FINAL_BYTES)
         with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
@@ -267,6 +279,19 @@ class TestClaudeSendMessage:
 
         cmd = mock_run.call_args.args[0]
         assert "--system-prompt" not in cmd
+
+    async def test_subprocess_called_with_no_tools_flag(self):
+        """send_message must disable all tools — same regression guard as start_session."""
+        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+
+        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+            backend = ClaudeCliBackend(timeout=5.0)
+            await backend.send_message(handle, "text")
+
+        cmd = mock_run.call_args.args[0]
+        assert "--tools" in cmd
+        assert cmd[cmd.index("--tools") + 1] == ""
 
     async def test_final_reply_returned_on_final_output(self):
         mock_proc = _make_mock_subprocess(_FINAL_BYTES)

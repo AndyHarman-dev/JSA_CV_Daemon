@@ -144,6 +144,15 @@ class TestParseWithNudgeMissingSentinelNudgeSucceeds:
         nudge_cmd = backend.run_call_args[0]
         assert "-p" in nudge_cmd
 
+    async def test_nudge_cmd_contains_no_tools_flag(self):
+        """Nudge retry must also disable all tools — same regression guard as the
+        original call (a missing sentinel block is no excuse to grant tool access)."""
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend._parse_with_nudge("sess-xyz", BARE_TEXT)
+        nudge_cmd = backend.run_call_args[0]
+        assert "--tools" in nudge_cmd
+        assert nudge_cmd[nudge_cmd.index("--tools") + 1] == ""
+
 
 class TestParseWithNudgeMissingSentinelBothFail:
     """Test 3 — both first and nudge reply missing sentinel → ProtocolError propagated."""
