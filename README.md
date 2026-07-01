@@ -1,16 +1,17 @@
 # JSA — Job Search Assistant
 
-JSA is a CLI-launched local web application that automates tailored job-application document generation. You supply a CSV of job openings and your CV; for each row a two-stage AI pipeline (CV adjustment → cover letter) produces tailored Markdown that you review in a browser UI, request revisions on, and export to PDF.
+JSA is a CLI-launched local web application that automates tailored job-application document generation. You supply a CSV of job openings and your CV; for each row a three-stage AI pipeline (fit assessment → CV adjustment → cover letter) produces tailored documents that you review in a browser UI, request revisions on, and export to PDF/DOCX.
 
 **Features:**
 
-- Two-stage pipeline per job: CV tailoring + cover letter generation
+- Three-stage pipeline per job: fit assessment (gate) + CV tailoring + cover letter generation
+- Fit-assessment gate: jobs flagged as a poor fit park in an "unfit" modal instead of burning pipeline time — dismiss the job or override and continue
 - Up to 5 jobs processed concurrently with automatic semaphore control
 - Follow-up Q&A: the AI asks clarifying questions; you answer them in the browser Inbox
 - Full crash resilience: every stage is checkpointed; resume exactly where you left off after any crash or restart
 - Revision loop: request edits on generated CV or cover letter; new document version written without re-running the whole pipeline
-- Browser UI with live pipeline progress, document preview, and PDF export
-- Three AI backends: Claude CLI, Gemini CLI, Anthropic REST API
+- Browser UI with live pipeline progress, PDF document preview, and PDF/DOCX export
+- Three AI backends: Claude CLI, Google `agy` CLI, Anthropic REST API — configurable as an ordered fallback chain
 - All data stored locally in SQLite (`~/.jsa/jsa.sqlite`)
 
 ---
@@ -81,8 +82,9 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 |------|---------|----------------------|-------------|
 | `--csv` | required | — | Path to the jobs CSV file |
 | `--cv` | required | — | Path to your CV (`.pdf` or `.docx`) |
-| `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where PDFs are written on approval |
-| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend: `claude-cli` \| `google-cli` \| `anthropic` |
+| `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where rendered PDF/DOCX files are written |
+| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (single), backward-compat alias for `--backends`: `claude-cli` \| `google-cli` \| `anthropic` |
+| `--backends` | `claude-cli` | `JSA_BACKENDS` | Comma-separated ordered backend fallback chain, e.g. `claude-cli,google-cli` |
 | `--db` | `~/.jsa/jsa.sqlite` | `JSA_DB_PATH` | SQLite database path |
 | `--port` | `8765` | `JSA_PORT` | Port for the local web server |
 | `--no-browser` | false | — | Skip opening the browser automatically |
@@ -122,8 +124,9 @@ Optional environment variables for this backend:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `JSA_MODEL` | `claude-opus-4-7` | Model name to use |
+| `JSA_MODEL` | `claude-haiku-4-5` | Model name to use (also applies to `claude-cli`) |
 | `JSA_ANTHROPIC_TIMEOUT` | `180` | Per-request timeout in seconds |
+| `JSA_AGENT_TIMEOUT` | `300` | Per-request timeout for CLI backends (`claude-cli`, `google-cli`) |
 
 ---
 
@@ -131,21 +134,26 @@ Optional environment variables for this backend:
 
 1. **Start JSA.** Run `jsa --csv jobs.csv --cv resume.pdf`. The browser opens at `http://localhost:8765`.
 
-2. **Pipeline runs in background.** For each job in the CSV, the AI runs two stages:
+2. **Pipeline runs in background.** For each job in the CSV, the AI runs up to three stages:
+   - *Fit assessment* — a one-shot gate that judges whether the role is a good fit before spending pipeline time on it
    - *CV adjustment* — tailors your CV for the specific role and JD
    - *Cover letter* — writes a matching cover letter
 
-3. **Answer follow-up questions.** If the AI needs clarification (e.g., "What sector are you targeting?"), the job parks and a question appears in the **Inbox** tab. Type your answer and submit; the job resumes automatically.
+3. **Handle an "unfit" verdict (if raised).** If the fit-assessment stage flags the job as a poor match, it parks with a reason and a centered "not a fit" modal appears instead of proceeding. Click **Dismiss** to drop the job, or **Ignore & continue** to override and resume the pipeline.
 
-4. **Review documents.** Once both stages complete, the job moves to **Review**. Click the job in the left rail to open both the adjusted CV and cover letter side-by-side. Preview is rendered Markdown — no PDF overhead.
+4. **Answer follow-up questions.** If the AI needs clarification (e.g., "What sector are you targeting?"), the job parks and a question appears in the **Inbox** tab. Type your answer and submit; the job resumes automatically.
 
-5. **Request revisions (optional).** In the Review pane, use the revision chat box to send targeted instructions (e.g., "Make the skills section shorter"). The AI revises the specific document without re-running the whole pipeline. A new document version is written.
+5. **Review documents.** Once both the CV and cover letter stages complete, the job moves to **Review** and both documents are rendered to PDF and DOCX automatically. Click the job in the left rail to open both documents side-by-side as PDF previews.
 
-6. **Approve and export PDFs.** When satisfied, click **Approve & Export**. Two PDFs are written to the output directory:
-   - `{output_dir}/{company}_{role}_{job_id[:8]}/cv.pdf`
-   - `{output_dir}/{company}_{role}_{job_id[:8]}/cover_letter.pdf`
+6. **Request revisions (optional).** In the Review pane, use the revision chat box to send targeted instructions (e.g., "Make the skills section shorter"). The AI revises the specific document without re-running the whole pipeline. A new document version is written and re-rendered to PDF/DOCX.
 
-7. **PDFs are in `output/`** (or the path you set with `--out`). The job moves to **Done**.
+7. **Approve.** When satisfied, click **Approve**. This only transitions the job to `approved` — the PDF/DOCX files were already rendered when the job entered Review, at:
+   - `{output_dir}/{company}_{role}_{job_id[:8]}/cv.{pdf,docx}`
+   - `{output_dir}/{company}_{role}_{job_id[:8]}/cover_letter.{pdf,docx}`
+
+8. **Re-export on demand (optional).** From `review` or `approved`, you can re-render either format at any time (e.g., after editing the base CV) without re-running the pipeline.
+
+9. **Files are in `output/`** (or the path you set with `--out`). The job moves to **Done**.
 
 ---
 
@@ -154,8 +162,9 @@ Optional environment variables for this backend:
 The AI prompts live at:
 
 ```
-jsa/prompts/PROMPT_CDADJUST.md   # CV adjustment system prompt
-jsa/prompts/CVL_PROMPT.md        # Cover letter system prompt
+jsa/prompts/PROMPT_FIT_ASSESSMENT.md  # Fit-assessment gate system prompt
+jsa/prompts/PROMPT_CDADJUST.md        # CV adjustment system prompt
+jsa/prompts/CVL_PROMPT.md             # Cover letter system prompt
 ```
 
 Edit these files in any text editor. Changes take effect immediately on the next job run (prompts are read from disk on every invocation, never cached).
@@ -178,6 +187,8 @@ or
 
 **Do not remove or modify the sentinel instructions in the prompts.** The pipeline parser (`jsa/agents/protocol.py`) will raise a `ProtocolError` and mark the job `failed` if the sentinel is absent or malformed. The sentinel instructions are already present in the default prompt stubs.
 
+**Fit-assessment prompt is a special case.** It must always reply with `<<<FINAL>>>` (never `<<<NEED_INPUT>>>`), and the first line of the payload must be exactly `FIT` or `UNFIT` — anything else (including an unparseable verdict) is treated as `UNFIT` and parks the job behind the "not a fit" modal rather than silently continuing.
+
 ---
 
 ## Persistence and re-runs
@@ -188,15 +199,16 @@ or
 
 - Jobs in `approved` state with unchanged JD are skipped entirely.
 - Jobs in `failed` state are reset to `pending` and restarted.
-- Jobs in `running`, `cv_done`, `awaiting_input`, or `review` resume from where they left off.
+- Jobs in `running`, `fit_done`, `cv_done`, `cl_done`, `awaiting_input`, or `review` resume from where they left off.
+- Jobs in `unfit` stay parked behind the modal until you dismiss or override them.
 - If a job's JD has changed since the last run, it is reset to `pending` and re-processed.
 
 **Crash recovery:** on every startup JSA runs a recovery sweep. Any job stuck in `running` (which indicates it was mid-stage when the process died) is reverted to the last completed stage:
-- Has a cover letter document → `cv_done` (cover letter stage will be re-run)
-- Has a CV document → `cv_done`
-- Has neither → `pending`
+- Has a cover letter document → `cl_done` (cover letter stage will be re-run)
+- Has a CV document → `cv_done` (cover letter stage will run next)
+- Has neither → `pending` (fit assessment re-runs from scratch)
 
-Jobs in `awaiting_input` are left untouched — the question is already in the database.
+Jobs in `awaiting_input`, `review`, `approved`, or `failed` are left untouched by the sweep — for `awaiting_input`, the question is already in the database.
 
 **Reset a failed job:** click the **Reset** button in the job's detail pane in the UI. This transitions the job back to `pending` so it will be re-processed on the next wakeup.
 
@@ -253,9 +265,12 @@ jsa/                   Python package
   agents/              AgentBackend ABC + three backends
   prompts/             Prompt files (edit these)
   pipeline/            Orchestrator, stage runners, state machine
-  render/              PDF renderer (WeasyPrint)
+  render/              PDF (WeasyPrint) and DOCX (python-docx) renderers
   events/              In-process pub/sub bus
   api/                 FastAPI route handlers
+  schema/              Structured CV/cover-letter Pydantic schemas
+  store/               CV Structure Editor persistence
+  dev/                 Dev-only helpers (auto-answer NEED_INPUT gates)
 frontend/              React + Vite + TypeScript UI
 tests/                 pytest (backend) + vitest (frontend)
 ```

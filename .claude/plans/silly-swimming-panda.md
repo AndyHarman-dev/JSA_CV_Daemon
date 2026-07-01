@@ -1,5 +1,5 @@
 ---
-status: InProgress
+status: Done
 ---
 
 # Phase 2 — CV Structure Editor (standalone CVDocument JSON, consumed by jobs)

@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;height:100%}
+    body{font-family:"IBM Plex Sans",system-ui,sans-serif;background:#070A0F;color:#E8EEF2;-webkit-font-smoothing:antialiased}
+    textarea,input,button,select{font-family:inherit}
+    @keyframes jsfade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    @keyframes jsspin{to{transform:rotate(360deg)}}
+    @keyframes jsblink{0%,49%{opacity:1}50%,100%{opacity:.2}}
+    @keyframes jsscan{from{background-position:0 0}to{background-position:0 160vh}}
+    ::selection{background:rgba(244,206,74,.3);color:#fff}
+    ::-webkit-scrollbar{width:10px;height:10px}
+    ::-webkit-scrollbar-thumb{background:#1C232C;border-radius:3px;border:2px solid transparent;background-clip:padding-box}
+    .jrow{transition:background .12s,border-color .12s}
+    .jbtn{transition:background .12s,color .12s,border-color .12s}
+    .jbtn:hover{background:#1B232C}
+    .jbtn:disabled{opacity:.35;cursor:default!important}
+    .jghost{transition:background .12s,border-color .12s}
+    .jprimary{transition:background .14s,box-shadow .14s,transform .05s}
+    .jprimary:active{transform:translateY(1px)}
+    .jdanger{transition:background .12s,border-color .12s,color .12s}
+    .jta{transition:border-color .12s,box-shadow .12s}
+    .jta:focus{outline:none}
+    .jtab{transition:color .12s,border-color .12s}
+  </style>
+</helmet>
+{{ themeStyle }}
+<div style="height:100vh;display:flex;flex-direction:column;min-height:0;background:#070A0F;color:#E8EEF2;position:relative;overflow:hidden">
+  {{ ambient }}
+  {{ header }}
+  <div style="flex:1;display:flex;min-height:0;overflow:hidden;position:relative;z-index:1">
+    {{ jobList }}
+    <main style="flex:1;min-width:0;overflow:auto;position:relative">{{ jobDetail }}</main>
+  </div>
+  {{ unfitOverlay }}
+  <sc-if value="{{ editorOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:60;background:#070A0F">
+      <dc-import name="CV Structure Editor" accent="{{ editorAccent }}" skin="{{ editorSkin }}" telemetry="{{ editorTelemetry }}" on-exit="{{ closeEditor }}" style="display:block;width:100%;height:100%" hint-size="100%,100%"></dc-import>
+    </div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;options&quot;:[&quot;#F4CE4A&quot;,&quot;#33E6E6&quot;,&quot;#FF4655&quot;,&quot;#FF2BD6&quot;],&quot;default&quot;:&quot;#F4CE4A&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;skin&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;terminal&quot;,&quot;hud&quot;],&quot;default&quot;:&quot;terminal&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Daemon&quot;},&quot;telemetry&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Daemon&quot;}}">
+class Component extends DCLogic {
+  GROUPS = [
+    { label: 'Inbox', code: 'INBOX', states: ['awaiting_input'] },
+    { label: 'Needs Review', code: 'FLAGGED', states: ['unfit'] },
+    { label: 'Running', code: 'PROC', states: ['running', 'pending', 'fit_done', 'cv_done', 'cl_done'] },
+    { label: 'Review', code: 'RVW', states: ['review'] },
+    { label: 'Done', code: 'DONE', states: ['approved'] },
+    { label: 'Failed', code: 'ERR', states: ['failed'] },
+    { label: 'Dismissed', code: 'OFF', states: ['dismissed'] },
+  ];
+  STEPS = [
+    { label: 'PENDING', key: 'pending' },
+    { label: 'CV_ADJUST', key: 'cv_adjust' },
+    { label: 'CV_DONE', key: 'cv_done' },
+    { label: 'COVER_LETTER', key: 'cover_letter' },
+    { label: 'CL_DONE', key: 'cl_done' },
+    { label: 'REVIEW', key: 'review' },
+    { label: 'APPROVED', key: 'approved' },
+  ];
+
+  state = {
+    jobs: [],
+    selectedId: null,
+    jdOpen: false,
+    reviewTab: 'cv',
+    chatDraft: '',
+    nuclearConfirmId: null,
+    editorOpen: false,
+    clockTick: 0,
+    downloadMenuOpen: false,
+    backendMenuOpen: false,
+    backendQueue: [
+      { id: 'claude-cli', label: 'CLAUDE CLI', status: 'active' },
+      { id: 'google-cli', label: 'GOOGLE CLI (AGY)', status: 'standby' },
+      { id: 'anthropic', label: 'ANTHROPIC API', status: 'standby' },
+    ],
+  };
+
+  componentDidMount() {
+    this._session = Array.from({ length: 6 }, () => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]).join('');
+    this._clockInt = setInterval(() => this.setState(s => ({ clockTick: (s.clockTick || 0) + 1 })), 1000);
+    this.setState({ jobs: this.sampleJobs(), selectedId: 'j1' });
+  }
+  componentWillUnmount() { clearInterval(this._clockInt); }
+
+  sampleJobs() {
+    return [
+      { id: 'j1', company: 'Stripe', role: 'Senior Backend Engineer', tier: 'A', state: 'awaiting_input', current_stage: 'cv_adjust', retry_count: 0, error: null, fit_reason: null,
+        jd: 'We are looking for a senior backend engineer to own core payments infrastructure. You will design APIs used by millions of businesses, work closely with risk and compliance, and mentor junior engineers. 5+ years experience with distributed systems required.',
+        followUp: { question: 'Your resume lists "led a team" at Voltline but doesn\u2019t specify team size or whether this was a formal management role. Can you clarify so I tailor the leadership framing correctly?' } },
+      { id: 'j2', company: 'General Dynamics', role: 'Mechanical QA Lead', tier: 'C', state: 'unfit', current_stage: null, retry_count: 0, error: null,
+        fit_reason: 'This role requires an active DoD security clearance and 8+ years in mechanical QA for defense hardware. Your background is software engineering with no clearance history — the mismatch is structural, not just resume framing.',
+        jd: 'Lead quality assurance for precision mechanical assemblies in defense manufacturing. Active Secret clearance required.' },
+      { id: 'j3', company: 'Anthropic', role: 'Applied AI Engineer', tier: 'A', state: 'running', current_stage: 'cv_adjust', retry_count: 0, error: null, fit_reason: null,
+        jd: 'Build applied systems on top of frontier models for enterprise customers. Strong systems + ML fundamentals.' },
+      { id: 'j4', company: 'Vercel', role: 'Platform Engineer', tier: 'B', state: 'pending', current_stage: null, retry_count: 0, error: null, fit_reason: null,
+        jd: 'Own the edge runtime that powers millions of deployments. Rust or Go experience a plus.' },
+      { id: 'j5', company: 'Replit', role: 'Staff Frontend Engineer', tier: 'A', state: 'review', current_stage: null, retry_count: 0, error: null, fit_reason: null,
+        jd: 'Staff-level frontend role shaping the in-browser IDE experience for millions of developers.', cvVersion: 2, clVersion: 1 },
+      { id: 'j6', company: 'Notion', role: 'Backend Engineer', tier: 'A', state: 'approved', current_stage: null, retry_count: 0, error: null, fit_reason: null,
+        jd: 'Backend engineer for the core docs collaboration engine.', cvVersion: 1, clVersion: 1 },
+      { id: 'j7', company: 'Scale AI', role: 'ML Infra Engineer', tier: 'B', state: 'failed', current_stage: 'cover_letter', retry_count: 1, fit_reason: null,
+        error: 'Agent backend returned a malformed sentinel block while generating the cover letter (missing <<<END>>> terminator). Job marked failed after 3 retries.',
+        jd: 'ML infrastructure engineer for training cluster reliability.' },
+      { id: 'j8', company: 'Hexbloom Studio', role: 'Growth Hacker', tier: 'C', state: 'dismissed', current_stage: null, retry_count: 0, error: null, fit_reason: null,
+        jd: 'Growth role at an early-stage startup.' },
+    ];
+  }
+
+  get accent() { return this.props.accent ?? '#F4CE4A'; }
+  get T() {
+    const a = this.accent;
+    const chamfer = (this.props.skin ?? 'terminal') === 'hud';
+    return {
+      a, accent2: '#33E6E6', danger: '#FF4655', violet: '#9D7BFF', green: '#8FE3A0',
+      ui: '"IBM Plex Sans", system-ui, sans-serif', mono: '"Share Tech Mono", ui-monospace, monospace', disp: '"Chakra Petch", system-ui, sans-serif',
+      canvas: '#070A0F', surface: '#10151D', subtle: '#0E141B', sunk: '#0B0F15',
+      bd: 'rgba(140,190,210,0.16)', bd2: 'rgba(140,190,210,0.30)',
+      ink: '#E8EEF2', ink2: '#8B97A6', ink3: '#4D5868',
+      aSoft: `color-mix(in srgb, ${a} 14%, #10151D)`, aBorder: `color-mix(in srgb, ${a} 55%, #10151D)`,
+      chamfer, radius: chamfer ? 0 : 3, btnRadius: chamfer ? 7 : 2,
+      shadowSm: '0 1px 2px rgba(0,0,0,.4)', shadowMd: '0 10px 32px rgba(0,0,0,.55)',
+    };
+  }
+  STATE_META(T) { return {
+    pending: { label: 'PENDING', code: 'STDBY', color: T.ink2 },
+    running: { label: 'RUNNING', code: 'PROC', color: T.accent2, spin: true },
+    awaiting_input: { label: 'NEEDS INPUT', code: 'WAIT', color: T.a },
+    fit_done: { label: 'ASSESSED', code: 'CHK', color: T.accent2 },
+    unfit: { label: 'NEEDS REVIEW', code: 'FLAG', color: T.a },
+    cv_done: { label: 'CV DONE', code: 'CV_OK', color: T.accent2 },
+    cl_done: { label: 'CL DONE', code: 'CL_OK', color: T.accent2 },
+    review: { label: 'REVIEW', code: 'RVW', color: T.violet },
+    approved: { label: 'APPROVED', code: 'DONE', color: T.green },
+    failed: { label: 'FAILED', code: 'ERR', color: T.danger },
+    dismissed: { label: 'DISMISSED', code: 'OFF', color: T.ink3 },
+  }; }
+
+  job(id) { return this.state.jobs.find(j => j.id === id); }
+  patchJob(id, patch) { this.setState(s => ({ jobs: s.jobs.map(j => j.id === id ? { ...j, ...patch } : j) })); }
+  selectJob(id) { this.setState({ selectedId: id, jdOpen: false, reviewTab: 'cv', chatDraft: '', nuclearConfirmId: null, downloadMenuOpen: false }); }
+
+  activeStepIndex(job) {
+    const st = job.state, cs = job.current_stage;
+    const adj = (cs === 'cv_adjust' || cs === 'revising_cv') ? 1 : (cs === 'cover_letter' || cs === 'revising_cl') ? 3 : 0;
+    switch (st) {
+      case 'pending': return 0; case 'fit_done': return 0; case 'unfit': return 0;
+      case 'running': return adj || 1; case 'awaiting_input': return adj || 1;
+      case 'cv_done': return 2; case 'cl_done': return 4;
+      case 'review': return 5; case 'approved': return 6;
+      case 'failed': return adj; case 'dismissed': return 0;
+      default: return 0;
+    }
+  }
+
+  // ---- mock actions ----
+  doDismiss(job) { this.patchJob(job.id, { state: 'dismissed' }); }
+  doRequeue(job) { this.patchJob(job.id, { state: 'pending', error: null, current_stage: null }); }
+  doRetry(job) {
+    if (job.retry_count > 0) { this.setState({ nuclearConfirmId: job.id }); return; }
+    this.patchJob(job.id, { state: 'pending', error: null, retry_count: job.retry_count + 1 });
+  }
+  doNuclearConfirm(job) { this.patchJob(job.id, { state: 'pending', error: null, retry_count: job.retry_count + 1 }); this.setState({ nuclearConfirmId: null }); }
+  doDelete(job) {
+    this.setState(s => ({ jobs: s.jobs.filter(j => j.id !== job.id), selectedId: s.selectedId === job.id ? null : s.selectedId }));
+  }
+  doIgnoreFit(job) { this.patchJob(job.id, { state: 'fit_done' }); }
+  doApprove(job) { this.patchJob(job.id, { state: 'approved' }); }
+  doSubmitAnswer(job) {
+    const text = this.state.chatDraft.trim(); if (!text) return;
+    this.patchJob(job.id, { state: 'running', followUp: null });
+    this.setState({ chatDraft: '' });
+  }
+  doSubmitRevision(job) {
+    const text = this.state.chatDraft.trim(); if (!text) return;
+    const key = this.state.reviewTab === 'cv' ? 'cvVersion' : 'clVersion';
+    this.patchJob(job.id, { [key]: (job[key] || 1) + 1 });
+    this.setState({ chatDraft: '' });
+  }
+
+  // ======================================================= ICONS
+  icon(name, sz, color) {
+    const h = React.createElement, P = (d, extra) => h('path', { d, ...extra });
+    const map = {
+      x: [P('M4 4l8 8M12 4l-8 8')], plus: [P('M8 3.2v9.6M3.2 8h9.6')], check: [P('M3 8.4l3.3 3.4L13 4.6')],
+      trash: [P('M3 4.5h10M6.4 4.5V3.2h3.2v1.3M4.6 4.5l.6 8.3h5.6l.6-8.3')],
+      refresh: [P('M3 7.6a5 5 0 0 1 8.8-3.2M13 3v3.4h-3.4'), P('M13 8.4a5 5 0 0 1-8.8 3.2M3 13V9.6h3.4')],
+      send: [P('M2.5 8L13 3l-3.6 10.5-2-4.7-4.9-1.8z')],
+      download: [P('M8 2.5v7.2M5 7l3 2.7L11 7'), P('M3 12.5h10')],
+      chevron: [P('M5 5.5L8 9l3-3.5')],
+      alert: [P('M8 2.5l6.2 11H1.8z'), h('line', { x1: 8, y1: 6.4, x2: 8, y2: 9.4 }), h('circle', { cx: 8, cy: 11.4, r: .35, fill: 'currentColor', stroke: 'none' })],
+      mail: [h('rect', { x: 2, y: 3.5, width: 12, height: 9, rx: 1.2 }), P('M2.5 4.5l5.5 4.5 5.5-4.5')],
+      phone: [P('M4 2.5h2l1 3-1.4 1.2a8 8 0 0 0 3.7 3.7l1.2-1.4 3 1V13a1 1 0 0 1-1 1C7.8 14 2 8.2 2 3.5a1 1 0 0 1 1-1z')],
+      pin: [P('M8 14s4.5-4.4 4.5-7.8a4.5 4.5 0 1 0-9 0C3.5 9.6 8 14 8 14z'), h('circle', { cx: 8, cy: 6.2, r: 1.5 })],
+      bolt: [P('M8.6 1.8L3 9h3.4l-1 5.2L13 7H9.4z')],
+      server: [h('rect', { x: 2.5, y: 2.5, width: 11, height: 4.2, rx: 1 }), h('rect', { x: 2.5, y: 9.3, width: 11, height: 4.2, rx: 1 }), h('circle', { cx: 11, cy: 4.6, r: .55, fill: 'currentColor', stroke: 'none' }), h('circle', { cx: 11, cy: 11.4, r: .55, fill: 'currentColor', stroke: 'none' })],
+      inbox: [P('M2 3.2h12v9.6H2z'), P('M2 8h3.4l1 2h3.2l1-2H14')],
+      doc: [h('rect', { x: 3.5, y: 2.2, width: 9, height: 11.6, rx: 1.2 }), P('M5.8 5.4h4.4M5.8 8h4.4M5.8 10.6h2.6')],
+      work: [h('rect', { x: 2.5, y: 5, width: 11, height: 7.5, rx: 1.2 }), P('M6 5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1')],
+      link: [P('M6.5 9.5l3-3M7 5.2l.8-.8a2.4 2.4 0 0 1 3.4 3.4l-.9.9M9 10.8l-.8.8a2.4 2.4 0 0 1-3.4-3.4l.9-.9')],
+      back: [P('M10.5 3.5L5 8l5.5 4.5')],
+    };
+    return h('svg', { width: sz, height: sz, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.55, strokeLinecap: 'round', strokeLinejoin: 'round', style: { display: 'block', color: color || 'currentColor', flex: 'none' } }, map[name] || []);
+  }
+
+  chamferPath(c) { return `polygon(0 0, calc(100% - ${c}px) 0, 100% ${c}px, 100% 100%, ${c}px 100%, 0 calc(100% - ${c}px))`; }
+  panelBase(T, o = {}) {
+    const st = { background: o.bg || T.surface, border: `1px solid ${o.border || T.bd}` };
+    if (T.chamfer) { st.clipPath = this.chamferPath(o.chamfer || 12); st.borderRadius = 0; } else st.borderRadius = o.radius != null ? o.radius : T.radius;
+    return st;
+  }
+  cornerMarks(T, color, sz, thick) {
+    const h = React.createElement; if (T.chamfer) return [];
+    sz = sz || 9; thick = thick || 2;
+    const base = { position: 'absolute', width: sz, height: sz, pointerEvents: 'none' };
+    return [
+      h('span', { key: 'a', style: { ...base, top: -1, left: -1, borderTop: `${thick}px solid ${color}`, borderLeft: `${thick}px solid ${color}` } }),
+      h('span', { key: 'b', style: { ...base, top: -1, right: -1, borderTop: `${thick}px solid ${color}`, borderRight: `${thick}px solid ${color}` } }),
+      h('span', { key: 'c', style: { ...base, bottom: -1, left: -1, borderBottom: `${thick}px solid ${color}`, borderLeft: `${thick}px solid ${color}` } }),
+      h('span', { key: 'd', style: { ...base, bottom: -1, right: -1, borderBottom: `${thick}px solid ${color}`, borderRight: `${thick}px solid ${color}` } }),
+    ];
+  }
+
+  badge(state) {
+    const h = React.createElement, T = this.T, m = this.STATE_META(T)[state];
+    return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: T.btnRadius, font: `500 10px ${T.mono}`, letterSpacing: '.06em', color: m.color, background: `color-mix(in srgb, ${m.color} 12%, ${T.sunk})`, border: `1px solid color-mix(in srgb, ${m.color} 40%, ${T.bd})`, flex: 'none' } },
+      m.spin ? h('span', { style: { width: 6, height: 6, borderRadius: 6, border: `1.5px solid ${m.color}`, borderTopColor: 'transparent', animation: 'jsspin .7s linear infinite' } }) : h('span', { style: { width: 5, height: 5, borderRadius: 5, background: m.color, boxShadow: `0 0 5px ${m.color}` } }),
+      m.label);
+  }
+
+  // ======================================================= AMBIENT / THEME
+  renderThemeStyle() { const h = React.createElement, T = this.T; return h('style', null, `:root{--a:${T.a}}`); }
+  renderAmbient() {
+    const h = React.createElement, T = this.T;
+    if (this.props.telemetry === false) return null;
+    const grid = h('div', { key: 'g', style: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0,
+      backgroundImage: 'linear-gradient(rgba(51,230,230,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(51,230,230,.05) 1px,transparent 1px)',
+      backgroundSize: '40px 40px', WebkitMaskImage: 'radial-gradient(ellipse at 50% 0%, black 0%, transparent 70%)', maskImage: 'radial-gradient(ellipse at 50% 0%, black 0%, transparent 70%)' } });
+    const scan = h('div', { key: 's', style: { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0, overflow: 'hidden',
+      backgroundImage: 'linear-gradient(180deg, transparent 0%, transparent 38%, rgba(51,230,230,.045) 50%, transparent 62%, transparent 100%)',
+      backgroundSize: '100% 160vh', backgroundRepeat: 'repeat-y', animation: 'jsscan 16s linear infinite' } });
+    const corner = h('div', { key: 'c', style: { position: 'absolute', right: 14, bottom: 10, pointerEvents: 'none', zIndex: 0, font: `400 10px ${T.mono}`, color: 'rgba(139,151,166,.32)', letterSpacing: '.06em' } },
+      `JSA_DAEMON // SESSION 0x${this._session || '000000'} // SYNC ${8 + ((this.state.clockTick || 0) % 7)}ms`);
+    return h('div', { style: { position: 'absolute', inset: 0, zIndex: 0 } }, grid, scan, corner);
+  }
+
+  // ======================================================= BACKEND QUEUE
+  renderBackendCluster() {
+    const h = React.createElement, T = this.T, queue = this.state.backendQueue;
+    const active = queue.find(b => b.status === 'active') || queue[0];
+    const standbyCount = queue.filter(b => b.status === 'standby').length;
+    const menu = this.state.backendMenuOpen ? h('div', { style: { position: 'absolute', top: '100%', left: 0, marginTop: 6, width: 240, zIndex: 30, ...this.panelBase(T, { chamfer: 10 }), boxShadow: T.shadowMd, padding: 5 } },
+      ...this.cornerMarks(T, T.bd2, 8),
+      h('div', { style: { font: `600 9.5px ${T.mono}`, letterSpacing: '.12em', color: T.ink3, textTransform: 'uppercase', padding: '5px 9px 7px' } }, 'BACKEND FAILOVER QUEUE'),
+      ...queue.map((b, i) => {
+        const isActive = b.status === 'active';
+        const color = isActive ? T.accent2 : T.ink3;
+        return h('div', { key: b.id, style: { display: 'flex', alignItems: 'center', gap: 9, padding: '7px 9px', borderRadius: T.btnRadius, background: isActive ? T.aSoft : 'transparent' } },
+          h('span', { style: { font: `600 10px ${T.mono}`, color: T.ink3, width: 14, flex: 'none' } }, i + 1),
+          isActive ? h('span', { style: { width: 6, height: 6, borderRadius: 6, background: color, boxShadow: `0 0 6px ${color}`, animation: 'jsblink 2s ease-in-out infinite', flex: 'none' } }) : h('span', { style: { width: 6, height: 6, borderRadius: 6, border: `1.5px solid ${color}`, flex: 'none' } }),
+          h('span', { style: { font: `500 12px ${T.ui}`, color: isActive ? T.ink : T.ink2, flex: 1 } }, b.label),
+          h('span', { style: { font: `500 9px ${T.mono}`, color, letterSpacing: '.05em' } }, isActive ? 'ACTIVE' : 'STANDBY'));
+      }),
+      h('div', { style: { font: `400 10.5px/1.5 ${T.ui}`, color: T.ink3, padding: '8px 9px 4px', borderTop: `1px solid ${T.bd}`, marginTop: 3 } }, 'On repeated failure, the daemon fails over to the next backend in this order.')) : null;
+
+    return h('div', { style: { position: 'relative' } },
+      h('button', { className: 'jghost', onClick: () => this.setState(s => ({ backendMenuOpen: !s.backendMenuOpen })), title: 'Active backend / failover queue', style: { display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 10px', border: `1px solid ${T.bd}`, borderRadius: T.btnRadius, background: T.sunk, color: T.ink2, cursor: 'pointer' } },
+        h('span', { style: { color: T.accent2, display: 'flex' } }, this.icon('server', 13)),
+        h('span', { style: { font: `500 10.5px ${T.mono}`, color: T.ink3, letterSpacing: '.06em' } }, 'BACKEND'),
+        h('span', { style: { font: `600 11px ${T.mono}`, color: T.ink } }, active.label),
+        standbyCount > 0 && h('span', { style: { font: `500 9.5px ${T.mono}`, color: T.ink3, background: T.surface, border: `1px solid ${T.bd}`, borderRadius: T.btnRadius, padding: '1px 5px' } }, '+' + standbyCount),
+        h('span', { style: { color: T.ink3, transform: this.state.backendMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform .12s', display: 'flex' } }, this.icon('chevron', 9))),
+      menu);
+  }
+
+  // ======================================================= HEADER
+  renderHeader() {
+    const h = React.createElement, T = this.T, jobs = this.state.jobs;
+    const count = states => jobs.filter(j => states.includes(j.state)).length;
+    const running = count(['running', 'pending', 'cv_done', 'cl_done']), inbox = count(['awaiting_input']), review = count(['review']), done = count(['approved']), failed = count(['failed']);
+    const chip = (label, n, color) => n === 0 ? null : h('span', { key: label, style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: T.btnRadius, background: T.sunk, border: `1px solid color-mix(in srgb, ${color} 40%, ${T.bd})`, font: `500 11px ${T.mono}`, color, letterSpacing: '.04em' } }, label, h('span', { style: { color: T.ink, fontWeight: 700 } }, n));
+
+    const workers = Math.min(running, 5);
+    const workerBar = h('div', { style: { display: 'flex', alignItems: 'center', gap: 7, padding: '4px 10px', background: T.sunk, border: `1px solid ${T.bd}`, borderRadius: T.btnRadius } },
+      this.icon('bolt', 12, T.a),
+      h('span', { style: { font: `500 10px ${T.mono}`, color: T.ink3, letterSpacing: '.06em' } }, 'WORKERS'),
+      h('div', { style: { display: 'flex', gap: 2 } }, ...Array.from({ length: 5 }, (_, i) => h('span', { key: i, style: { width: 5, height: 11, borderRadius: 1, background: i < workers ? T.a : T.bd, boxShadow: i < workers ? `0 0 5px ${T.a}` : 'none' } }))),
+      h('span', { style: { font: `500 10px ${T.mono}`, color: T.ink2 } }, workers + '/5'));
+
+    const left = h('div', { style: { display: 'flex', alignItems: 'center', gap: 14 } },
+      h('button', { className: 'jghost', onClick: () => this.setState({ editorOpen: true }), title: 'Switch to Structure Editor', style: { display: 'flex', alignItems: 'center', gap: 10, border: 'none', background: 'transparent', padding: '4px 8px 4px 4px', margin: 0, borderRadius: T.btnRadius, cursor: 'pointer', textAlign: 'left' } },
+        h('div', { style: { width: 32, height: 32, ...this.panelBase(T, { bg: T.a, chamfer: 8 }), display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#06080B', boxShadow: `0 0 16px ${T.a}66`, flex: 'none' } }, this.icon('bolt', 16)),
+        h('div', { style: { lineHeight: 1.2 } },
+          h('div', { style: { font: `700 14.5px ${T.disp}`, color: T.ink, letterSpacing: '.02em' } }, 'JSA', h('span', { style: { color: T.a } }, ' // '), 'DAEMON'),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 5, font: `500 10px ${T.mono}`, color: T.ink3, letterSpacing: '.08em' } }, 'JOB_SEARCH_AUTOMATION · LOCAL', h('span', { style: { color: T.a } }, '⇄ EDITOR')))));
+
+    const center = h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+      this.renderBackendCluster(), workerBar, chip('INBOX', inbox, T.a), chip('REVIEW', review, T.violet), chip('DONE', done, T.green), chip('FAILED', failed, T.danger));
+
+    const right = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flex: 'none' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', background: T.sunk, border: `1px solid ${T.bd}`, borderRadius: T.btnRadius } },
+        h('span', { style: { width: 7, height: 7, borderRadius: 7, background: T.accent2, boxShadow: `0 0 6px ${T.accent2}`, animation: 'jsblink 2.4s ease-in-out infinite', flex: 'none' } }),
+        h('span', { style: { font: `500 10.5px ${T.mono}`, color: T.ink2, letterSpacing: '.06em' } }, 'UPLINK: SYNCED')),
+      h('button', { className: 'jbtn', title: 'Hard reload', style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, border: `1px solid ${T.bd}`, borderRadius: T.btnRadius, background: 'transparent', color: T.ink2, cursor: 'pointer' } }, this.icon('refresh', 13)));
+
+    return h('header', { style: { position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, padding: '10px 18px', background: 'rgba(10,14,19,.85)', backdropFilter: 'blur(10px)', borderBottom: `1px solid ${T.bd}`, boxShadow: '0 1px 14px rgba(0,0,0,.4)', flex: 'none', zIndex: 20, flexWrap: 'wrap' } }, left, center, right);
+  }
+
+  // ======================================================= JOB LIST
+  jobRow(job) {
+    const h = React.createElement, T = this.T;
+    const on = this.state.selectedId === job.id;
+    const TIER = { A: T.green, B: T.accent2, C: T.ink3 };
+    return h('button', { key: job.id, className: 'jrow', onClick: () => this.selectJob(job.id), style: { position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, width: '100%', textAlign: 'left', padding: '9px 11px', border: `1px solid ${on ? T.aBorder : 'transparent'}`, borderRadius: T.btnRadius, background: on ? T.surface : 'transparent', cursor: 'pointer' } },
+      on && h('span', { style: { position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, background: T.a, boxShadow: `0 0 8px ${T.a}` } }),
+      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
+        h('span', { style: { font: `600 12.5px ${T.ui}`, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, job.company),
+        h('span', { style: { font: `600 9.5px ${T.mono}`, color: TIER[job.tier], flex: 'none' } }, 'T' + job.tier)),
+      h('div', { style: { font: `400 11.5px ${T.ui}`, color: T.ink2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, job.role),
+      this.badge(job.state));
+  }
+
+  renderJobList() {
+    const h = React.createElement, T = this.T, jobs = this.state.jobs;
+    const groups = this.GROUPS.map(g => {
+      const items = jobs.filter(j => g.states.includes(j.state));
+      if (!items.length) return null;
+      return h('section', { key: g.label, style: { marginBottom: 16 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 7, padding: '0 4px 7px' } },
+          h('span', { style: { font: `600 10px ${T.mono}`, letterSpacing: '.14em', color: T.ink3, textTransform: 'uppercase' } }, g.label),
+          h('span', { style: { flex: 1, height: 1, background: T.bd } }),
+          h('span', { style: { font: `400 9.5px ${T.mono}`, color: T.ink3 } }, items.length)),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } }, ...items.map(j => this.jobRow(j))));
+    });
+    return h('aside', { style: { width: 290, flex: 'none', borderRight: `1px solid ${T.bd}`, background: T.subtle, overflow: 'auto', padding: '16px 12px', position: 'relative', zIndex: 1 } },
+      h('div', { style: { font: `600 10px ${T.mono}`, letterSpacing: '.16em', color: T.ink3, textTransform: 'uppercase', padding: '0 4px 12px' } }, 'PROCESS_QUEUE'),
+      ...groups,
+      jobs.length === 0 && h('p', { style: { font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: 'italic', padding: '0 4px' } }, 'No jobs loaded.'));
+  }
+
+  // ======================================================= STAGE TIMELINE
+  stageTimeline(job) {
+    const h = React.createElement, T = this.T, activeIdx = this.activeStepIndex(job);
+    return h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 0, overflowX: 'auto', padding: '6px 2px 2px' } },
+      ...this.STEPS.map((step, idx) => {
+        const done = idx < activeIdx, active = idx === activeIdx, color = done ? T.accent2 : active ? T.a : T.ink3;
+        return h('div', { key: step.key, style: { display: 'flex', alignItems: 'flex-start', flex: 'none' } },
+          idx > 0 && h('div', { style: { height: 2, width: 28, marginTop: 7, flex: 'none', background: idx <= activeIdx ? T.accent2 : T.bd, boxShadow: idx <= activeIdx ? `0 0 4px ${T.accent2}` : 'none' } }),
+          h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 'none', width: 86 } },
+            h('div', { style: { width: 16, height: 16, borderRadius: T.chamfer ? 3 : 16, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', background: done ? T.accent2 : 'transparent', border: `2px solid ${color}`, boxShadow: active ? `0 0 8px ${T.a}` : 'none' } },
+              done ? this.icon('check', 9, '#06080B') : active ? h('span', { style: { width: 5, height: 5, borderRadius: 5, background: T.a, animation: 'jsblink 1s ease-in-out infinite' } }) : null),
+            h('span', { style: { marginTop: 6, font: `500 9.5px ${T.mono}`, letterSpacing: '.04em', color, textAlign: 'center', whiteSpace: 'nowrap' } }, step.label)));
+      }));
+  }
+
+  // ======================================================= ACTIONS ROW
+  actionBtn(label, onClick, o = {}) {
+    const h = React.createElement, T = this.T, danger = o.danger;
+    return h('button', { key: label, className: danger ? 'jdanger jbtn' : 'jghost', disabled: o.disabled, onClick, style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', border: `1px solid ${danger ? 'rgba(255,70,85,.4)' : T.bd2}`, borderRadius: T.btnRadius, background: 'transparent', color: danger ? T.danger : T.ink, font: `600 11.5px ${T.disp}`, letterSpacing: '.03em', cursor: o.disabled ? 'default' : 'pointer', opacity: o.disabled ? .5 : 1 } }, o.icon && this.icon(o.icon, 12), label);
+  }
+
+  // ======================================================= JOB DETAIL
+  renderJobDetail() {
+    const h = React.createElement, T = this.T, job = this.job(this.state.selectedId);
+    if (!job) {
+      return h('div', { style: { height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 1 } },
+        h('div', { style: { textAlign: 'center', color: T.ink3 } },
+          h('div', { style: { width: 50, height: 50, ...this.panelBase(T, { chamfer: 12 }), display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', color: T.ink3 } }, this.icon('work', 22)),
+          h('div', { style: { font: `600 14px ${T.disp}`, letterSpacing: '.04em', color: T.ink2 } }, 'NO PROCESS SELECTED'),
+          h('div', { style: { font: `400 11.5px ${T.mono}`, marginTop: 6 } }, '← choose a job from the queue')));
+    }
+    const m = this.STATE_META(T)[job.state];
+    const showCancel = job.state !== 'approved';
+    const showDismiss = job.state !== 'approved' && job.state !== 'dismissed';
+    const showRequeue = job.state === 'dismissed';
+    const showRetry = job.state === 'failed';
+
+    const header = h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+      h('h2', { style: { font: `600 19px ${T.disp}`, color: T.ink, margin: 0, letterSpacing: '.01em' } }, job.company, h('span', { style: { color: T.ink3, fontWeight: 400 } }, ' — '), job.role),
+      h('span', { style: { font: `600 10px ${T.mono}`, color: { A: T.green, B: T.accent2, C: T.ink3 }[job.tier], border: `1px solid ${T.bd2}`, borderRadius: T.btnRadius, padding: '3px 7px' } }, 'TIER ' + job.tier),
+      this.badge(job.state),
+      h('div', { style: { display: 'flex', gap: 7, marginLeft: 'auto', flexWrap: 'wrap' } },
+        showRetry && this.actionBtn('Retry', () => this.doRetry(job), { icon: 'refresh' }),
+        showRequeue && this.actionBtn('Re-queue', () => this.doRequeue(job), { icon: 'refresh' }),
+        showDismiss && this.actionBtn('Dismiss', () => this.doDismiss(job), { danger: true, icon: 'x' }),
+        showCancel && this.actionBtn('Delete', () => this.doDelete(job), { danger: true, icon: 'trash' })));
+
+    const nuclear = this.state.nuclearConfirmId === job.id ? h('div', { style: { position: 'relative', padding: '12px 14px', ...this.panelBase(T, { bg: `color-mix(in srgb, ${T.danger} 8%, ${T.surface})`, border: `1px solid ${T.danger}`, chamfer: 10 }) } },
+      h('div', { style: { font: `500 13px ${T.ui}`, color: T.ink } }, 'This will permanently wipe all progress for this job and restart from scratch.'),
+      h('div', { style: { display: 'flex', gap: 8, marginTop: 10 } },
+        this.actionBtn('Yes, restart', () => this.doNuclearConfirm(job), { danger: true }),
+        this.actionBtn('Cancel', () => this.setState({ nuclearConfirmId: null }))) ) : null;
+
+    const pipeline = h('div', null,
+      h('div', { style: { font: `600 10px ${T.mono}`, letterSpacing: '.14em', color: T.ink3, textTransform: 'uppercase', marginBottom: 6 } }, 'PIPELINE_PROGRESS'),
+      h('div', { style: { ...this.panelBase(T, { chamfer: 12 }), padding: '10px 14px', position: 'relative' } }, ...this.cornerMarks(T, T.bd2), this.stageTimeline(job)));
+
+    const jdSection = h('div', null,
+      h('button', { onClick: () => this.setState({ jdOpen: !this.state.jdOpen }), style: { display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent', cursor: 'pointer', font: `600 10px ${T.mono}`, letterSpacing: '.14em', color: T.ink3, textTransform: 'uppercase', padding: 0, marginBottom: 6 } },
+        h('span', { style: { transform: this.state.jdOpen ? 'rotate(90deg)' : 'none', transition: 'transform .12s', display: 'flex' } }, this.icon('chevron', 11)), 'JOB_DESCRIPTION.TXT'),
+      this.state.jdOpen && h('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', font: `400 12px/1.6 ${T.mono}`, color: T.ink2, background: T.sunk, border: `1px solid ${T.bd}`, borderRadius: T.btnRadius, padding: '12px 14px', maxHeight: 220, overflow: 'auto' } }, job.jd));
+
+    const errorBox = (job.error || job.state === 'failed') ? h('div', { style: { position: 'relative', display: 'flex', gap: 10, ...this.panelBase(T, { bg: `color-mix(in srgb, ${T.danger} 8%, ${T.surface})`, border: `1px solid color-mix(in srgb, ${T.danger} 45%, ${T.bd})`, chamfer: 10 }), padding: '11px 14px' } },
+      h('span', { style: { color: T.danger, flex: 'none', marginTop: 1 } }, this.icon('alert', 16)),
+      h('div', null,
+        h('div', { style: { font: `600 11px ${T.mono}`, color: T.danger, letterSpacing: '.06em', marginBottom: 3 } }, 'EXCEPTION'),
+        h('div', { style: { font: `400 13px/1.5 ${T.ui}`, color: T.ink } }, job.error || 'An unknown error occurred.'))) : null;
+
+    let stateSurface = null;
+    if (job.state === 'awaiting_input') stateSurface = this.renderFollowUp(job);
+    else if (job.state === 'review' || job.state === 'approved') stateSurface = this.renderReview(job);
+
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, padding: '20px 26px 80px', position: 'relative', zIndex: 1 } },
+      header, nuclear, pipeline, jdSection, errorBox, stateSurface);
+  }
+
+  // ---- follow-up / inbox ----
+  renderFollowUp(job) {
+    const h = React.createElement, T = this.T;
+    if (!job.followUp) return h('div', { style: { font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: 'italic' } }, 'Waiting for follow-up data…');
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+      h('div', { style: { font: `600 10px ${T.mono}`, letterSpacing: '.14em', color: T.a, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 } }, this.icon('inbox', 12), 'AGENT_QUERY · BLOCKING'),
+      h('div', { style: { position: 'relative', ...this.panelBase(T, { bg: T.aSoft, border: `1px solid ${T.aBorder}`, chamfer: 10 }), padding: '13px 15px', font: `400 14px/1.6 ${T.ui}`, color: T.ink } }, job.followUp.question),
+      this.chatBox(job, 'answer'));
+  }
+
+  // ---- review ----
+  reviewTabBtn(job, key, label) {
+    const h = React.createElement, T = this.T, on = this.state.reviewTab === key;
+    return h('button', { key, className: 'jtab', onClick: () => this.setState({ reviewTab: key, downloadMenuOpen: false }), style: { padding: '8px 4px', marginRight: 22, border: 'none', borderBottom: `2px solid ${on ? T.a : 'transparent'}`, background: 'transparent', color: on ? T.a : T.ink2, font: `600 12.5px ${T.disp}`, letterSpacing: '.03em', cursor: 'pointer' } }, label);
+  }
+  downloadMenu(job, kind) {
+    const h = React.createElement, T = this.T;
+    if (!this.state.downloadMenuOpen) return null;
+    const docLabel = kind === 'cv' ? 'CV / Resume' : 'Cover Letter';
+    const opt = (fmt) => h('button', { key: fmt, className: 'jbtn', onClick: () => this.setState({ downloadMenuOpen: false }), style: { display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '8px 11px', border: 'none', borderRadius: T.btnRadius, background: 'transparent', color: T.ink, font: `500 12.5px ${T.ui}`, cursor: 'pointer' } },
+      h('span', { style: { font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: 'none' } }, fmt),
+      h('span', null, docLabel + ' · ' + fmt.toLowerCase()));
+    return h('div', { style: { position: 'absolute', top: '100%', left: 0, marginTop: 6, width: 210, zIndex: 30, ...this.panelBase(T, { chamfer: 10 }), boxShadow: T.shadowMd, padding: 5, animation: 'jsfade .12s ease' } },
+      ...this.cornerMarks(T, T.bd2, 8),
+      h('div', { style: { font: `600 9.5px ${T.mono}`, letterSpacing: '.12em', color: T.ink3, textTransform: 'uppercase', padding: '5px 9px 6px' } }, 'CHOOSE FORMAT'),
+      opt('PDF'), opt('DOCX'));
+  }
+  miniPaperPreview(job, kind) {
+    const h = React.createElement, T = this.T;
+    const title = kind === 'cv' ? job.role + ' — ' + job.company : 'Cover Letter — ' + job.company;
+    const lines = kind === 'cv' ? 7 : 5;
+    return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '46vh', background: T.sunk, border: `1px dashed ${T.bd2}`, borderRadius: T.chamfer ? 0 : 10, clipPath: T.chamfer ? this.chamferPath(16) : undefined } },
+      h('div', { style: { width: 320, background: '#FCFBF8', borderRadius: 3, boxShadow: '0 18px 40px rgba(0,0,0,.5)', padding: '26px 26px 30px' } },
+        h('div', { style: { font: `600 13px Georgia, serif`, color: '#211C16', textAlign: 'center', marginBottom: 3 } }, kind === 'cv' ? (job.role) : job.company),
+        h('div', { style: { font: `400 9px ui-monospace, monospace`, color: '#A39B8D', textAlign: 'center', marginBottom: 14 } }, title),
+        ...Array.from({ length: lines }, (_, i) => h('div', { key: i, style: { height: 6, marginBottom: 7, borderRadius: 2, background: '#E3DFD6', width: (i === 0 ? '70%' : i % 3 === 0 ? '55%' : '92%') } }))));
+  }
+  chatBox(job, kind) {
+    const h = React.createElement, T = this.T;
+    const isAnswer = kind === 'answer';
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+      h('textarea', { className: 'jta', value: this.state.chatDraft, onChange: e => this.setState({ chatDraft: e.target.value }), placeholder: isAnswer ? 'Type your answer…' : 'Describe the revision you want…', rows: 4, style: { width: '100%', resize: 'vertical', background: T.sunk, border: `1px solid ${T.bd2}`, borderRadius: T.btnRadius, padding: '10px 12px', font: `400 13.5px/1.5 ${T.ui}`, color: T.ink, outline: 'none' } }),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+        h('button', { className: 'jprimary', disabled: !this.state.chatDraft.trim(), onClick: () => isAnswer ? this.doSubmitAnswer(job) : this.doSubmitRevision(job), style: { display: 'inline-flex', alignItems: 'center', gap: 7, padding: '9px 17px', border: 'none', borderRadius: T.btnRadius, background: T.a, color: '#06080B', font: `600 12.5px ${T.disp}`, letterSpacing: '.04em', cursor: this.state.chatDraft.trim() ? 'pointer' : 'default', opacity: this.state.chatDraft.trim() ? 1 : .5, boxShadow: this.state.chatDraft.trim() ? `0 1px 14px ${T.a}55` : 'none' } }, this.icon('send', 13), isAnswer ? 'SUBMIT_ANSWER' : 'REQUEST_REVISION')));
+  }
+  renderReview(job) {
+    const h = React.createElement, T = this.T;
+    const kind = this.state.reviewTab;
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+      h('div', { style: { display: 'flex', borderBottom: `1px solid ${T.bd}` } }, this.reviewTabBtn(job, 'cv', 'CV / RESUME'), this.reviewTabBtn(job, 'cl', 'COVER_LETTER')),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+        h('span', { style: { font: `400 10.5px ${T.mono}`, color: T.ink3, letterSpacing: '.06em' } }, 'VERSION'),
+        h('span', { style: { font: `600 11px ${T.mono}`, color: T.accent2 } }, 'v' + ((kind === 'cv' ? job.cvVersion : job.clVersion) || 1))),
+      this.miniPaperPreview(job, kind),
+      h('div', { style: { position: 'relative', alignSelf: 'flex-start' } },
+        h('button', { className: 'jghost', onClick: () => this.setState(s => ({ downloadMenuOpen: !s.downloadMenuOpen })), style: { display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', border: `1px solid ${T.bd2}`, borderRadius: T.btnRadius, background: T.surface, color: T.ink, font: `600 11.5px ${T.disp}`, letterSpacing: '.03em', cursor: 'pointer' } }, this.icon('download', 13), 'DOWNLOAD', h('span', { style: { color: T.ink3, transform: this.state.downloadMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform .12s', display: 'flex' } }, this.icon('chevron', 9))),
+        this.downloadMenu(job, kind)),
+      job.state === 'approved' ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, font: `600 12.5px ${T.disp}`, color: T.green, border: `1px solid color-mix(in srgb, ${T.green} 40%, ${T.bd})`, background: `color-mix(in srgb, ${T.green} 10%, ${T.surface})`, borderRadius: T.btnRadius, padding: '10px 14px', width: 'fit-content' } }, this.icon('check', 14), 'APPROVED · PDFS WRITTEN TO OUTPUT/') :
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+          h('button', { className: 'jprimary', onClick: () => this.doApprove(job), style: { alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 20px', border: 'none', borderRadius: T.btnRadius, background: T.green, color: '#06150C', font: `600 13px ${T.disp}`, letterSpacing: '.04em', cursor: 'pointer', boxShadow: `0 1px 14px ${T.green}55` } }, this.icon('check', 15), 'APPROVE & EXPORT'),
+          h('div', null,
+            h('div', { style: { font: `600 10px ${T.mono}`, letterSpacing: '.14em', color: T.ink3, textTransform: 'uppercase', marginBottom: 8 } }, 'REQUEST_REVISION'),
+            this.chatBox(job, 'revise'))));
+  }
+
+  // ======================================================= UNFIT OVERLAY
+  renderUnfit() {
+    const h = React.createElement, T = this.T, job = this.job(this.state.selectedId);
+    if (!job || job.state !== 'unfit') return null;
+    return h('div', { style: { position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(3,5,8,.72)', backdropFilter: 'blur(4px)', padding: 16 } },
+      h('div', { style: { position: 'relative', width: 460, ...this.panelBase(T, { chamfer: 16 }), boxShadow: T.shadowMd, padding: '24px 26px' } },
+        ...this.cornerMarks(T, T.a, 11),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 } },
+          h('span', { style: { color: T.a } }, this.icon('alert', 18)),
+          h('div', { style: { font: `600 16px ${T.disp}`, color: T.ink, letterSpacing: '.02em' } }, 'FIT_ASSESSMENT: MISMATCH')),
+        h('div', { style: { font: `400 11.5px ${T.mono}`, color: T.ink3, marginBottom: 14 } }, job.company + ' — ' + job.role),
+        h('div', { style: { ...this.panelBase(T, { bg: T.aSoft, border: `1px solid ${T.aBorder}`, chamfer: 8 }), padding: '11px 13px', font: `400 13.5px/1.55 ${T.ui}`, color: T.ink, marginBottom: 14 } }, job.fit_reason),
+        h('p', { style: { font: `400 13px/1.5 ${T.ui}`, color: T.ink2, margin: '0 0 18px' } }, 'Dismiss this job, or override the assessment and tailor your application anyway.'),
+        h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
+          this.actionBtn('Ignore & Continue', () => this.doIgnoreFit(job)),
+          this.actionBtn('Dismiss Job', () => this.doDismiss(job), { danger: true }))));
+  }
+
+  renderVals() {
+    return {
+      themeStyle: this.renderThemeStyle(),
+      ambient: this.renderAmbient(),
+      header: this.renderHeader(),
+      jobList: this.renderJobList(),
+      jobDetail: this.renderJobDetail(),
+      unfitOverlay: this.renderUnfit(),
+      editorOpen: this.state.editorOpen,
+      closeEditor: () => this.setState({ editorOpen: false }),
+      editorAccent: this.accent,
+      editorSkin: this.props.skin ?? 'terminal',
+      editorTelemetry: this.props.telemetry ?? true,
+    };
+  }
+}
+
+</script>
+</body>
+</html>
