@@ -54,9 +54,9 @@ class ScriptedClaudeBackend(ClaudeCliBackend):
         self.run_call_count: int = 0
         self.run_call_args: list[list[str]] = []
 
-    # _run must be a regular method (not async) because ClaudeCliBackend calls
-    # it via `await asyncio.to_thread(self._run, cmd)`.
-    def _run(self, cmd: list[str], context: str = "") -> str:
+    # _run must be async: ClaudeCliBackend calls it via `await self._run(cmd)`
+    # (jsa/agents/_subprocess.py's killable async subprocess seam).
+    async def _run(self, cmd: list[str], context: str = "") -> str:
         self.run_call_count += 1
         self.run_call_args.append(cmd)
         if not self._run_responses:
@@ -324,7 +324,7 @@ class FailingClaudeBackend(ClaudeCliBackend):
         self._stdout = stdout
         self._invocation_count: int = 0
 
-    def _run(self, cmd: list[str], context: str = "") -> str:
+    async def _run(self, cmd: list[str], context: str = "") -> str:
         self._invocation_count += 1
         # Replicate the exact condition from production _run:
         if self._returncode != 0 and not self._stdout.strip():

@@ -97,6 +97,12 @@ class AnthropicAPIBackend(AgentBackend):
         The client is created per-call and explicitly closed in a finally block
         so the httpx connection pool is released on both normal exit and
         timeout cancellation.
+
+        Unlike ClaudeCliBackend/GoogleCliBackend (see jsa/agents/_subprocess.py),
+        this backend has no killable-subprocess problem to solve: `await
+        client.messages.create(...)` is a real async operation, so
+        Orchestrator.cancel_task()'s task.cancel() can interrupt it directly at
+        this await point — no process to leak, nothing to kill.
         """
         import anthropic
 
