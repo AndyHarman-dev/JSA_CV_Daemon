@@ -1,5 +1,5 @@
 ---
-status: InProgress
+status: Done
 ---
 
 # Make cancellation actually kill CLI subprocesses (stop the token burn)
