@@ -1,18 +1,21 @@
 """Unit tests for CLI backends: ClaudeCliBackend and GoogleCliBackend.
 
-ClaudeCliBackend: uses subprocess -p mode (no ptyprocess).
-  - subprocess.run is patched at jsa.agents.claude_cli.subprocess.run.
+Both backends spawn their subprocess via the shared `run_killable` seam
+(jsa/agents/_subprocess.py) so the whole process group can be killed on
+cancel/timeout — see jsa/agents/_subprocess.py and test_subprocess_killable.py
+for the killability contract itself. These unit tests patch that seam directly
+(an AsyncMock returning a plain (returncode, stdout_bytes, stderr_bytes)
+tuple) rather than faking a full asyncio subprocess object.
 
-GoogleCliBackend: uses subprocess -p mode, plain-text stdout (no ptyprocess, no -o json).
-  - subprocess.run is patched at jsa.agents.google_cli.subprocess.run.
+ClaudeCliBackend: `run_killable` is patched at jsa.agents.claude_cli.run_killable.
+GoogleCliBackend: `run_killable` is patched at jsa.agents.google_cli.run_killable.
   - Session ID extracted from --log-file; patched via _extract_conversation_id in unit tests.
 """
 
 from __future__ import annotations
 
 import logging
-import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,6 +23,7 @@ from jsa.agents.base import AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
 from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
 from jsa.agents.registry import backend_for
+from tests.backend.fakes.run_killable_result import ok as _run_killable_ok
 
 
 # ---------------------------------------------------------------------------
@@ -31,25 +35,9 @@ _FINAL_BYTES = _FINAL_TEXT.encode()
 _NEED_INPUT_BYTES = b"<<<NEED_INPUT>>>\nWhat is your target role?\n<<<END>>>\n"
 
 
-def _make_mock_subprocess(stdout: bytes = _FINAL_BYTES, returncode: int = 0) -> MagicMock:
-    """Return a MagicMock that looks like subprocess.CompletedProcess."""
-    proc = MagicMock()
-    proc.stdout = stdout
-    proc.stderr = b""
-    proc.returncode = returncode
-    return proc
-
-
-def _make_google_mock_proc(
-    response_text: str = _FINAL_TEXT,
-    returncode: int = 0,
-) -> MagicMock:
-    """Return a mock subprocess.CompletedProcess with plain-text stdout for agy."""
-    proc = MagicMock()
-    proc.stdout = response_text.encode()
-    proc.stderr = b""
-    proc.returncode = returncode
-    return proc
+def _ok(stdout: bytes = _FINAL_BYTES, returncode: int = 0, stderr: bytes = b"") -> tuple[int, bytes, bytes]:
+    """Return a (returncode, stdout, stderr) tuple shaped like run_killable's return value."""
+    return _run_killable_ok(stdout, returncode, stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +90,10 @@ class TestClaudeSessionHandle:
 
 
 class TestClaudeStartSession:
-    """Test 3 — start_session uses subprocess -p mode."""
+    """Test 3 — start_session uses the killable async subprocess seam."""
 
     async def test_returns_tuple_of_handle_and_reply(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock(return_value=_ok())):
             backend = ClaudeCliBackend(timeout=5.0)
             result = await backend.start_session("system prompt", "user message")
 
@@ -114,32 +101,29 @@ class TestClaudeStartSession:
         assert len(result) == 2
 
     async def test_handle_is_claude_session_handle(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock(return_value=_ok())):
             backend = ClaudeCliBackend(timeout=5.0)
             handle, _reply = await backend.start_session("sys", "user")
 
         assert isinstance(handle, ClaudeSessionHandle)
 
     async def test_reply_kind_is_final(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock(return_value=_ok())):
             backend = ClaudeCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
 
         assert reply.kind == "final"
 
     async def test_reply_content_contains_expected_text(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock(return_value=_ok())):
             backend = ClaudeCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
 
         assert "my cv" in reply.content
 
     async def test_subprocess_called_with_p_flag(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.start_session("sys", "user message")
 
@@ -148,8 +132,8 @@ class TestClaudeStartSession:
         assert "user message" in cmd
 
     async def test_subprocess_called_with_session_id_flag(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.start_session("sys", "user message")
 
@@ -157,8 +141,8 @@ class TestClaudeStartSession:
         assert "--session-id" in cmd
 
     async def test_subprocess_called_with_system_prompt_flag(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.start_session("my sys prompt", "user message")
 
@@ -169,8 +153,8 @@ class TestClaudeStartSession:
     async def test_subprocess_called_with_no_tools_flag(self):
         """start_session must disable all tools — these are text-only sentinel turns,
         never a coding/file-writing session (regression guard for stray file writes)."""
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.start_session("sys", "user message")
 
@@ -179,8 +163,7 @@ class TestClaudeStartSession:
         assert cmd[cmd.index("--tools") + 1] == ""
 
     async def test_handle_external_id_is_set_after_start(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock(return_value=_ok())):
             backend = ClaudeCliBackend(timeout=5.0)
             handle, _ = await backend.start_session("sys", "user")
 
@@ -194,7 +177,7 @@ class TestClaudeRestoreSessionWithExternalId:
     """Test 4 — restore_session with external_id: no subprocess call, just returns handle."""
 
     async def test_no_subprocess_called(self):
-        with patch("jsa.agents.claude_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.restore_session("sys", [], "abc123")
 
@@ -222,7 +205,7 @@ class TestClaudeRestoreSessionWithoutExternalId:
             await backend.restore_session("sys", [], None)
 
     async def test_no_subprocess_called_before_raise(self):
-        with patch("jsa.agents.claude_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = ClaudeCliBackend(timeout=5.0)
             with pytest.raises(RuntimeError):
                 await backend.restore_session("sys", [], None)
@@ -234,10 +217,9 @@ class TestClaudeSendMessage:
     """Test 6 — send_message uses --resume mode, returns AgentReply."""
 
     async def test_needs_input_reply_on_need_input_output(self):
-        mock_proc = _make_mock_subprocess(_NEED_INPUT_BYTES)
         handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock(return_value=_ok(_NEED_INPUT_BYTES))):
             backend = ClaudeCliBackend(timeout=5.0)
             reply = await backend.send_message(handle, "my answer")
 
@@ -245,10 +227,10 @@ class TestClaudeSendMessage:
         assert "target role" in reply.question
 
     async def test_subprocess_called_with_resume_flag(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
         handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+        mock_run = AsyncMock(return_value=_ok())
 
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.send_message(handle, "my message")
 
@@ -257,10 +239,10 @@ class TestClaudeSendMessage:
         assert "sess-uuid" in cmd
 
     async def test_subprocess_called_with_p_flag_and_message(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
         handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+        mock_run = AsyncMock(return_value=_ok())
 
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.send_message(handle, "my message")
 
@@ -270,10 +252,10 @@ class TestClaudeSendMessage:
 
     async def test_no_system_prompt_on_resume(self):
         """send_message must NOT pass --system-prompt (Claude CLI preserves it via session)."""
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
         handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+        mock_run = AsyncMock(return_value=_ok())
 
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.send_message(handle, "text")
 
@@ -282,10 +264,10 @@ class TestClaudeSendMessage:
 
     async def test_subprocess_called_with_no_tools_flag(self):
         """send_message must disable all tools — same regression guard as start_session."""
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
         handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+        mock_run = AsyncMock(return_value=_ok())
 
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.send_message(handle, "text")
 
@@ -294,10 +276,9 @@ class TestClaudeSendMessage:
         assert cmd[cmd.index("--tools") + 1] == ""
 
     async def test_final_reply_returned_on_final_output(self):
-        mock_proc = _make_mock_subprocess(_FINAL_BYTES)
         handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.claude_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock(return_value=_ok())):
             backend = ClaudeCliBackend(timeout=5.0)
             reply = await backend.send_message(handle, "text")
 
@@ -323,7 +304,7 @@ class TestClaudeEndSession:
 
     async def test_no_subprocess_called(self):
         handle = ClaudeSessionHandle(id="h1", external_id="uuid")
-        with patch("jsa.agents.claude_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.claude_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = ClaudeCliBackend(timeout=5.0)
             await backend.end_session(handle)
 
@@ -339,7 +320,7 @@ class TestBackendForClaudeCli:
 
 
 # ---------------------------------------------------------------------------
-# GoogleCliBackend (agy subprocess -p mode, plain-text output)
+# GoogleCliBackend (agy subprocess, plain-text output)
 # ---------------------------------------------------------------------------
 
 class TestGoogleCliBackendImport:
@@ -379,8 +360,7 @@ class TestGoogleStartSession:
     """Test 10 — start_session returns (GoogleSessionHandle, AgentReply)."""
 
     async def test_returns_tuple_of_handle_and_reply(self):
-        mock_proc = _make_google_mock_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             result = await backend.start_session("sys", "user")
@@ -389,8 +369,7 @@ class TestGoogleStartSession:
         assert len(result) == 2
 
     async def test_handle_is_google_session_handle(self):
-        mock_proc = _make_google_mock_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             handle, _reply = await backend.start_session("sys", "user")
@@ -398,8 +377,7 @@ class TestGoogleStartSession:
         assert isinstance(handle, GoogleSessionHandle)
 
     async def test_reply_kind_is_final(self):
-        mock_proc = _make_google_mock_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
@@ -407,8 +385,7 @@ class TestGoogleStartSession:
         assert reply.kind == "final"
 
     async def test_reply_content_contains_expected_text(self):
-        mock_proc = _make_google_mock_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             _handle, reply = await backend.start_session("sys", "user")
@@ -416,8 +393,8 @@ class TestGoogleStartSession:
         assert "my cv" in reply.content
 
     async def test_subprocess_called_with_dangerously_skip_permissions_flag(self):
-        mock_proc = _make_google_mock_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("sys", "user message")
@@ -426,8 +403,8 @@ class TestGoogleStartSession:
         assert "--dangerously-skip-permissions" in cmd
 
     async def test_subprocess_called_with_log_file_flag(self):
-        mock_proc = _make_google_mock_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("sys", "user message")
@@ -436,8 +413,7 @@ class TestGoogleStartSession:
         assert "--log-file" in cmd
 
     async def test_handle_external_id_set_from_log_extraction(self):
-        mock_proc = _make_google_mock_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="extracted-conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             handle, _ = await backend.start_session("sys", "user")
@@ -450,7 +426,7 @@ class TestGoogleRestoreSession:
 
     async def test_with_external_id_no_subprocess_called(self):
         """Test 11 — with external_id, no subprocess is spawned."""
-        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = GoogleCliBackend(timeout=5.0)
             await backend.restore_session("sys", [], "xyz")
 
@@ -475,7 +451,7 @@ class TestGoogleRestoreSession:
             await backend.restore_session("sys", [], None)
 
     async def test_without_external_id_no_subprocess_called(self):
-        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(RuntimeError):
                 await backend.restore_session("sys", [], None)
@@ -502,7 +478,7 @@ class TestGoogleEndSession:
 
     async def test_no_subprocess_called(self):
         handle = GoogleSessionHandle(id="h1", external_id="uuid")
-        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = GoogleCliBackend(timeout=5.0)
             await backend.end_session(handle)
 
@@ -513,21 +489,19 @@ class TestGoogleSendMessage:
     """send_message uses --conversation mode, plain-text output, returns AgentReply."""
 
     async def test_final_reply_returned(self):
-        mock_proc = _make_google_mock_proc()
         handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())):
             backend = GoogleCliBackend(timeout=5.0)
             reply = await backend.send_message(handle, "text")
 
         assert reply.kind == "final"
 
     async def test_needs_input_reply_on_need_input_output(self):
-        need_input_text = "<<<NEED_INPUT>>>\nWhat is your target role?\n<<<END>>>\n"
-        mock_proc = _make_google_mock_proc(response_text=need_input_text)
+        need_input_bytes = b"<<<NEED_INPUT>>>\nWhat is your target role?\n<<<END>>>\n"
         handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
 
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok(need_input_bytes))):
             backend = GoogleCliBackend(timeout=5.0)
             reply = await backend.send_message(handle, "my answer")
 
@@ -535,10 +509,10 @@ class TestGoogleSendMessage:
         assert "target role" in reply.question
 
     async def test_subprocess_called_with_conversation_flag(self):
-        mock_proc = _make_google_mock_proc()
         handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
+        mock_run = AsyncMock(return_value=_ok())
 
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.send_message(handle, "my message")
 
@@ -547,10 +521,10 @@ class TestGoogleSendMessage:
         assert "sess-uuid" in cmd
 
     async def test_subprocess_called_with_dangerously_skip_permissions_flag(self):
-        mock_proc = _make_google_mock_proc()
         handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
+        mock_run = AsyncMock(return_value=_ok())
 
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.send_message(handle, "my message")
 
@@ -558,10 +532,10 @@ class TestGoogleSendMessage:
         assert "--dangerously-skip-permissions" in cmd
 
     async def test_subprocess_called_with_p_flag_and_message(self):
-        mock_proc = _make_google_mock_proc()
         handle = GoogleSessionHandle(id="h1", external_id="sess-uuid")
+        mock_run = AsyncMock(return_value=_ok())
 
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.send_message(handle, "hello agy")
 
@@ -578,29 +552,30 @@ class TestGoogleSendMessage:
 
 
 # ---------------------------------------------------------------------------
-# Test 15 — AgentTimeout propagation on subprocess.TimeoutExpired
+# Test 15 — AgentTimeout propagation from run_killable
 # ---------------------------------------------------------------------------
 
 class TestAgentTimeoutPropagation:
-    """Verify that subprocess.TimeoutExpired is caught inside _run and re-raised as AgentTimeout."""
+    """Verify AgentTimeout raised by run_killable (on subprocess timeout) propagates
+    unchanged through _run — not swallowed, not rewrapped as ProtocolError."""
 
     async def test_claude_cli_backend_raises_agent_timeout(self):
-        """ClaudeCliBackend.start_session raises AgentTimeout (not subprocess.TimeoutExpired,
-        not ProtocolError) when the subprocess times out."""
+        """ClaudeCliBackend.start_session raises AgentTimeout (not ProtocolError)
+        when run_killable times out."""
         with patch(
-            "jsa.agents.claude_cli.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["claude"], timeout=0.001),
+            "jsa.agents.claude_cli.run_killable",
+            new=AsyncMock(side_effect=AgentTimeout("claude CLI timed out after 0.001s")),
         ):
             backend = ClaudeCliBackend(timeout=0.001)
             with pytest.raises(AgentTimeout):
                 await backend.start_session("sys", "msg")
 
     async def test_google_cli_backend_raises_agent_timeout(self):
-        """GoogleCliBackend.start_session raises AgentTimeout (not subprocess.TimeoutExpired,
-        not ProtocolError) when the subprocess times out."""
+        """GoogleCliBackend.start_session raises AgentTimeout (not ProtocolError)
+        when run_killable times out."""
         with patch(
-            "jsa.agents.google_cli.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["gemini"], timeout=0.001),
+            "jsa.agents.google_cli.run_killable",
+            new=AsyncMock(side_effect=AgentTimeout("agy CLI timed out after 0.001s")),
         ):
             backend = GoogleCliBackend(timeout=0.001)
             with pytest.raises(AgentTimeout):

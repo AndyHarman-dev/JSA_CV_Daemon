@@ -1,8 +1,9 @@
 """Phase BF-5 additional tests for GoogleCliBackend.
 
-Covers error-handling and edge-case paths in the agy subprocess backend:
+Covers error-handling and edge-case paths in the agy backend, which spawns its
+subprocess via the shared `run_killable` seam (jsa/agents/_subprocess.py):
   - GoogleCliError and GoogleCliSessionExpiredError exception hierarchy
-  - _run: TimeoutExpired → AgentTimeout
+  - _run: AgentTimeout propagated from run_killable
   - _run: nonzero returncode with empty stdout (generic + session-expired)
   - _run: plain-text stdout with returncode 0 → {"response": text}
   - _run: stderr logged at WARNING on nonzero exit, DEBUG on success
@@ -12,15 +13,19 @@ Covers error-handling and edge-case paths in the agy subprocess backend:
   - start_session: system prompt included in -p argument, uses --log-file for ID extraction
   - start_session: external_id set from log; None when extraction fails
   - send_message: uses --conversation flag, TypeError on wrong handle, RuntimeError on None external_id
+
+_run is now async (it awaits run_killable), so tests call it via `await`.
+`run_killable` is patched at jsa.agents.google_cli.run_killable with an
+AsyncMock returning a plain (returncode, stdout_bytes, stderr_bytes) tuple —
+see test_cli_backends.py and test_subprocess_killable.py for the same pattern
+and for the killability contract itself.
 """
 
 from __future__ import annotations
 
 import logging
-import subprocess
-import tempfile
 import uuid as uuid_mod
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -34,6 +39,8 @@ from jsa.agents.google_cli import (
     GoogleSessionHandle,
 )
 from jsa.agents.protocol import ProtocolError
+from tests.backend.fakes.run_killable_result import empty as _run_killable_empty
+from tests.backend.fakes.run_killable_result import ok as _run_killable_ok
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,26 +49,14 @@ from jsa.agents.protocol import ProtocolError
 _FINAL_TEXT = "<<<FINAL>>>\nmy cv\n<<<END>>>\n"
 
 
-def _make_google_proc(
-    response: str = _FINAL_TEXT,
-    returncode: int = 0,
-    stderr: bytes = b"",
-) -> MagicMock:
-    """Return a MagicMock resembling subprocess.CompletedProcess with plain-text stdout."""
-    proc = MagicMock()
-    proc.stdout = response.encode()
-    proc.stderr = stderr
-    proc.returncode = returncode
-    return proc
+def _ok(response: str = _FINAL_TEXT, returncode: int = 0, stderr: bytes = b"") -> tuple[int, bytes, bytes]:
+    """A (returncode, stdout, stderr) tuple shaped like run_killable's return value."""
+    return _run_killable_ok(response, returncode, stderr)
 
 
-def _make_empty_proc(returncode: int = 1, stderr: bytes = b"error") -> MagicMock:
-    """Return a MagicMock with empty stdout and nonzero returncode by default."""
-    proc = MagicMock()
-    proc.stdout = b""
-    proc.stderr = stderr
-    proc.returncode = returncode
-    return proc
+def _empty(returncode: int = 1, stderr: bytes = b"error") -> tuple[int, bytes, bytes]:
+    """Empty-stdout, nonzero-returncode tuple (subprocess failure with no usable output)."""
+    return _run_killable_empty(returncode, stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -104,34 +99,30 @@ class TestExceptionHierarchy:
 class TestRunRaisesOnEmptyStdout:
     """_run raises GoogleCliError when returncode != 0 and stdout is empty."""
 
-    def test_raises_google_cli_error_on_nonzero_returncode_empty_stdout(self):
-        proc = _make_empty_proc(returncode=1, stderr=b"some error")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_raises_google_cli_error_on_nonzero_returncode_empty_stdout(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(1, b"some error"))):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliError):
-                backend._run(["agy", "-p", "hello"], "ctx")
+                await backend._run(["agy", "-p", "hello"], "ctx")
 
-    def test_raises_google_cli_error_not_expired_on_generic_error(self):
-        proc = _make_empty_proc(returncode=1, stderr=b"some generic error")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_raises_google_cli_error_not_expired_on_generic_error(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(1, b"some generic error"))):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliError) as exc_info:
-                backend._run(["agy", "-p", "hello"], "ctx")
+                await backend._run(["agy", "-p", "hello"], "ctx")
         assert type(exc_info.value) is GoogleCliError
 
-    def test_error_message_includes_exit_code(self):
-        proc = _make_empty_proc(returncode=2, stderr=b"bad exit")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_error_message_includes_exit_code(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(2, b"bad exit"))):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliError, match="2"):
-                backend._run(["agy", "-p", "hello"])
+                await backend._run(["agy", "-p", "hello"])
 
-    def test_raises_even_when_no_stderr(self):
-        proc = _make_empty_proc(returncode=1, stderr=b"")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_raises_even_when_no_stderr(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(1, b""))):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliError, match="no stderr"):
-                backend._run(["agy", "-p", "hello"])
+                await backend._run(["agy", "-p", "hello"])
 
 
 # ---------------------------------------------------------------------------
@@ -141,35 +132,37 @@ class TestRunRaisesOnEmptyStdout:
 class TestRunRaisesSessionExpiredError:
     """_run raises GoogleCliSessionExpiredError when stderr contains 'conversation not found'."""
 
-    def test_raises_session_expired_error_on_conversation_not_found(self):
-        proc = _make_empty_proc(returncode=1, stderr=b"conversation not found")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_raises_session_expired_error_on_conversation_not_found(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(1, b"conversation not found"))):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliSessionExpiredError):
-                backend._run(["agy", "--conversation", "old-id", "-p", "hi"], "old-id")
+                await backend._run(["agy", "--conversation", "old-id", "-p", "hi"], "old-id")
 
-    def test_session_expired_error_is_also_google_cli_error(self):
-        proc = _make_empty_proc(returncode=1, stderr=b"conversation not found")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_session_expired_error_is_also_google_cli_error(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(1, b"conversation not found"))):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliError):
-                backend._run(["agy", "--conversation", "old-id", "-p", "hi"])
+                await backend._run(["agy", "--conversation", "old-id", "-p", "hi"])
 
-    def test_check_is_case_insensitive(self):
+    async def test_check_is_case_insensitive(self):
         """The implementation uses .lower() to check for 'conversation' and 'not found'."""
-        proc = _make_empty_proc(returncode=1, stderr=b"Conversation Not Found for given ID")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+        with patch(
+            "jsa.agents.google_cli.run_killable",
+            new=AsyncMock(return_value=_empty(1, b"Conversation Not Found for given ID")),
+        ):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliSessionExpiredError):
-                backend._run(["agy", "--conversation", "x", "-p", "hi"])
+                await backend._run(["agy", "--conversation", "x", "-p", "hi"])
 
-    def test_session_keyword_alone_does_not_trigger_expired(self):
+    async def test_session_keyword_alone_does_not_trigger_expired(self):
         """'session' alone without 'not found' should give GoogleCliError, not SessionExpired."""
-        proc = _make_empty_proc(returncode=1, stderr=b"invalid session configuration")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+        with patch(
+            "jsa.agents.google_cli.run_killable",
+            new=AsyncMock(return_value=_empty(1, b"invalid session configuration")),
+        ):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(GoogleCliError) as exc_info:
-                backend._run(["agy", "-p", "hi"])
+                await backend._run(["agy", "-p", "hi"])
         assert type(exc_info.value) is GoogleCliError
 
 
@@ -180,38 +173,34 @@ class TestRunRaisesSessionExpiredError:
 class TestRunReturnsPlainTextResponse:
     """_run wraps plain-text agy stdout into {"response": text, "session_id": None}."""
 
-    def test_plain_text_stdout_returned_as_response(self):
-        proc = _make_google_proc(response="Hello from agy")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_plain_text_stdout_returned_as_response(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok("Hello from agy"))):
             backend = GoogleCliBackend(timeout=5.0)
-            result = backend._run(["agy", "-p", "hello"])
+            result = await backend._run(["agy", "-p", "hello"])
         assert result["response"] == "Hello from agy"
 
-    def test_session_id_is_none_when_no_log_path(self):
-        proc = _make_google_proc(response=_FINAL_TEXT)
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_session_id_is_none_when_no_log_path(self):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok(_FINAL_TEXT))):
             backend = GoogleCliBackend(timeout=5.0)
-            result = backend._run(["agy", "-p", "hello"])
+            result = await backend._run(["agy", "-p", "hello"])
         assert result["session_id"] is None
 
-    def test_multiline_response_preserved(self):
+    async def test_multiline_response_preserved(self):
         multi = "line one\nline two\nline three"
-        proc = _make_google_proc(response=multi)
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok(multi))):
             backend = GoogleCliBackend(timeout=5.0)
-            result = backend._run(["agy", "-p", "hello"])
+            result = await backend._run(["agy", "-p", "hello"])
         assert "line one" in result["response"]
         assert "line three" in result["response"]
 
-    def test_nonzero_returncode_but_nonempty_stdout_still_returns(self):
+    async def test_nonzero_returncode_but_nonempty_stdout_still_returns(self):
         """If returncode != 0 but stdout has content, _run returns it (not raises)."""
-        proc = MagicMock()
-        proc.stdout = b"partial response"
-        proc.stderr = b"some warning"
-        proc.returncode = 1
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+        with patch(
+            "jsa.agents.google_cli.run_killable",
+            new=AsyncMock(return_value=(1, b"partial response", b"some warning")),
+        ):
             backend = GoogleCliBackend(timeout=5.0)
-            result = backend._run(["agy", "-p", "hello"])
+            result = await backend._run(["agy", "-p", "hello"])
         assert result["response"] == "partial response"
 
 
@@ -279,8 +268,8 @@ class TestParseWithNudgePassThrough:
         assert "name" in reply.question
 
     async def test_no_subprocess_called_when_sentinel_present(self):
-        """No subprocess.run call when the sentinel is already present."""
-        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+        """No run_killable call when the sentinel is already present."""
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = GoogleCliBackend(timeout=5.0)
             await backend._parse_with_nudge("sess-id", "<<<FINAL>>>\nhello\n<<<END>>>")
         mock_run.assert_not_called()
@@ -294,16 +283,15 @@ class TestParseWithNudgeRetry:
     """_parse_with_nudge sends a nudge subprocess call when sentinel is absent."""
 
     async def test_returns_nudge_reply_with_final_kind(self):
-        nudge_proc = _make_google_proc(response="<<<FINAL>>>\nnudged\n<<<END>>>")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok("<<<FINAL>>>\nnudged\n<<<END>>>"))):
             backend = GoogleCliBackend(timeout=5.0)
             reply = await backend._parse_with_nudge("sess-id", "this has no sentinel")
         assert reply.kind == "final"
         assert reply.content == "nudged"
 
     async def test_nudge_cmd_uses_conversation_flag(self):
-        nudge_proc = _make_google_proc(response="<<<FINAL>>>\nnudged\n<<<END>>>")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok("<<<FINAL>>>\nnudged\n<<<END>>>"))
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend._parse_with_nudge("sess-id", "this has no sentinel")
 
@@ -312,8 +300,8 @@ class TestParseWithNudgeRetry:
         assert "sess-id" in cmd
 
     async def test_nudge_cmd_uses_p_flag(self):
-        nudge_proc = _make_google_proc(response="<<<FINAL>>>\nnudged\n<<<END>>>")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok("<<<FINAL>>>\nnudged\n<<<END>>>"))
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend._parse_with_nudge("sess-id", "this has no sentinel")
 
@@ -322,8 +310,8 @@ class TestParseWithNudgeRetry:
 
     async def test_nudge_cmd_p_arg_mentions_missing_sentinel(self):
         """The -p argument for the nudge should mention 'missing' or 'sentinel block'."""
-        nudge_proc = _make_google_proc(response="<<<FINAL>>>\nnudged\n<<<END>>>")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok("<<<FINAL>>>\nnudged\n<<<END>>>"))
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend._parse_with_nudge("sess-id", "this has no sentinel")
 
@@ -333,16 +321,16 @@ class TestParseWithNudgeRetry:
         assert "missing" in nudge_text or "sentinel block" in nudge_text
 
     async def test_nudge_subprocess_called_exactly_once(self):
-        nudge_proc = _make_google_proc(response="<<<FINAL>>>\nnudged\n<<<END>>>")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok("<<<FINAL>>>\nnudged\n<<<END>>>"))
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend._parse_with_nudge("sess-id", "this has no sentinel")
 
         assert mock_run.call_count == 1
 
     async def test_nudge_cmd_uses_dangerously_skip_permissions(self):
-        nudge_proc = _make_google_proc(response="<<<FINAL>>>\nnudged\n<<<END>>>")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok("<<<FINAL>>>\nnudged\n<<<END>>>"))
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend._parse_with_nudge("sess-id", "this has no sentinel")
 
@@ -363,7 +351,7 @@ class TestParseWithNudgeNoRetryOnUnterminatedBlock:
             await backend._parse_with_nudge("sess-id", "<<<FINAL>>>\nno end here")
 
     async def test_subprocess_not_called_on_unterminated_block(self):
-        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(ProtocolError):
                 await backend._parse_with_nudge("sess-id", "<<<FINAL>>>\nno end here")
@@ -378,8 +366,8 @@ class TestStartSessionSystemPromptInP:
     """start_session must include the system prompt in the combined -p argument."""
 
     async def test_system_prompt_included_in_p_argument(self):
-        mock_proc = _make_google_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("MY SYSTEM PROMPT", "user msg")
@@ -390,8 +378,8 @@ class TestStartSessionSystemPromptInP:
         assert "MY SYSTEM PROMPT" in p_value
 
     async def test_user_message_also_included_in_p_argument(self):
-        mock_proc = _make_google_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("sys prompt", "UNIQUE USER MSG")
@@ -403,8 +391,8 @@ class TestStartSessionSystemPromptInP:
 
     async def test_both_system_prompt_and_user_msg_in_single_p_argument(self):
         """Both system prompt and user message go into a single combined -p value."""
-        mock_proc = _make_google_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("SYS", "USR")
@@ -418,8 +406,8 @@ class TestStartSessionSystemPromptInP:
 
     async def test_start_session_uses_log_file_flag(self):
         """start_session passes --log-file so the conversation UUID can be extracted."""
-        mock_proc = _make_google_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("sys", "user")
@@ -428,8 +416,8 @@ class TestStartSessionSystemPromptInP:
         assert "--log-file" in cmd
 
     async def test_start_session_uses_dangerously_skip_permissions(self):
-        mock_proc = _make_google_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run, \
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.start_session("sys", "user")
@@ -446,9 +434,8 @@ class TestStartSessionConversationId:
     """start_session sets external_id from _extract_conversation_id (the agy log)."""
 
     async def test_external_id_set_from_log_extraction(self):
-        mock_proc = _make_google_proc()
         expected_id = "f39d171d-462e-4eec-a4a3-d4aadc81758b"
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value=expected_id):
             backend = GoogleCliBackend(timeout=5.0)
             handle, _ = await backend.start_session("sys", "user")
@@ -457,8 +444,7 @@ class TestStartSessionConversationId:
 
     async def test_external_id_is_none_when_log_extraction_fails(self):
         """When _extract_conversation_id returns None, external_id is None."""
-        mock_proc = _make_google_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value=None):
             backend = GoogleCliBackend(timeout=5.0)
             handle, _ = await backend.start_session("sys", "user")
@@ -466,8 +452,7 @@ class TestStartSessionConversationId:
         assert handle.external_id is None
 
     async def test_handle_id_is_valid_uuid(self):
-        mock_proc = _make_google_proc()
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc), \
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok())), \
              patch.object(GoogleCliBackend, "_extract_conversation_id", return_value="conv-uuid"):
             backend = GoogleCliBackend(timeout=5.0)
             handle, _ = await backend.start_session("sys", "user")
@@ -496,7 +481,7 @@ class TestSendMessageWrongHandleType:
 
     async def test_no_subprocess_called_on_wrong_handle(self):
         handle = ClaudeSessionHandle(id="h1", external_id="some-id")
-        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(TypeError):
                 await backend.send_message(handle, "hello")
@@ -524,7 +509,7 @@ class TestSendMessageExternalIdNone:
 
     async def test_no_subprocess_called_on_none_external_id(self):
         handle = GoogleSessionHandle(id="h1", external_id=None)
-        with patch("jsa.agents.google_cli.subprocess.run") as mock_run:
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock()) as mock_run:
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(RuntimeError):
                 await backend.send_message(handle, "hello")
@@ -539,9 +524,9 @@ class TestSendMessageConversationFlag:
     """send_message must use --conversation <id> for session resumption."""
 
     async def test_send_message_uses_conversation_flag(self):
-        mock_proc = _make_google_proc()
         handle = GoogleSessionHandle(id="h1", external_id="conv-uuid-123")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.send_message(handle, "hello")
 
@@ -550,9 +535,9 @@ class TestSendMessageConversationFlag:
         assert "conv-uuid-123" in cmd
 
     async def test_send_message_uses_dangerously_skip_permissions(self):
-        mock_proc = _make_google_proc()
         handle = GoogleSessionHandle(id="h1", external_id="conv-uuid-123")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=mock_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok())
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             await backend.send_message(handle, "hello")
 
@@ -561,45 +546,35 @@ class TestSendMessageConversationFlag:
 
 
 # ---------------------------------------------------------------------------
-# 14. _run: TimeoutExpired → AgentTimeout (direct test on _run)
+# 14. _run: AgentTimeout from run_killable propagates unchanged
 # ---------------------------------------------------------------------------
 
 class TestRunTimeoutExpired:
-    """_run raises AgentTimeout (not subprocess.TimeoutExpired) on timeout."""
+    """_run propagates AgentTimeout raised by run_killable on subprocess timeout.
 
-    def test_raises_agent_timeout_on_timeout_expired(self):
+    run_killable itself (jsa/agents/_subprocess.py) is responsible for turning
+    a real subprocess timeout into AgentTimeout and killing the process group
+    — see test_subprocess_killable.py for that behavior directly. Here we only
+    verify _run doesn't swallow or rewrap it.
+    """
+
+    async def test_raises_agent_timeout_on_timeout(self):
         with patch(
-            "jsa.agents.google_cli.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["agy"], timeout=5.0),
+            "jsa.agents.google_cli.run_killable",
+            new=AsyncMock(side_effect=AgentTimeout("agy CLI timed out after 5.0s")),
         ):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(AgentTimeout, match="timed out"):
-                backend._run(["agy", "-p", "hello"])
+                await backend._run(["agy", "-p", "hello"])
 
-    def test_timeout_message_mentions_timeout_seconds(self):
+    async def test_timeout_message_mentions_timeout_seconds(self):
         with patch(
-            "jsa.agents.google_cli.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["agy"], timeout=5.0),
+            "jsa.agents.google_cli.run_killable",
+            new=AsyncMock(side_effect=AgentTimeout("agy CLI timed out after 5.0s")),
         ):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(AgentTimeout, match="5.0"):
-                backend._run(["agy", "-p", "hello"])
-
-    def test_agent_timeout_not_timeout_expired_propagated(self):
-        """Ensure subprocess.TimeoutExpired is NOT propagated; only AgentTimeout."""
-        with patch(
-            "jsa.agents.google_cli.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["agy"], timeout=5.0),
-        ):
-            backend = GoogleCliBackend(timeout=5.0)
-            with pytest.raises(AgentTimeout):
-                backend._run(["agy", "-p", "hello"])
-            try:
-                backend._run(["agy", "-p", "hello"])
-            except AgentTimeout:
-                pass
-            except subprocess.TimeoutExpired:
-                pytest.fail("subprocess.TimeoutExpired was not wrapped in AgentTimeout")
+                await backend._run(["agy", "-p", "hello"])
 
 
 # ---------------------------------------------------------------------------
@@ -609,13 +584,12 @@ class TestRunTimeoutExpired:
 class TestRunStderrLogging:
     """_run logs stderr at WARNING on nonzero exit and at DEBUG on success."""
 
-    def test_warning_logged_on_nonzero_exit_with_stderr(self, caplog):
-        proc = _make_empty_proc(returncode=1, stderr=b"something went wrong")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_warning_logged_on_nonzero_exit_with_stderr(self, caplog):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(1, b"something went wrong"))):
             backend = GoogleCliBackend(timeout=5.0)
             with caplog.at_level(logging.WARNING, logger="jsa.agents.google_cli"):
                 with pytest.raises(GoogleCliError):
-                    backend._run(["agy", "-p", "hello"])
+                    await backend._run(["agy", "-p", "hello"])
 
         warning_records = [
             r for r in caplog.records
@@ -623,25 +597,23 @@ class TestRunStderrLogging:
         ]
         assert len(warning_records) >= 1, "Expected at least one WARNING log record"
 
-    def test_warning_message_contains_stderr_content(self, caplog):
-        proc = _make_empty_proc(returncode=1, stderr=b"critical process failure")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_warning_message_contains_stderr_content(self, caplog):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_empty(1, b"critical process failure"))):
             backend = GoogleCliBackend(timeout=5.0)
             with caplog.at_level(logging.WARNING, logger="jsa.agents.google_cli"):
                 with pytest.raises(GoogleCliError):
-                    backend._run(["agy", "-p", "hello"])
+                    await backend._run(["agy", "-p", "hello"])
 
         warning_text = " ".join(
             r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
         )
         assert "critical process failure" in warning_text
 
-    def test_no_warning_logged_on_success(self, caplog):
-        proc = _make_google_proc(response=_FINAL_TEXT)
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+    async def test_no_warning_logged_on_success(self, caplog):
+        with patch("jsa.agents.google_cli.run_killable", new=AsyncMock(return_value=_ok(_FINAL_TEXT))):
             backend = GoogleCliBackend(timeout=5.0)
             with caplog.at_level(logging.WARNING, logger="jsa.agents.google_cli"):
-                backend._run(["agy", "-p", "hello"])
+                await backend._run(["agy", "-p", "hello"])
 
         warning_records = [
             r for r in caplog.records
@@ -649,13 +621,15 @@ class TestRunStderrLogging:
         ]
         assert len(warning_records) == 0, "No WARNING should be logged on successful exit"
 
-    def test_debug_logged_on_success_with_stderr(self, caplog):
+    async def test_debug_logged_on_success_with_stderr(self, caplog):
         """Even on success, stderr is logged at DEBUG level."""
-        proc = _make_google_proc(response=_FINAL_TEXT, stderr=b"debug info from agy")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=proc):
+        with patch(
+            "jsa.agents.google_cli.run_killable",
+            new=AsyncMock(return_value=_ok(_FINAL_TEXT, stderr=b"debug info from agy")),
+        ):
             backend = GoogleCliBackend(timeout=5.0)
             with caplog.at_level(logging.DEBUG, logger="jsa.agents.google_cli"):
-                backend._run(["agy", "-p", "hello"])
+                await backend._run(["agy", "-p", "hello"])
 
         debug_records = [
             r for r in caplog.records
@@ -674,8 +648,8 @@ class TestParseWithNudgeNoInfiniteRetry:
     """When the nudge reply is also sentinel-less, ProtocolError propagates. No infinite retry."""
 
     async def test_protocol_error_raised_when_nudge_reply_also_has_no_sentinel(self):
-        nudge_proc = _make_google_proc(response="still no sentinel here")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc) as mock_run:
+        mock_run = AsyncMock(return_value=_ok("still no sentinel here"))
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(ProtocolError):
                 await backend._parse_with_nudge("sess-id", "no sentinel here")
@@ -683,9 +657,9 @@ class TestParseWithNudgeNoInfiniteRetry:
         assert mock_run.call_count == 1
 
     async def test_exactly_one_subprocess_call_on_double_failure(self):
-        """Guard against infinite retry: subprocess.run is called exactly once (the nudge)."""
-        nudge_proc = _make_google_proc(response="still no sentinel")
-        with patch("jsa.agents.google_cli.subprocess.run", return_value=nudge_proc) as mock_run:
+        """Guard against infinite retry: run_killable is called exactly once (the nudge)."""
+        mock_run = AsyncMock(return_value=_ok("still no sentinel"))
+        with patch("jsa.agents.google_cli.run_killable", new=mock_run):
             backend = GoogleCliBackend(timeout=5.0)
             with pytest.raises(ProtocolError):
                 await backend._parse_with_nudge("s", "original missing sentinel")

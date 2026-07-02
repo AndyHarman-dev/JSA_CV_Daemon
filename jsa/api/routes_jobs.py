@@ -393,13 +393,13 @@ async def ignore_fit(request: Request, job_id: str):
 async def cancel_job(request: Request, job_id: str):
     """Cancel a running job — transitions running → pending and kicks the orchestrator.
 
-    Note: cancel is best-effort for in-flight agent turns. The orchestrator holds
-    an in-memory Job object for the duration of an agent subprocess call; if cancel
-    fires mid-turn, the completing checkpoint will overwrite the pending state.
-    Cancel is reliable when the job is between agent turns (e.g., just picked up or
-    about to checkpoint). For a single-user local tool this is acceptable behaviour.
-    Hard-stopping an in-flight subprocess would require orchestrator-level task
-    cancellation, which is out of scope for this phase.
+    The `pending` state is committed first (DB is authoritative regardless of
+    whether cancellation lands in time); the in-flight agent turn (if any) is
+    then best-effort cancelled via orchestrator.cancel_task(), which now kills
+    the underlying claude/agy subprocess's whole process group (see
+    jsa/agents/_subprocess.py) so it stops consuming API tokens immediately.
+    StaleJobResult (jsa/pipeline/stages.py) is the correctness backstop that
+    discards a stale result even if this cancellation loses the race.
     """
     sf = _session_factory(request)
     async with sf() as session:
@@ -431,6 +431,10 @@ async def cancel_job(request: Request, job_id: str):
             )
         )
     )
+
+    # Best-effort: kill the in-flight agent subprocess (if any) so it stops
+    # consuming API tokens immediately, rather than running to completion.
+    request.app.state.orchestrator.cancel_task(job_id)
 
     request.app.state.orchestrator.kick()
 

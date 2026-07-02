@@ -10,14 +10,13 @@ remember the session UUID (stored in job.session_external_id).
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents._subprocess import run_killable
+from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError, parse_reply
 
 logger = logging.getLogger(__name__)
@@ -56,10 +55,11 @@ class ClaudeCliBackend(AgentBackend):
         self._timeout = timeout
 
     # ------------------------------------------------------------------
-    # Internal subprocess runner (runs in a thread via asyncio.to_thread)
+    # Internal subprocess runner (killable async subprocess — see
+    # jsa/agents/_subprocess.py for why the whole process group is killed)
     # ------------------------------------------------------------------
 
-    def _run(self, cmd: list[str], context: str = "", cwd: Path | None = None, timeout: float | None = None) -> str:
+    async def _run(self, cmd: list[str], context: str = "", cwd: Path | None = None, timeout: float | None = None) -> str:
         """Run a claude CLI command and return its stdout.
 
         Raises AgentTimeout if the process exceeds the effective timeout.
@@ -70,34 +70,27 @@ class ClaudeCliBackend(AgentBackend):
         stderr is logged at WARNING but never mixed into the returned string.
         """
         eff_timeout = timeout if timeout is not None else self._timeout
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=eff_timeout,
-                stdin=subprocess.DEVNULL,
-                cwd=str(cwd) if cwd is not None else None,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise AgentTimeout(
-                f"claude CLI timed out after {eff_timeout}s"
-            ) from exc
+        returncode, stdout_bytes, stderr_bytes = await run_killable(
+            cmd,
+            timeout=eff_timeout,
+            cwd=str(cwd) if cwd is not None else None,
+            label="claude CLI",
+        )
 
-        if result.returncode != 0:
-            stderr = result.stderr.decode("utf-8", errors="replace").strip()
-            if stderr:
-                logger.warning("claude CLI stderr (exit %d): %s", result.returncode, stderr)
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
 
-        stdout = result.stdout.decode("utf-8", errors="replace")
+        if returncode != 0:
+            if stderr_text:
+                logger.warning("claude CLI stderr (exit %d): %s", returncode, stderr_text)
+
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
         # Log stderr at DEBUG even on success (useful for "no stdin" warnings etc.)
-        stderr_out = result.stderr.decode("utf-8", errors="replace").strip()
-        if stderr_out:
-            logger.debug("claude CLI stderr: %s", stderr_out)
+        if stderr_text:
+            logger.debug("claude CLI stderr: %s", stderr_text)
 
-        if result.returncode != 0 and not stdout.strip():
+        if returncode != 0 and not stdout.strip():
             # Subprocess failed and produced no usable output — raise rather than
             # returning an empty string that will cause a misleading ProtocolError.
-            stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
             ctx = f" [{context}]" if context else ""
             if "No conversation found" in stderr_text:
                 raise ClaudeSessionExpiredError(
@@ -105,7 +98,7 @@ class ClaudeCliBackend(AgentBackend):
                     "Reset this job to restart from scratch."
                 )
             raise ClaudeCliError(
-                f"claude CLI failed (exit {result.returncode}){ctx}: {stderr_text or '(no stderr)'}"
+                f"claude CLI failed (exit {returncode}){ctx}: {stderr_text or '(no stderr)'}"
             )
 
         return stdout
@@ -152,7 +145,7 @@ class ClaudeCliBackend(AgentBackend):
                 "--tools", "",
                 "-p", nudge,
             ]
-            raw2 = await asyncio.to_thread(self._run, nudge_cmd, session_id)
+            raw2 = await self._run(nudge_cmd, session_id)
             return parse_reply(raw2)  # Propagate on second failure
 
     # ------------------------------------------------------------------
@@ -179,7 +172,7 @@ class ClaudeCliBackend(AgentBackend):
             "--tools", "",
             "-p", initial_user_msg,
         ]
-        raw = await asyncio.to_thread(self._run, cmd, session_id)
+        raw = await self._run(cmd, session_id)
         handle = ClaudeSessionHandle(id=str(uuid.uuid4()), external_id=session_id)
         reply = await self._parse_with_nudge(session_id, raw)
         return handle, reply
@@ -232,7 +225,7 @@ class ClaudeCliBackend(AgentBackend):
             "--tools", "",
             "-p", text,
         ]
-        raw = await asyncio.to_thread(self._run, cmd, handle.external_id)
+        raw = await self._run(cmd, handle.external_id)
         return await self._parse_with_nudge(handle.external_id, raw)
 
     async def end_session(self, handle: SessionHandle) -> None:
@@ -254,6 +247,6 @@ class ClaudeCliBackend(AgentBackend):
             "--output-format", "text",
             "-p", query,
         ]
-        return await asyncio.to_thread(
-            self._run, cmd, f"research:{agent_name}", _PROJECT_ROOT, self.RESEARCH_TIMEOUT
+        return await self._run(
+            cmd, f"research:{agent_name}", _PROJECT_ROOT, self.RESEARCH_TIMEOUT
         )

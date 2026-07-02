@@ -13,10 +13,8 @@ All tests use asyncio_mode = "auto" (configured in pyproject.toml).
 
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime
-from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -38,6 +36,7 @@ from jsa.pipeline.stages import (
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
 from tests.backend.fakes.finals import cl_final, cv_final
+from tests.backend.fakes.run_killable_result import ok as _run_killable_ok
 
 
 # ---------------------------------------------------------------------------
@@ -448,15 +447,16 @@ class TestRunStageResumeBranchNoFreshBrief:
 
 
 class TestRunResearchCommandConstruction:
-    """run_research builds the correct subprocess call with cwd=_PROJECT_ROOT and RESEARCH_TIMEOUT."""
+    """run_research builds the correct run_killable call with cwd=_PROJECT_ROOT and RESEARCH_TIMEOUT.
 
-    def _make_subprocess_result(self, stdout_text: str) -> SimpleNamespace:
-        """Create a fake subprocess.CompletedProcess-like object."""
-        return SimpleNamespace(
-            returncode=0,
-            stdout=stdout_text.encode("utf-8"),
-            stderr=b"",
-        )
+    run_research -> _run -> run_killable(cmd, timeout=..., cwd=..., label=...); these
+    tests patch jsa.agents.claude_cli.run_killable directly (same seam as
+    test_cli_backends.py) rather than the old subprocess.run.
+    """
+
+    def _ok(self, stdout_text: str) -> tuple[int, bytes, bytes]:
+        """A (returncode, stdout, stderr) tuple shaped like run_killable's return value."""
+        return _run_killable_ok(stdout_text)
 
     async def test_run_research_command_args(self):
         """run_research builds: claude --agent <name> --output-format text -p <query>."""
@@ -464,58 +464,44 @@ class TestRunResearchCommandConstruction:
         agent_name = "cv-research"
         query = "Company: Acme\nRole: Engineer"
         expected_brief = "[INTEL_BRIEF]\nSome research\n[/INTEL_BRIEF]"
-        captured_calls = []
+        mock_run = AsyncMock(return_value=self._ok(expected_brief))
 
-        def fake_subprocess_run(cmd, **kwargs):
-            captured_calls.append({"cmd": cmd, "kwargs": kwargs})
-            return self._make_subprocess_result(expected_brief)
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
+            await backend.run_research(agent_name, query)
 
-        with patch("jsa.agents.claude_cli.subprocess.run", side_effect=fake_subprocess_run):
-            result = await backend.run_research(agent_name, query)
-
-        assert len(captured_calls) == 1
-        call = captured_calls[0]
-        assert call["cmd"] == ["claude", "--agent", agent_name, "--output-format", "text", "-p", query]
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args.args[0]
+        assert cmd == ["claude", "--agent", agent_name, "--output-format", "text", "-p", query]
 
     async def test_run_research_cwd_is_project_root(self):
-        """run_research passes cwd=str(_PROJECT_ROOT) to subprocess.run."""
+        """run_research passes cwd=str(_PROJECT_ROOT) to run_killable."""
         backend = ClaudeCliBackend()
-        captured_calls = []
+        mock_run = AsyncMock(return_value=self._ok("[INTEL_BRIEF]\ntest\n[/INTEL_BRIEF]"))
 
-        def fake_subprocess_run(cmd, **kwargs):
-            captured_calls.append(kwargs)
-            return self._make_subprocess_result("[INTEL_BRIEF]\ntest\n[/INTEL_BRIEF]")
-
-        with patch("jsa.agents.claude_cli.subprocess.run", side_effect=fake_subprocess_run):
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             await backend.run_research("cv-research", "test query")
 
-        assert len(captured_calls) == 1
-        assert captured_calls[0].get("cwd") == str(_PROJECT_ROOT)
+        assert mock_run.call_count == 1
+        assert mock_run.call_args.kwargs.get("cwd") == str(_PROJECT_ROOT)
 
     async def test_run_research_timeout_is_research_timeout(self):
-        """run_research passes timeout=RESEARCH_TIMEOUT (300.0) to subprocess.run."""
+        """run_research passes timeout=RESEARCH_TIMEOUT (300.0) to run_killable."""
         backend = ClaudeCliBackend()
-        captured_calls = []
+        mock_run = AsyncMock(return_value=self._ok("[INTEL_BRIEF]\ntest\n[/INTEL_BRIEF]"))
 
-        def fake_subprocess_run(cmd, **kwargs):
-            captured_calls.append(kwargs)
-            return self._make_subprocess_result("[INTEL_BRIEF]\ntest\n[/INTEL_BRIEF]")
-
-        with patch("jsa.agents.claude_cli.subprocess.run", side_effect=fake_subprocess_run):
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             await backend.run_research("cv-research", "test query")
 
-        assert len(captured_calls) == 1
-        assert captured_calls[0].get("timeout") == ClaudeCliBackend.RESEARCH_TIMEOUT
+        assert mock_run.call_count == 1
+        assert mock_run.call_args.kwargs.get("timeout") == ClaudeCliBackend.RESEARCH_TIMEOUT
 
     async def test_run_research_returns_stdout(self):
         """run_research returns the raw stdout string from the subprocess."""
         backend = ClaudeCliBackend()
         expected_output = "[INTEL_BRIEF]\nCompany: Acme\n[/INTEL_BRIEF]"
+        mock_run = AsyncMock(return_value=self._ok(expected_output))
 
-        def fake_subprocess_run(cmd, **kwargs):
-            return self._make_subprocess_result(expected_output)
-
-        with patch("jsa.agents.claude_cli.subprocess.run", side_effect=fake_subprocess_run):
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             result = await backend.run_research("cv-research", "test query")
 
         assert result == expected_output
@@ -523,42 +509,33 @@ class TestRunResearchCommandConstruction:
     async def test_run_research_cl_research_agent(self):
         """run_research uses 'cl-research' agent name when specified."""
         backend = ClaudeCliBackend()
-        captured_calls = []
         query = "Company: Acme\nRole: Engineer\nJob posting link: https://acme.com/job"
+        mock_run = AsyncMock(return_value=self._ok("[COMPANY_BRIEF]\ntest\n[/COMPANY_BRIEF]"))
 
-        def fake_subprocess_run(cmd, **kwargs):
-            captured_calls.append(cmd)
-            return self._make_subprocess_result("[COMPANY_BRIEF]\ntest\n[/COMPANY_BRIEF]")
-
-        with patch("jsa.agents.claude_cli.subprocess.run", side_effect=fake_subprocess_run):
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             await backend.run_research("cl-research", query)
 
-        assert len(captured_calls) == 1
-        assert "--agent" in captured_calls[0]
-        agent_idx = captured_calls[0].index("--agent")
-        assert captured_calls[0][agent_idx + 1] == "cl-research"
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args.args[0]
+        assert "--agent" in cmd
+        agent_idx = cmd.index("--agent")
+        assert cmd[agent_idx + 1] == "cl-research"
 
     async def test_run_research_existing_calls_unaffected_no_cwd(self):
-        """Existing start_session calls do NOT pass cwd (cwd=None → cwd=None in subprocess)."""
+        """Existing start_session calls do NOT pass cwd (cwd=None → cwd=None in run_killable)."""
         backend = ClaudeCliBackend()
-        captured_calls = []
+        mock_run = AsyncMock(return_value=self._ok("<<<FINAL>>>\n# My CV\n<<<END>>>"))
 
-        def fake_subprocess_run(cmd, **kwargs):
-            captured_calls.append(kwargs)
-            return self._make_subprocess_result(
-                "<<<FINAL>>>\n# My CV\n<<<END>>>"
-            )
-
-        with patch("jsa.agents.claude_cli.subprocess.run", side_effect=fake_subprocess_run):
+        with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             # start_session calls _run without cwd
             try:
                 await backend.start_session("System prompt", "User message")
             except Exception:
                 pass  # parse_reply may not fail, but we only care about cwd
 
-        assert len(captured_calls) >= 1
-        # The first call from start_session must NOT pass a cwd (cwd=None means subprocess omits it)
-        assert captured_calls[0].get("cwd") is None
+        assert mock_run.call_count >= 1
+        # The first call from start_session must NOT pass a cwd
+        assert mock_run.call_args_list[0].kwargs.get("cwd") is None
 
 
 # ---------------------------------------------------------------------------
@@ -693,7 +670,7 @@ class TestGoogleRunResearch:
         backend = GoogleCliBackend()
         captured_cmd = []
 
-        def _fake_run(cmd, context="", timeout=None, log_path=None):
+        async def _fake_run(cmd, context="", timeout=None, log_path=None):
             captured_cmd.extend(cmd)
             return {"response": "[INTEL_BRIEF]\nCompany: Acme\n[/INTEL_BRIEF]"}
 
@@ -710,7 +687,7 @@ class TestGoogleRunResearch:
         from jsa.agents.google_cli import GoogleCliBackend
         backend = GoogleCliBackend()
 
-        def _fake_run(cmd, context="", timeout=None):
+        async def _fake_run(cmd, context="", timeout=None):
             return {"response": "[COMPANY_BRIEF]\nWhat they do: Makes widgets\n[/COMPANY_BRIEF]"}
 
         monkeypatch.setattr(backend, "_run", _fake_run)
@@ -723,7 +700,7 @@ class TestGoogleRunResearch:
         backend = GoogleCliBackend(timeout=10.0)  # short session timeout
         captured_timeout = []
 
-        def _fake_run(cmd, context="", timeout=None):
+        async def _fake_run(cmd, context="", timeout=None):
             captured_timeout.append(timeout)
             return {"response": "[INTEL_BRIEF]\nfoo\n[/INTEL_BRIEF]"}
 

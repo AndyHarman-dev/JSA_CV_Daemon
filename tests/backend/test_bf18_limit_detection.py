@@ -65,7 +65,7 @@ class ScriptedClaudeBackend(ClaudeCliBackend):
         self._run_responses: list[str] = list(run_responses)
         self.run_call_count: int = 0
 
-    def _run(self, cmd: list[str], context: str = "", cwd=None, timeout=None) -> str:
+    async def _run(self, cmd: list[str], context: str = "", cwd=None, timeout=None) -> str:
         self.run_call_count += 1
         if not self._run_responses:
             raise IndexError("ScriptedClaudeBackend: no more scripted _run responses")
@@ -176,7 +176,7 @@ class ScriptedGoogleBackend(GoogleCliBackend):
         self._run_responses: list[dict] = list(run_responses)
         self.run_call_count: int = 0
 
-    def _run(self, cmd: list[str], context: str = "", timeout=None, log_path=None) -> dict:
+    async def _run(self, cmd: list[str], context: str = "", timeout=None, log_path=None) -> dict:
         self.run_call_count += 1
         if not self._run_responses:
             raise IndexError("ScriptedGoogleBackend: no more scripted _run responses")

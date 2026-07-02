@@ -19,12 +19,12 @@ import asyncio
 import logging
 import os
 import re
-import subprocess
 import tempfile
 import uuid
 from dataclasses import dataclass
 
-from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents._subprocess import run_killable
+from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError, parse_reply
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,8 @@ class GoogleCliBackend(AgentBackend):
         self._timeout = timeout
 
     # ------------------------------------------------------------------
-    # Internal subprocess runner (runs in a thread via asyncio.to_thread)
+    # Internal subprocess runner (killable async subprocess — see
+    # jsa/agents/_subprocess.py for why the whole process group is killed)
     # ------------------------------------------------------------------
 
     def _extract_conversation_id(self, log_path: str) -> str | None:
@@ -80,7 +81,7 @@ class GoogleCliBackend(AgentBackend):
             pass
         return None
 
-    def _run(
+    async def _run(
         self,
         cmd: list[str],
         context: str = "",
@@ -101,31 +102,25 @@ class GoogleCliBackend(AgentBackend):
         stderr is logged at WARNING on nonzero exit, at DEBUG otherwise.
         """
         eff_timeout = timeout if timeout is not None else self._timeout
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=eff_timeout,
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise AgentTimeout(
-                f"agy CLI timed out after {eff_timeout}s"
-            ) from exc
+        returncode, stdout_bytes, stderr_bytes = await run_killable(
+            cmd,
+            timeout=eff_timeout,
+            label="agy CLI",
+        )
 
         ctx = f" [{context}]" if context else ""
 
-        stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
-        if result.returncode != 0:
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        if returncode != 0:
             if stderr_text:
-                logger.warning("agy CLI stderr (exit %d): %s", result.returncode, stderr_text)
+                logger.warning("agy CLI stderr (exit %d): %s", returncode, stderr_text)
         else:
             if stderr_text:
                 logger.debug("agy CLI stderr: %s", stderr_text)
 
-        stdout = result.stdout.decode("utf-8", errors="replace").strip()
+        stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
 
-        if result.returncode != 0 and not stdout:
+        if returncode != 0 and not stdout:
             stderr_lower = stderr_text.lower()
             if "conversation" in stderr_lower and "not found" in stderr_lower:
                 raise GoogleCliSessionExpiredError(
@@ -133,10 +128,10 @@ class GoogleCliBackend(AgentBackend):
                     "Reset this job to restart from scratch."
                 )
             raise GoogleCliError(
-                f"agy CLI failed (exit {result.returncode}){ctx}: {stderr_text or '(no stderr)'}"
+                f"agy CLI failed (exit {returncode}){ctx}: {stderr_text or '(no stderr)'}"
             )
 
-        session_id = self._extract_conversation_id(log_path) if log_path else None
+        session_id = await asyncio.to_thread(self._extract_conversation_id, log_path) if log_path else None
         return {"response": stdout, "session_id": session_id}
 
     # ------------------------------------------------------------------
@@ -178,7 +173,7 @@ class GoogleCliBackend(AgentBackend):
                 "--conversation", session_id,
                 "-p", nudge,
             ]
-            nudge_data = await asyncio.to_thread(self._run, nudge_cmd, session_id)
+            nudge_data = await self._run(nudge_cmd, session_id)
             return parse_reply(nudge_data["response"])  # Propagate on second failure
 
     # ------------------------------------------------------------------
@@ -207,7 +202,7 @@ class GoogleCliBackend(AgentBackend):
                 "--log-file", log_path,
                 "-p", f"{system_prompt}\n\n{initial_user_msg}",
             ]
-            data = await asyncio.to_thread(self._run, cmd, "start_session", None, log_path)
+            data = await self._run(cmd, "start_session", None, log_path)
         finally:
             try:
                 os.unlink(log_path)
@@ -266,7 +261,7 @@ class GoogleCliBackend(AgentBackend):
             "--conversation", handle.external_id,
             "-p", text,
         ]
-        data = await asyncio.to_thread(self._run, cmd, handle.external_id)
+        data = await self._run(cmd, handle.external_id)
         return await self._parse_with_nudge(handle.external_id, data["response"])
 
     async def end_session(self, handle: SessionHandle) -> None:
@@ -297,5 +292,5 @@ class GoogleCliBackend(AgentBackend):
             "--dangerously-skip-permissions",
             "-p", f"{system_prompt}\n\n{query}",
         ]
-        data = await asyncio.to_thread(self._run, cmd, f"research:{agent_name}", self.RESEARCH_TIMEOUT)
+        data = await self._run(cmd, f"research:{agent_name}", self.RESEARCH_TIMEOUT)
         return data["response"]

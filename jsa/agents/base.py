@@ -41,6 +41,13 @@ class HistoryTurn:
 
 
 class AgentBackend(ABC):
+    """Convention (not enforced by this ABC): if an implementation spawns a
+    subprocess, it MUST be killable — e.g. via jsa.agents._subprocess.run_killable
+    — so Orchestrator.cancel_task() can actually stop it. A subprocess run via
+    plain blocking subprocess.run()-in-a-thread cannot be interrupted by
+    task.cancel() and will burn API quota to completion regardless of
+    cancellation. See jsa/agents/_subprocess.py's module docstring."""
+
     name: str                                   # "claude-cli" | "google-cli" | "anthropic"
 
     @abstractmethod
