@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -19,6 +21,31 @@ from jsa.api.routes_meta import router as meta_router
 from jsa.api.ws import router as ws_router
 from jsa.pipeline.orchestrator import Orchestrator
 from jsa.agents.registry import backend_for
+
+logger = logging.getLogger(__name__)
+
+
+async def _warm_up_weasyprint() -> None:
+    """Force WeasyPrint/fontconfig's one-time global init to happen alone.
+
+    fontconfig re-parses its config when the font cache looks stale (e.g. after
+    a long system sleep). Doing that first real render concurrently with
+    another (see jsa/render/weasy.py's _RENDER_LOCK) crashed the process with a
+    SIGSEGV inside libfontconfig. The lock already prevents that; this just
+    pays the one-time init cost up front so the first real job doesn't stall.
+    """
+    import os
+
+    if "PYTEST_CURRENT_TEST" in os.environ:  # don't pay a real render on every test's app startup
+        return
+
+    from jsa.render.weasy import WeasyPrintRenderer  # noqa: PLC0415
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+            await WeasyPrintRenderer().render("warm", Path(tmp.name))
+    except Exception:
+        logger.warning("WeasyPrint warm-up render failed; continuing anyway", exc_info=True)
 
 
 def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
@@ -78,6 +105,9 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
             cv_structure_path=settings.cv_structure_path,
         )
         app.state.orchestrator = orchestrator
+
+        await _warm_up_weasyprint()
+
         asyncio.create_task(orchestrator.run())
 
         if settings.dev_autoanswer:
