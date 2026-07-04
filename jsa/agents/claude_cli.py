@@ -50,7 +50,7 @@ class ClaudeCliBackend(AgentBackend):
     name = "claude-cli"
     RESEARCH_TIMEOUT = 300.0  # web search + multiple fetches can exceed the 120s message-turn default
 
-    def __init__(self, model: str = "Sonnet 4.6", timeout: float = 120.0) -> None:
+    def __init__(self, model: str = "Sonnet 5", timeout: float = 120.0) -> None:
         self._model = model
         self._timeout = timeout
 
