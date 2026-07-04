@@ -9,6 +9,14 @@ from jsa.render.base import Renderer
 
 _STYLES_PATH = Path(__file__).parent / "styles.css"
 
+# WeasyPrint's underlying fontconfig/pango stack performs non-thread-safe global
+# initialization (FcInitLoadOwnConfigAndFonts re-parses config when the font
+# cache looks stale, e.g. after a long system sleep). Two concurrent write_pdf
+# calls racing that init corrupts fontconfig's internal state and segfaults the
+# whole process. renderer_for() returns a fresh WeasyPrintRenderer per call, so
+# this lock must live at module scope to serialize across all instances/jobs.
+_RENDER_LOCK = asyncio.Lock()
+
 _HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
@@ -45,4 +53,5 @@ class WeasyPrintRenderer(Renderer):
             output_path.parent.mkdir(parents=True, exist_ok=True)
             weasyprint.HTML(string=html_string).write_pdf(str(output_path))
 
-        await asyncio.to_thread(_write_pdf)
+        async with _RENDER_LOCK:
+            await asyncio.to_thread(_write_pdf)

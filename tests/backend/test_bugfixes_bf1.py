@@ -3,7 +3,7 @@
 2. Dismiss API endpoint (POST /api/jobs/{id}/dismiss)
 3. Reset endpoint accepts dismissed state
 4. JD field present in API responses
-5. Settings.agent_timeout defaults to 300.0
+5. Settings.agent_timeout defaults to 600.0
 """
 
 from __future__ import annotations
@@ -273,8 +273,8 @@ class TestJDInAPIResponse:
 
 
 class TestAgentTimeoutDefault:
-    def test_agent_timeout_defaults_to_300(self, monkeypatch):
-        """Settings().agent_timeout should default to 300.0."""
+    def test_agent_timeout_defaults_to_600(self, monkeypatch):
+        """Settings().agent_timeout should default to 600.0."""
         monkeypatch.delenv("JSA_AGENT_TIMEOUT", raising=False)
         settings = Settings()
-        assert settings.agent_timeout == 300.0
+        assert settings.agent_timeout == 600.0

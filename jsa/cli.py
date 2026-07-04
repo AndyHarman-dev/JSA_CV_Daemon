@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import logging
 import re
 import shutil
@@ -22,6 +23,12 @@ from jsa.db.repo import recovery_sweep, upsert_job
 from jsa.ingest.csv_loader import load_csv
 from jsa.ingest.cv_loader import load_cv
 from jsa.server import create_app
+
+# Dump a per-thread Python traceback to stderr on native crashes (e.g. a
+# SIGSEGV inside a C extension like WeasyPrint's fontconfig/pango stack)
+# instead of a bare "segmentation fault" with no indication of which thread
+# or subsystem faulted.
+faulthandler.enable()
 
 app = typer.Typer(help="JSA — Job Search Assistant")
 

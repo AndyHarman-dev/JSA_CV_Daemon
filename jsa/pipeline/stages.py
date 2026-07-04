@@ -799,6 +799,15 @@ async def _handle_final(
         "structured": structured_obj.model_dump_json(),
     }
 
+    # Second stale-result guard: get_documents() above was a real DB round-trip
+    # (an await point) since run_stage's pre-check, during which a dismiss/cancel
+    # on another session could have landed. Re-check immediately before the
+    # checkpoint write that would otherwise resurrect the job (see StaleJobResult
+    # docstring / run_stage's guard for the general rationale).
+    current_state = await repo.get_state_fresh(session, job.id)
+    if current_state != JobState.running:
+        raise StaleJobResult(job.id, current_state)
+
     if stage == Stage.cv_adjust:
         # cv_adjust → cv_done
         await checkpoint(

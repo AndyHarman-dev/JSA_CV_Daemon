@@ -243,7 +243,7 @@ Optional environment variables for this backend:
 |----------|---------|-------------|
 | `JSA_MODEL` | `claude-haiku-4-5` | Model name to use (also applies to `claude-cli`) |
 | `JSA_ANTHROPIC_TIMEOUT` | `180` | Per-request timeout in seconds |
-| `JSA_AGENT_TIMEOUT` | `300` | Per-request timeout for CLI backends (`claude-cli`, `google-cli`) |
+| `JSA_AGENT_TIMEOUT` | `600` | Per-request timeout for CLI backends (`claude-cli`, `google-cli`) |
 
 New backends register in `jsa/agents/registry.py` by adding an entry to `_REGISTRY`, keyed by the CLI-flag string, and subclassing `AgentBackend`.
 
