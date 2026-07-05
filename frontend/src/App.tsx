@@ -5,6 +5,7 @@ import { Header } from "./components/Header";
 import { JobList } from "./components/JobList";
 import { JobDetail } from "./components/JobDetail";
 import { CvEditor } from "./components/cv-editor/CvEditor";
+import { ScratchBuffer } from "./components/ScratchBuffer";
 import { SHELL_THEME } from "./theme/tokens";
 import { Ambient } from "./theme/Ambient";
 
@@ -29,6 +30,7 @@ function App() {
     >
       <style>{`:root{--a:${T.a}}`}</style>
       {editorOpen && <CvEditor />}
+      <ScratchBuffer />
       <Ambient T={T} label="JSA_DAEMON" />
       <Header />
       <div className="flex flex-1 overflow-hidden" style={{ position: "relative", zIndex: 1 }}>

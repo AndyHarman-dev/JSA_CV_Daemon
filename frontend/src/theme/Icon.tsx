@@ -4,7 +4,7 @@
 import type { ReactNode } from "react";
 
 export type IconName =
-  | "x" | "plus" | "check" | "trash" | "refresh" | "send" | "download" | "chevron"
+  | "x" | "plus" | "minus" | "check" | "trash" | "refresh" | "send" | "download" | "chevron"
   | "alert" | "mail" | "phone" | "pin" | "bolt" | "server" | "inbox" | "doc" | "work"
   | "link" | "back" | "up" | "down" | "undo" | "redo" | "braces" | "spark" | "eye"
   | "copy" | "text" | "list" | "tag" | "cap" | "blocks" | "cols";
@@ -19,6 +19,7 @@ interface IconProps {
 const PATHS: Record<IconName, string[]> = {
   x: ["M4 4l8 8M12 4l-8 8"],
   plus: ["M8 3.2v9.6M3.2 8h9.6"],
+  minus: ["M3.2 8h9.6"],
   check: ["M3 8.4l3.3 3.4L13 4.6"],
   trash: ["M3 4.5h10M6.4 4.5V3.2h3.2v1.3M4.6 4.5l.6 8.3h5.6l.6-8.3"],
   refresh: ["M3 7.6a5 5 0 0 1 8.8-3.2M13 3v3.4h-3.4", "M13 8.4a5 5 0 0 1-8.8 3.2M3 13V9.6h3.4"],
