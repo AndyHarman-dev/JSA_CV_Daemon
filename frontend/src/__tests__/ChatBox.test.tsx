@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { ChatBox } from "../components/ChatBox";
 import { api } from "../api";
 import { useStore } from "../store";
+import { useScratchStore, type ScratchEntry } from "../scratchStore";
 
 vi.mock("../api", () => ({
   api: {
@@ -13,11 +14,25 @@ vi.mock("../api", () => ({
   },
 }));
 
+function makeEntry(overrides: Partial<ScratchEntry> = {}): ScratchEntry {
+  return {
+    id: overrides.id ?? "e1",
+    text: overrides.text ?? "Visa status: not required",
+    tag: overrides.tag ?? "#visa",
+    pinned: overrides.pinned ?? false,
+    ts: overrides.ts ?? Date.now(),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // Reset store so refetchAll doesn't blow up
   useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting" });
   (api.getJobs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  // ChatBox subscribes to the scratch store for the @-mention dropdown; reset it so seeded
+  // entries never leak across tests (it's a module-level singleton).
+  localStorage.clear();
+  useScratchStore.setState({ entries: [] });
 });
 
 describe("ChatBox kind='answer'", () => {
@@ -174,5 +189,108 @@ describe("ChatBox kind='revise'", () => {
     await waitFor(() => {
       expect(textarea).toHaveValue("");
     });
+  });
+});
+
+describe("ChatBox @-mention scratch dropdown", () => {
+  it("opens the dropdown listing scratch buffer notes when @ is typed", async () => {
+    useScratchStore.setState({ entries: [makeEntry({ text: "Visa status: not required" })] });
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    await user.type(screen.getByRole("textbox"), "Following up @");
+
+    expect(screen.getByText("SCRATCH_BUFFER")).toBeInTheDocument();
+    expect(screen.getByText("Visa status: not required")).toBeInTheDocument();
+    expect(screen.getByText("#visa")).toBeInTheDocument();
+  });
+
+  it("shows the empty state when the scratch buffer has no notes", async () => {
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    await user.type(screen.getByRole("textbox"), "@");
+
+    expect(screen.getByText("No notes in buffer.")).toBeInTheDocument();
+  });
+
+  it("does not open the dropdown before @ is typed", () => {
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+    expect(screen.queryByText("SCRATCH_BUFFER")).not.toBeInTheDocument();
+  });
+
+  it("keeps the dropdown open while typing more non-space characters after @", async () => {
+    useScratchStore.setState({ entries: [makeEntry()] });
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    await user.type(screen.getByRole("textbox"), "@vi");
+
+    expect(screen.getByText("SCRATCH_BUFFER")).toBeInTheDocument();
+  });
+
+  it("closes the dropdown when a space is typed after @", async () => {
+    useScratchStore.setState({ entries: [makeEntry()] });
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    await user.type(screen.getByRole("textbox"), "@ ");
+
+    expect(screen.queryByText("SCRATCH_BUFFER")).not.toBeInTheDocument();
+  });
+
+  it("closes the dropdown when the triggering @ is deleted", async () => {
+    useScratchStore.setState({ entries: [makeEntry()] });
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "@");
+    expect(screen.getByText("SCRATCH_BUFFER")).toBeInTheDocument();
+
+    await user.type(textarea, "{backspace}");
+    expect(screen.queryByText("SCRATCH_BUFFER")).not.toBeInTheDocument();
+  });
+
+  it("clicking a note inserts its full text plus a trailing space and closes the dropdown", async () => {
+    useScratchStore.setState({ entries: [makeEntry({ text: "Visa status: not required" })] });
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.type(textarea, "Following up @");
+    await user.click(screen.getByText("Visa status: not required"));
+
+    expect(textarea).toHaveValue("Following up Visa status: not required ");
+    expect(screen.queryByText("SCRATCH_BUFFER")).not.toBeInTheDocument();
+  });
+
+  it("refocuses the textarea after inserting a note", async () => {
+    useScratchStore.setState({ entries: [makeEntry({ text: "Visa status: not required" })] });
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.type(textarea, "@");
+    await user.click(screen.getByText("Visa status: not required"));
+
+    await waitFor(() => expect(textarea).toHaveFocus());
+  });
+
+  it("lists pinned notes first, then newest first", async () => {
+    useScratchStore.setState({
+      entries: [
+        makeEntry({ id: "old", text: "old unpinned", ts: 1 }),
+        makeEntry({ id: "pinned", text: "pinned note", ts: 0, pinned: true }),
+        makeEntry({ id: "new", text: "new unpinned", ts: 2 }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<ChatBox kind="answer" jobId="job1" followUpId={42} />);
+
+    await user.type(screen.getByRole("textbox"), "@");
+
+    const texts = screen.getAllByText(/unpinned|pinned note/).map((el) => el.textContent);
+    expect(texts).toEqual(["pinned note", "new unpinned", "old unpinned"]);
   });
 });
