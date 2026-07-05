@@ -110,7 +110,7 @@ def _skills_block(section: Section) -> str:
             lines.append(f"**{label}**")
         elif body:
             lines.append(body)
-    return "\n".join(l for l in lines if l)
+    return "\n\n".join(l for l in lines if l)
 
 
 def _section_body(section: Section) -> str:
