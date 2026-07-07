@@ -1,6 +1,8 @@
 import { useStore } from "../store";
 import { StatusBadge } from "./StatusBadge";
+import { LaunchButton } from "./LaunchButton";
 import type { JobDTO, JobState } from "../types";
+import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 
 const T = SHELL_THEME;
@@ -8,18 +10,22 @@ const T = SHELL_THEME;
 const TIER_COLOR: Record<string, string> = { A: T.green, B: T.accent2, C: T.ink3 };
 
 interface Group {
-  label: string;
+  labelKey: string;
   states: JobState[];
 }
 
+// `labelKey` is a translation key, resolved by the component below via `t()`.
+// "jobList.queued" is deliberately its own top-most group (not folded into "running")
+// so fresh, never-launched jobs are visually distinct from ones already dispatching.
 const GROUPS: Group[] = [
-  { label: "Inbox", states: ["awaiting_input"] },
-  { label: "Needs Review", states: ["unfit"] },
-  { label: "Running", states: ["running", "pending", "fit_done", "cv_done", "cl_done"] },
-  { label: "Review", states: ["review"] },
-  { label: "Done", states: ["approved"] },
-  { label: "Failed", states: ["failed"] },
-  { label: "Dismissed", states: ["dismissed"] },
+  { labelKey: "jobList.queued", states: ["queued"] },
+  { labelKey: "jobList.inbox", states: ["awaiting_input"] },
+  { labelKey: "jobList.needsReview", states: ["unfit"] },
+  { labelKey: "jobList.running", states: ["running", "pending", "fit_done", "cv_done", "cl_done"] },
+  { labelKey: "jobList.review", states: ["review"] },
+  { labelKey: "jobList.done", states: ["approved"] },
+  { labelKey: "jobList.failed", states: ["failed"] },
+  { labelKey: "jobList.dismissed", states: ["dismissed"] },
 ];
 
 function JobRow({
@@ -90,7 +96,7 @@ function JobRow({
       >
         {job.role}
       </div>
-      <StatusBadge state={job.state} />
+      {job.state === "queued" ? <LaunchButton jobId={job.id} /> : <StatusBadge state={job.state} />}
     </button>
   );
 }
@@ -99,6 +105,8 @@ export function JobList() {
   const jobs = useStore((s) => Object.values(s.jobs));
   const selectedId = useStore((s) => s.selectedId);
   const selectJob = useStore((s) => s.selectJob);
+  const launchAll = useStore((s) => s.launchAll);
+  const t = useT();
 
   return (
     <nav
@@ -126,7 +134,7 @@ export function JobList() {
         const groupJobs = jobs.filter((j) => (group.states as string[]).includes(j.state));
         if (groupJobs.length === 0) return null;
         return (
-          <section key={group.label} style={{ marginBottom: 16 }}>
+          <section key={group.labelKey} style={{ marginBottom: 16 }}>
             <h2
               style={{
                 display: "flex",
@@ -140,8 +148,27 @@ export function JobList() {
                 textTransform: "uppercase",
               }}
             >
-              <span>{group.label}</span>
+              <span>{t(group.labelKey)}</span>
               <span style={{ flex: 1, height: 1, background: T.bd }} />
+              {group.labelKey === "jobList.queued" && groupJobs.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => void launchAll()}
+                  style={{
+                    font: `600 9px ${T.mono}`,
+                    letterSpacing: ".06em",
+                    color: T.a,
+                    background: "transparent",
+                    border: `1px solid ${T.aBorder}`,
+                    borderRadius: T.btnRadius,
+                    padding: "2px 7px",
+                    cursor: "pointer",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {t("launch.launchAll")}
+                </button>
+              )}
               <span style={{ font: `400 9.5px ${T.mono}`, color: T.ink3, textTransform: "none" }}>
                 {groupJobs.length}
               </span>
@@ -161,7 +188,7 @@ export function JobList() {
       })}
       {jobs.length === 0 && (
         <p style={{ font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: "italic", padding: "0 4px" }}>
-          No jobs loaded.
+          {t("jobList.noJobsLoaded")}
         </p>
       )}
     </nav>

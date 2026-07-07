@@ -86,6 +86,7 @@ def _job_data(job_id: str | None = None) -> dict:
 async def _insert_job(factory) -> Job:
     async with factory() as s:
         job = await repo.upsert_job(s, _job_data())
+        job.state = JobState.pending  # simulate an already-launched job
         await s.commit()
     return job
 

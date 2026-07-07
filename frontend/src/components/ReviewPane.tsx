@@ -3,6 +3,8 @@ import { api } from "../api";
 import { useStore } from "../store";
 import type { JobState } from "../types";
 import { ChatBox } from "./ChatBox";
+import { useT } from "../i18n/useT";
+import { useOutsideClick } from "../hooks/useOutsideClick";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase, cornerMarks } from "../theme/chrome";
 import { Icon } from "../theme/Icon";
@@ -41,18 +43,10 @@ export function ReviewPane({ jobId }: Props) {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const downloadRef = useRef<HTMLDivElement>(null);
+  const t = useT();
 
   // Close the download menu when clicking outside of it.
-  useEffect(() => {
-    if (!showDownloadMenu) return;
-    function onMouseDown(e: MouseEvent) {
-      if (downloadRef.current && !downloadRef.current.contains(e.target as Node)) {
-        setShowDownloadMenu(false);
-      }
-    }
-    document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [showDownloadMenu]);
+  useOutsideClick(downloadRef, showDownloadMenu, () => setShowDownloadMenu(false));
 
   // Fetch document paths whenever jobId or state changes.
   // By the time state === "review", the pipeline has already rendered both formats.
@@ -119,7 +113,7 @@ export function ReviewPane({ jobId }: Props) {
   }
 
   const activePaths = activeTab === "cv" ? cvPaths : clPaths;
-  const activeVersionLabel = activeTab === "cv" ? "CV / RESUME" : "COVER_LETTER";
+  const activeVersionLabel = activeTab === "cv" ? t("reviewPane.cvTab") : t("reviewPane.clTab");
 
   function tabButton(key: TabKey, label: string) {
     const on = activeTab === key;
@@ -149,13 +143,13 @@ export function ReviewPane({ jobId }: Props) {
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Tab bar */}
       <div style={{ display: "flex", borderBottom: `1px solid ${T.bd}` }}>
-        {tabButton("cv", "CV / RESUME")}
-        {tabButton("cl", "COVER_LETTER")}
+        {tabButton("cv", t("reviewPane.cvTab"))}
+        {tabButton("cl", t("reviewPane.clTab"))}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ font: `400 10.5px ${T.mono}`, color: T.ink3, letterSpacing: ".06em" }}>
-          VERSION
+          {t("reviewPane.versionLabel")}
         </span>
         <span style={{ font: `600 11px ${T.mono}`, color: T.accent2 }}>v{activePaths.version}</span>
       </div>
@@ -207,13 +201,13 @@ export function ReviewPane({ jobId }: Props) {
               font: `400 13px ${T.ui}`,
             }}
           >
-            Loading preview…
+            {t("reviewPane.loadingPreview")}
           </div>
         ) : activePaths.pdfUrl ? (
           <iframe
             key={activePaths.pdfUrl}
             src={activePaths.pdfUrl}
-            title={activeTab === "cv" ? "CV / Resume Preview" : "Cover Letter Preview"}
+            title={activeTab === "cv" ? t("reviewPane.cvPreviewTitle") : t("reviewPane.clPreviewTitle")}
             style={{ width: "100%", height: "58vh", border: `1px solid ${T.bd}`, background: "#fff" }}
           />
         ) : (
@@ -228,7 +222,7 @@ export function ReviewPane({ jobId }: Props) {
               fontStyle: "italic",
             }}
           >
-            Preview rendering in progress…
+            {t("reviewPane.previewInProgress")}
           </div>
         )}
       </div>
@@ -255,7 +249,7 @@ export function ReviewPane({ jobId }: Props) {
             }}
           >
             <Icon name="download" size={13} />
-            DOWNLOAD
+            {t("reviewPane.downloadButton")}
             <span
               style={{
                 color: T.ink3,
@@ -292,7 +286,7 @@ export function ReviewPane({ jobId }: Props) {
                   padding: "5px 9px 6px",
                 }}
               >
-                CHOOSE FORMAT
+                {t("reviewPane.chooseFormat")}
               </div>
               {activePaths.pdfUrl && (
                 <button
@@ -317,7 +311,7 @@ export function ReviewPane({ jobId }: Props) {
                   <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
                     PDF
                   </span>
-                  <span>{activeTab === "cv" ? "CV / Resume" : "Cover Letter"} · pdf</span>
+                  <span>{activeTab === "cv" ? t("reviewPane.cvOption") : t("reviewPane.clOption")} · pdf</span>
                 </button>
               )}
               {activePaths.docxUrl && (
@@ -343,7 +337,7 @@ export function ReviewPane({ jobId }: Props) {
                   <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
                     DOCX
                   </span>
-                  <span>{activeTab === "cv" ? "CV / Resume" : "Cover Letter"} · docx</span>
+                  <span>{activeTab === "cv" ? t("reviewPane.cvOption") : t("reviewPane.clOption")} · docx</span>
                 </button>
               )}
             </div>
@@ -368,7 +362,7 @@ export function ReviewPane({ jobId }: Props) {
           }}
         >
           <Icon name="check" size={14} />
-          APPROVED · PDFS WRITTEN TO OUTPUT/
+          {t("reviewPane.approvedBanner")}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -413,12 +407,12 @@ export function ReviewPane({ jobId }: Props) {
                     animation: "jsspin .7s linear infinite",
                   }}
                 />
-                Approving…
+                {t("reviewPane.approving")}
               </>
             ) : (
               <>
                 <Icon name="check" size={15} />
-                APPROVE & EXPORT
+                {t("reviewPane.approveButton")}
               </>
             )}
           </button>

@@ -80,18 +80,20 @@ def _job_data(job_id: str | None = None) -> dict:
 
 
 async def _insert_job(factory, **overrides) -> Job:
-    """Insert a fresh pending job using the session factory."""
+    """Insert a fresh job and launch it (queued → pending) using the session factory."""
     data = _job_data(**overrides)
     async with factory() as s:
         job = await repo.upsert_job(s, data)
+        job.state = JobState.pending
         await s.commit()
     return job
 
 
 async def _insert_job_in_session(session: AsyncSession, **overrides) -> Job:
-    """Insert a fresh pending job into an existing session."""
+    """Insert a fresh job and launch it (queued → pending) into an existing session."""
     data = _job_data(**overrides)
     job = await repo.upsert_job(session, data)
+    job.state = JobState.pending
     await session.commit()
     return job
 

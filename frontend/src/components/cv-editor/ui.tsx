@@ -21,13 +21,15 @@ export const KIND_ICON: Record<SectionKind, IconName> = {
   education: "cap",
 };
 
+// Values are translation keys (not literal English), resolved by callers via `t(KIND_LABEL[k])`
+// — this module is a plain constants/helpers file, not a component, and can't call `useT()`.
 export const KIND_LABEL: Record<SectionKind, string> = {
-  summary: "Summary",
-  bullets: "Bullets",
-  skills: "Skills",
-  experience: "Experience",
-  projects: "Projects",
-  education: "Education",
+  summary: "kindLabel.summary",
+  bullets: "kindLabel.bullets",
+  skills: "kindLabel.skills",
+  experience: "kindLabel.experience",
+  projects: "kindLabel.projects",
+  education: "kindLabel.education",
 };
 
 // Short telemetry-style codes shown next to kind labels (e.g. in the inject-module menu).

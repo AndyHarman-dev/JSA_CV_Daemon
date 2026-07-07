@@ -11,6 +11,7 @@ class Base(DeclarativeBase): ...
 
 
 class JobState(str, enum.Enum):
+    queued = "queued"            # fresh ingest; parked until the user clicks LAUNCH
     pending = "pending"
     running = "running"
     awaiting_input = "awaiting_input"
@@ -51,6 +52,7 @@ class Job(Base):
     cv_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cv_adjust stage
     cl_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cover_letter stage
     backend_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # active backend for this job (BF-19)
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)  # snapshot of the global language pref, set on LAUNCH; null until launched (falls back to the live global pref)
     fit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # agent's reason when state==unfit
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)

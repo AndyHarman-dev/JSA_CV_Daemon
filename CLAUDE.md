@@ -118,6 +118,48 @@ This applies to: WeasyPrint, python-docx parsing, pypdf parsing, and any future 
 
 ---
 
+## Language preference
+
+A single global setting (`jsa/store/preferences.py`, `GET`/`PUT /api/preferences`) drives
+three things: (1) the LLM pipeline's output language for the CV/cover-letter JSON, its
+clarifying questions, and its change-log; (2) the fit-assessment reason text; (3) the whole
+frontend's UI chrome. The language catalog (`jsa/i18n/languages.py`) is the single source of
+truth — served to the frontend via `/api/config`'s `languages` key; never hand-copy the list
+into TypeScript.
+
+**Pipeline directive.** `jsa/pipeline/stages.py::_with_language_directive` appends a language
+directive to a **NEW** session's system prompt only (`start_session` call sites: fresh
+cv_adjust/cover_letter, `_run_fit_assessment`) — never to a `restore_session` call (a resumed
+session already committed to a language; re-injecting a changed directive would contradict
+replayed history). The directive carves out two things that must always stay
+English/ASCII: the `<<<FINAL>>>`/`<<<NEED_INPUT>>>`/`<<<END>>>` sentinels, and (for
+`fit_assessment` only) the literal `FIT`/`UNFIT` verdict word matched by `_parse_fit_verdict`.
+`jsa/schema/cv.py`'s `_not_a_cover_letter` guard is per-language
+(`_LETTER_FORMULA_RE_BY_LANG`, selected via `ValidationInfo.context["language"]`) — when
+adding a new language to the catalog that pipeline output may actually use, add its letter-
+formula tuple too, or the guard silently falls back to English-only matching for that
+language.
+
+**Frontend i18n (UI string convention — applies to all future frontend work, not just this
+feature).** Any new user-visible frontend string **must**:
+1. Be added to `frontend/src/i18n/strings.en.json` with a stable dotted key
+   (`"<component>.<label>"`, e.g. `"jobList.emptyState"`).
+2. Be rendered via `const t = useT();` (`frontend/src/i18n/useT.ts`) — never a hardcoded
+   English literal in JSX. `useT()` reads the global `language` store field and falls back to
+   English, then the raw key, if a translation is missing.
+3. Trigger a re-run of `scripts/translate-ui.sh` (incremental — only translates new/changed
+   keys) before shipping, so generated locale catalogs (`strings.<code>.json`) stay in sync.
+   Two backends, mirroring `jsa/agents/anthropic_api.py` vs `jsa/agents/claude_cli.py`:
+   `--backend api` (default, needs `ANTHROPIC_API_KEY`) or `--backend cli` (shells out to the
+   Claude Code CLI, no API key needed). Use `scripts/translate-ui.sh --check` in CI/pre-merge
+   to catch a catalog that's fallen behind.
+
+Do not externalize: CSS class names, `data-testid`, console/log strings, dates/numbers/IDs/
+URLs, or HUD-style terminal abbreviations that are intentionally code-like (see
+`frontend/src/theme/chrome.tsx`'s `StateMeta.code` vs `.label`).
+
+---
+
 ## How to test a phase
 
 After each phase is implemented, verify it with the following steps in order.

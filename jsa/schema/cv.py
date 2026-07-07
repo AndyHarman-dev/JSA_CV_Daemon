@@ -43,7 +43,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 class _Loose(BaseModel):
@@ -91,8 +98,15 @@ _URL_RE = re.compile(r"(https?://|www\.|[\w-]+\.(?:com|org|io|dev|net|app|gg|me|
 # shape (an observed live failure). Deliberately excludes sentiment words ("passionate
 # about") that legitimately appear in CV summaries — only formulaic letter idioms. A single
 # accidental match is tolerated; two or more is decisive (the observed failure matched three).
-_LETTER_FORMULA_RE = re.compile(
-    "|".join([
+#
+# Per-language catalog: once the pipeline can emit non-English CV/cover-letter output, an
+# English-only guard goes blind to a non-English letter mis-emitted as a CV. Each language's
+# tuple mirrors the same ~12 formulaic idioms (translated, not reinvented). All alternatives
+# use non-capturing groups (`(?:...)`) — `re.findall` returns *group contents* when a pattern
+# has capturing groups, which would silently corrupt both the match count and the sample
+# message built from the hits.
+_LETTER_FORMULAS_BY_LANG: dict[str, tuple[str, ...]] = {
+    "en": (
         r"writing to express",
         r"express my (?:strong |sincere |keen )?interest",
         r"would welcome (?:the opportunity|discussing|the chance)",
@@ -105,10 +119,289 @@ _LETTER_FORMULA_RE = re.compile(
         r"look forward to (?:hearing|discussing|speaking)",
         r"\bi am (?:writing|applying) (?:to|for)\b",
         r"\bi'?m applying for\b",
-    ]),
-    re.I,
-)
+    ),
+    "es": (
+        r"le escribo para expresar",
+        r"expresar mi (?:gran |sincero |vivo )?inter[ée]s",
+        r"me encantar[ií]a (?:la oportunidad|conversar|la posibilidad)",
+        r"list[oa] para contribuir de inmediato",
+        r"\bestimado responsable de contrataci[oó]n\b",
+        r"\bestimados? (?:se[nñ]or|se[nñ]ora)\b",
+        r"\batentamente,",
+        r"\b(?:un cordial saludo|saludos cordiales)\b",
+        r"gracias por (?:su )?consideraci[oó]n",
+        r"espero (?:tener noticias|conversar|poder hablar)",
+        r"\ble escribo para (?:solicitar|postular)\b",
+        r"\bestoy postulando (?:a|para)\b",
+    ),
+    "fr": (
+        r"je vous [ée]cris pour exprimer",
+        r"exprimer mon (?:vif |sinc[èe]re |profond )?int[ée]r[êe]t",
+        r"serais ravi(?:e)? de (?:l'opportunit[ée]|en discuter|l'occasion)",
+        r"pr[êe]t(?:e)? [àa] contribuer imm[ée]diatement",
+        r"\bmadame,? monsieur\b",
+        r"\bcher (?:monsieur|madame)\b",
+        r"\bcordialement,",
+        r"\bveuillez agr[ée]er\b",
+        r"vous remercie de (?:l'attention|votre consid[ée]ration)",
+        r"dans l'attente de (?:votre r[ée]ponse|[ée]changer|vous rencontrer)",
+        r"\bje vous [ée]cris pour (?:postuler|solliciter)\b",
+        r"\bje postule (?:au poste|pour le poste)\b",
+    ),
+    "de": (
+        r"schreibe ihnen,? um mein interesse",
+        r"mein (?:gro[ßs]es |aufrichtiges |starkes )?interesse zu bekunden",
+        r"w[üu]rde mich (?:sehr )?freuen,? (?:die gelegenheit|dar[üu]ber zu sprechen)",
+        r"bereit,? sofort einen beitrag zu leisten",
+        r"\bsehr geehrte damen und herren\b",
+        r"\bsehr geehrte[rn]? (?:herr|frau)\b",
+        r"\bmit freundlichen gr[üu][sß]en\b",
+        r"\bhochachtungsvoll\b",
+        r"danke (?:ihnen )?f[üu]r (?:ihre )?ber[üu]cksichtigung",
+        r"freue mich (?:auf ein gespr[äa]ch|darauf,? von ihnen zu h[öo]ren)",
+        r"\bich bewerbe mich (?:hiermit )?(?:auf|f[üu]r)\b",
+        r"\bhiermit bewerbe ich mich\b",
+    ),
+    "pt": (
+        r"escrevo para expressar",
+        r"expressar meu (?:forte |sincero |grande )?interesse",
+        r"adoraria (?:a oportunidade|discutir|conversar)",
+        r"pronto[a]? para contribuir imediatamente",
+        r"\bprezad[oa] respons[áa]vel pela contrata[çc][ãa]o\b",
+        r"\bprezad[oa] (?:senhor|senhora)\b",
+        r"\batenciosamente,",
+        r"\bcordialmente\b",
+        r"obrigad[oa] pela (?:sua )?considera[çc][ãa]o",
+        r"aguardo (?:retorno|a oportunidade de conversar|not[íi]cias)",
+        r"\bescrevo para (?:candidatar-me|me candidatar)\b",
+        r"\bestou me candidatando (?:a|para)\b",
+    ),
+    "it": (
+        r"scrivo per esprimere",
+        r"esprimere il mio (?:forte |sincero |vivo )?interesse",
+        r"sarei felice di (?:discuterne|un'opportunit[àa]|parlarne)",
+        r"pronto[a]? a contribuire immediatamente",
+        r"\bgentile responsabile delle assunzioni\b",
+        r"\begregio (?:signore|signora)\b",
+        r"\bcordiali saluti,",
+        r"\bdistinti saluti\b",
+        r"grazie per la (?:vostra |sua )?considerazione",
+        r"resto in attesa di (?:un riscontro|discuterne|sue notizie)",
+        r"\bscrivo per candidarmi\b",
+        r"\bmi candido per (?:la posizione|il ruolo)\b",
+    ),
+    "nl": (
+        r"schrijf u (?:hierbij )?om mijn interesse",
+        r"interesse (?:oprecht |sterk |bijzonder )?(?:kenbaar te maken|te uiten)",
+        r"zou de (?:kans|gelegenheid|mogelijkheid) (?:graag )?(?:grijpen|bespreken)",
+        r"klaar om (?:onmiddellijk|direct) (?:bij te dragen|van start te gaan)",
+        r"\bgeachte (?:heer|mevrouw)\b",
+        r"\bgeachte (?:heer\/mevrouw|sollicitatiecommissie)\b",
+        r"\bmet vriendelijke groet,",
+        r"\bhoogachtend\b",
+        r"dank (?:u |je )?voor (?:uw|je) overweging",
+        r"(?:kijk|zie) uit naar (?:uw reactie|een gesprek|het vervolg)",
+        r"\bik schrijf (?:u |je )?om te solliciteren\b",
+        r"\bik solliciteer (?:naar|voor) (?:de|deze) (?:functie|positie|vacature)\b",
+    ),
+    "sv": (
+        r"skriver (?:till er )?f[öo]r att uttrycka",
+        r"uttrycka mitt (?:starka |uppriktiga |stora )?intresse",
+        r"skulle (?:g[äa]rna|varmt) (?:v[äa]lkomna m[öo]jligheten|diskutera|h[öo]ras)",
+        r"redo att bidra omedelbart",
+        r"\bb[äa]sta (?:rekryterare|hr-ansvarig)\b",
+        r"\bb[äa]ste herr\b|\bk[äa]ra (?:herr|fru)\b",
+        r"\bmed v[äa]nliga h[äa]lsningar,",
+        r"\bh[öo]gaktningsfullt\b",
+        r"tack f[öo]r (?:ert|ditt) [öo]vervägande",
+        r"ser fram emot (?:att h[öo]ra|en intervju|att diskutera)",
+        r"\bjag skriver f[öo]r att s[öo]ka\b",
+        r"\bjag s[öo]ker (?:tj[äa]nsten|befattningen)\b",
+    ),
+    "pl": (
+        r"pisz[eę] (?:do pa[nń]stwa )?aby wyrazi[cć]",
+        r"wyrazi[cć] (?:moje |swoje )?(?:silne |szczere )?zainteresowanie",
+        r"z (?:rado[śs]ci[aą] )?(?:om[oó]wi[eę]|przyjm[eę] mo[żz]liwo[śs][cć])",
+        r"gotow[ay] do (?:natychmiastowego )?wk[łl]adu",
+        r"\bszanowni pa[nń]stwo\b",
+        r"\bszanown[ay] pan[iie]?\b",
+        r"\bz powa[żz]aniem,",
+        r"\bz wyrazami szacunku\b",
+        r"dzi[eę]kuj[eę] za (?:pa[nń]stwa )?rozwa[żz]enie",
+        r"z niecierpliwo[śs]ci[aą] oczekuj[eę] (?:na rozmow[eę]|odpowiedzi)",
+        r"\bpisz[eę], aby (?:aplikowa[cć]|z[łl]o[żz]y[cć] podanie)\b",
+        r"\baplikuj[eę] na stanowisko\b",
+    ),
+    "ru": (
+        r"пишу,? чтобы выразить",
+        r"выразить (?:свой |искренний |большой )?интерес",
+        r"был(?:а)? бы рад(?:а)? (?:возможности|обсудить)",
+        r"готов(?:а)? внести вклад немедленно",
+        r"\bуважаемый (?:менеджер по подбору персонала|специалист по кадрам)\b",
+        r"\bуважаем(?:ый|ая) (?:господин|госпожа)\b",
+        r"\bс уважением,",
+        r"\bискренне ваш(?:а)?\b",
+        r"благодарю за (?:ваше )?рассмотрение",
+        r"с нетерпением жду (?:ответа|встречи|обсуждения)",
+        r"\bпишу,? чтобы податься на\b",
+        r"\bподаю заявку на (?:позицию|должность)\b",
+    ),
+    "tr": (
+        r"ilgimi (?:belirtmek|ifade etmek) i[cç]in yaz[ıi]yorum",
+        r"(?:g[üu][cç]l[üu] |i[cç]ten )?ilgimi (?:belirtmek|ifade etmek)",
+        r"f[ıi]rsat[ıi] (?:memnuniyetle )?(?:kar[şs][ıi]lar[ıi]m|g[öo]r[üu][şs]meyi isterim)",
+        r"hemen katk[ıi]da bulunmaya haz[ıi]r[ıi]m",
+        r"\bsay[ıi]n insan kaynaklar[ıi]\b",
+        r"\bsay[ıi]n (?:bay|bayan)\b",
+        r"\bsayg[ıi]lar[ıi]mla,",
+        r"\bsayg[ıi]lar[ıi]m[ıi]zla\b",
+        r"de[ğg]erlendirmeniz i[çc]in te[şs]ekk[üu]r ederim",
+        r"(?:yan[ıi]t[ıi]n[ıi]z[ıi]|g[öo]r[üu][şs]meyi) sab[ıi]rs[ıi]zl[ıi]kla bekliyorum",
+        r"\bba[şs]vurmak i[çc]in yaz[ıi]yorum\b",
+        r"\b(?:pozisyona|g[öo]reve) ba[şs]vuruyorum\b",
+    ),
+    "ar": (
+        r"أكتب (?:إليكم )?للتعبير",
+        r"(?:التعبير عن|أعبر عن) اهتمامي",
+        r"يسعدني (?:الفرصة|مناقشة|التحدث)",
+        r"مستعد(?:ة)? للمساهمة فورا",
+        r"عزيزي مسؤول التوظيف",
+        r"السيد(?:ة)? العزيز(?:ة)?",
+        r"مع خالص التقدير",
+        r"وتفضلوا بقبول فائق الاحترام",
+        r"شكرا لكم على النظر",
+        r"أتطلع (?:إلى سماع ردكم|لمناقشة|للحديث)",
+        r"أكتب (?:إليكم )?للتقدم",
+        r"أتقدم (?:بطلب|لوظيفة)",
+    ),
+    "he": (
+        r"אני כותב(?:ת)? כדי להביע",
+        r"להביע את (?:התעניינותי|עניין רב)",
+        r"אשמח (?:להזדמנות|לדון|לשוחח)",
+        r"מוכן(?:ה)? לתרום מיד",
+        r"לכבוד מנהל(?:ת)? הגיוס",
+        r"אדון\/גברת נכבד(?:ה)?",
+        r"בברכה,",
+        r"בכבוד רב",
+        r"תודה על (?:התייחסותכם|שיקולכם)",
+        r"מצפה (?:לשמוע|לדון|לשוחח)",
+        r"אני כותב(?:ת)? כדי להגיש מועמדות",
+        r"אני מגיש(?:ה)? מועמדות ל",
+    ),
+    "hi": (
+        r"अपनी रुचि (?:व्यक्त|प्रकट) करने के लिए लिख रह[ाी] ह",
+        r"(?:गहरी|प्रबल|ईमानदार) रुचि व्यक्त कर",
+        r"अवसर का स्वागत कर[ूें]ग[ाी]|चर्चा करना चाहत[ाी]",
+        r"तुरंत योगदान देने के लिए तैयार",
+        r"प्रिय नियुक्ति प्रबंधक",
+        r"प्रिय महोदय\/महोदया",
+        r"सादर,",
+        r"सधन्यवाद",
+        r"आपके विचार के लिए धन्यवाद",
+        r"(?:सुनने|चर्चा करने|बातचीत करने) की प्रतीक्षा",
+        r"मैं आवेदन करने के लिए लिख रह[ाी]",
+        r"मैं (?:पद|नौकरी) के लिए आवेदन कर रह[ाी]",
+    ),
+    "zh": (
+        r"谨此表达",
+        r"表达(?:我|本人)(?:浓厚|真诚|强烈)?(?:的)?兴趣",
+        r"期待(?:有机会|讨论|沟通)",
+        r"随时准备立即贡献",
+        r"尊敬的招聘经理",
+        r"尊敬的(?:先生|女士)",
+        r"此致\s*敬礼",
+        r"顺颂商祺",
+        r"感谢您(?:的)?考虑",
+        r"期待(?:您的回复|进一步沟通|面谈)",
+        r"特此申请",
+        r"我谨申请(?:该职位|此职位)",
+    ),
+    "ja": (
+        r"貴社に(?:応募|志望)させていただきたく",
+        r"強い関心を(?:持って|抱いて)おります",
+        r"(?:機会をいただければ|お話しできれば)幸いです",
+        r"即戦力として貢献する準備ができております",
+        r"採用ご担当者様",
+        r"拝啓",
+        r"敬具",
+        r"よろしくお願い申し上げます",
+        r"ご検討いただき(?:ありがとうございます|感謝いたします)",
+        r"お返事(?:を)?お待ちしております",
+        r"応募させていただきます",
+        r"この度.{0,20}応募いたします",
+    ),
+    "ko": (
+        r"관심을 표(?:현|명)하고자 (?:이 글을 )?씁니다",
+        r"(?:깊은|강한|진심 어린) 관심을 표(?:현|명)",
+        r"(?:기회를 주시면|논의할 수 있다면) 감사하겠습니다",
+        r"즉시 기여할 준비가 되어 있습니다",
+        r"채용 담당자님께",
+        r"친애하는 (?:귀하|담당자)",
+        r"경구|올림",
+        r"고려해 주셔서 감사합니다",
+        r"(?:답변을|면접을|논의를) 기다리겠습니다",
+        r"지원하고자 (?:이 글을 )?씁니다",
+        r"(?:직책|포지션)에 지원합니다",
+    ),
+    "vi": (
+        r"viết (?:thư này )?để bày tỏ",
+        r"bày tỏ (?:sự quan tâm|niềm đam mê) (?:sâu sắc|chân thành)?",
+        r"rất mong (?:có cơ hội|được thảo luận|trao đổi)",
+        r"sẵn sàng đóng góp ngay lập tức",
+        r"\bkính gửi (?:nhà tuyển dụng|bộ phận nhân sự)\b",
+        r"\bkính thưa (?:ông|bà)\b",
+        r"\btrân trọng,",
+        r"\bkính thư\b",
+        r"cảm ơn (?:quý công ty|anh\/chị) đã xem xét",
+        r"mong (?:sớm nhận được phản hồi|được trao đổi thêm)",
+        r"viết thư này để ứng tuyển",
+        r"tôi xin ứng tuyển (?:vào vị trí|cho vị trí)",
+    ),
+    "th": (
+        r"เขียนจดหมายฉบับนี้เพื่อแสดง",
+        r"แสดงความสนใจ(?:อย่างยิ่ง|อย่างแท้จริง)?",
+        r"ยินดีเป็นอย่างยิ่ง(?:หากมีโอกาส|ที่จะได้พูดคุย)",
+        r"พร้อมที่จะร่วมงานได้ทันที",
+        r"เรียน ฝ่ายทรัพยากรบุคคล",
+        r"เรียน คุณ",
+        r"ขอแสดงความนับถือ",
+        r"ด้วยความเคารพอย่างสูง",
+        r"ขอขอบคุณที่ให้ความพิจารณา",
+        r"หวังว่าจะได้รับการติดต่อกลับ",
+        r"เขียนจดหมายฉบับนี้เพื่อสมัคร",
+        r"ขอสมัครตำแหน่ง",
+    ),
+    "id": (
+        r"menulis (?:surat ini )?untuk menyatakan",
+        r"menyatakan minat (?:saya )?(?:yang besar|yang tulus)?",
+        r"akan (?:sangat )?senang (?:menyambut kesempatan|mendiskusikan)",
+        r"siap berkontribusi segera",
+        r"\byang terhormat (?:manajer perekrutan|hrd)\b",
+        r"\byang terhormat (?:bapak|ibu)\b",
+        r"\bhormat saya,",
+        r"\bsalam hormat\b",
+        r"terima kasih atas pertimbangan(?:nya)?",
+        r"menantikan (?:kabar|kesempatan berdiskusi|wawancara)",
+        r"menulis surat ini untuk melamar",
+        r"saya mengajukan lamaran untuk posisi",
+    ),
+}
+
+_LETTER_FORMULA_RE_BY_LANG: dict[str, re.Pattern] = {
+    lang: re.compile("|".join(formulas), re.I)
+    for lang, formulas in _LETTER_FORMULAS_BY_LANG.items()
+}
+
 _LETTER_MATCH_THRESHOLD = 2
+
+
+def _letter_formula_re(language: str) -> re.Pattern:
+    """The compiled letter-formula pattern for ``language``.
+
+    Falls back to the English pattern for any language not yet in the catalog — a
+    partial guard (still catching literal English letter idioms) beats no guard at all.
+    """
+    return _LETTER_FORMULA_RE_BY_LANG.get(language, _LETTER_FORMULA_RE_BY_LANG["en"])
 
 # Names that mark a summary/profile section. Used by the (soft) summary nudge in the
 # self-heal loop via cv_has_summary() — NOT a hard schema gate (a missing summary is
@@ -353,13 +646,19 @@ class CVDocument(_Loose):
         return self
 
     @model_validator(mode="after")
-    def _not_a_cover_letter(self) -> "CVDocument":
+    def _not_a_cover_letter(self, info: ValidationInfo) -> "CVDocument":
         # Content-kind guard: the cv_adjust stage must produce a résumé, not a letter. The
         # model has been observed to emit cover-letter prose into the CV shape; separate
         # per-stage schemas don't catch that (the letter satisfies "contact + ≥1 section").
         # Letter formulas (not sentiment words) in the CV text are the tell. Two+ matches is
         # decisive → reject → self-heal → fail if uncorrected (corruption, not thinness).
-        hits = _LETTER_FORMULA_RE.findall(_cv_text_blob(self.sections))
+        #
+        # Per-language: the formula list is selected via ``info.context["language"]`` (a
+        # pipeline output may be in any configured language), defaulting to English when no
+        # context is supplied (e.g. the CV Structure Editor / infer_structure call sites,
+        # which don't carry a pipeline language concept).
+        language = (info.context or {}).get("language", "en")
+        hits = _letter_formula_re(language).findall(_cv_text_blob(self.sections))
         if len(hits) >= _LETTER_MATCH_THRESHOLD:
             sample = ", ".join(sorted({h.lower() for h in hits})[:3])
             raise ValueError(

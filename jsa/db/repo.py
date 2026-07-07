@@ -42,7 +42,8 @@ async def upsert_job(session: AsyncSession, job_data: dict) -> Job:
 
     If the job exists: update fields that can change (jd, jd_hash, tier, link).
     Do NOT overwrite state/current_stage/session_external_id/error.
-    If new: insert with state=pending, all fields from job_data.
+    If new: insert with state=queued (parked; requires an explicit LAUNCH — see
+    ARCH.md "Manual job launch"), all fields from job_data.
     """
     job_id = job_data["id"]
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -59,7 +60,7 @@ async def upsert_job(session: AsyncSession, job_data: dict) -> Job:
             jd=job_data["jd"],
             jd_hash=job_data["jd_hash"],
             cv_text=job_data.get("cv_text", ""),
-            state=JobState.pending,
+            state=JobState.queued,
             current_stage=None,
             session_external_id=None,
             error=None,

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { JobState } from "../types";
+import { useT } from "../i18n/useT";
+import { useOutsideClick } from "../hooks/useOutsideClick";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase, cornerMarks } from "../theme/chrome";
 import { Icon } from "../theme/Icon";
@@ -61,6 +63,7 @@ export function Header() {
   const [backendState, setBackendState] = useState<BackendState>({ status: "loading" });
   const [backendMenuOpen, setBackendMenuOpen] = useState(false);
   const backendMenuRef = useRef<HTMLDivElement>(null);
+  const t = useT();
 
   useEffect(() => {
     api
@@ -97,16 +100,7 @@ export function Header() {
   }, [lastBackendSwitch]);
 
   // Close the backend dropdown when clicking outside of it.
-  useEffect(() => {
-    if (!backendMenuOpen) return;
-    function onMouseDown(e: MouseEvent) {
-      if (backendMenuRef.current && !backendMenuRef.current.contains(e.target as Node)) {
-        setBackendMenuOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [backendMenuOpen]);
+  useOutsideClick(backendMenuRef, backendMenuOpen, () => setBackendMenuOpen(false));
 
   const jobList = Object.values(jobs);
 
@@ -135,10 +129,10 @@ export function Header() {
 
   const uplink =
     wsStatus === "open"
-      ? { label: "UPLINK: SYNCED", color: T.accent2 }
+      ? { label: t("header.uplinkSynced"), color: T.accent2 }
       : wsStatus === "connecting"
-      ? { label: "UPLINK: RECONNECTING", color: T.a }
-      : { label: "UPLINK: LOST", color: T.danger };
+      ? { label: t("header.uplinkReconnecting"), color: T.a }
+      : { label: t("header.uplinkLost"), color: T.danger };
 
   return (
     <header
@@ -164,7 +158,7 @@ export function Header() {
           type="button"
           className="jghost"
           onClick={() => setEditorOpen(true)}
-          title="Open the CV Structure Editor"
+          title={t("header.openEditorTitle")}
           style={{
             display: "flex",
             alignItems: "center",
@@ -221,7 +215,7 @@ export function Header() {
             type="button"
             className="jghost"
             onClick={() => setBackendMenuOpen((open) => !open)}
-            title="Active backend / failover queue"
+            title={t("header.backendMenuTitle")}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -238,7 +232,7 @@ export function Header() {
               <Icon name="server" size={13} />
             </span>
             <span style={{ font: `500 10.5px ${T.mono}`, color: T.ink3, letterSpacing: ".06em" }}>
-              BACKEND
+              {t("header.backendLabel")}
             </span>
             {backendState.status === "ok" && (
               <>
@@ -299,7 +293,7 @@ export function Header() {
                   padding: "5px 9px 7px",
                 }}
               >
-                BACKEND FAILOVER QUEUE
+                {t("header.backendFailoverQueue")}
               </div>
               {backendState.list.map((id, i) => {
                 const isActive = i === 0;
@@ -346,7 +340,7 @@ export function Header() {
                       {backendLabel(id)}
                     </span>
                     <span style={{ font: `500 9px ${T.mono}`, color, letterSpacing: ".05em" }}>
-                      {isActive ? "ACTIVE" : "STANDBY"}
+                      {isActive ? t("header.active") : t("header.standby")}
                     </span>
                   </div>
                 );
@@ -360,7 +354,7 @@ export function Header() {
                   marginTop: 3,
                 }}
               >
-                On repeated failure, the daemon fails over to the next backend in this order.
+                {t("header.failoverExplain")}
               </div>
             </div>
           )}
@@ -379,7 +373,7 @@ export function Header() {
         >
           <Icon name="bolt" size={12} color={T.a} />
           <span style={{ font: `500 10px ${T.mono}`, color: T.ink3, letterSpacing: ".06em" }}>
-            WORKERS
+            {t("header.workersLabel")}
           </span>
           <div style={{ display: "flex", gap: 2 }}>
             {Array.from({ length: 5 }, (_, i) => (
@@ -398,10 +392,10 @@ export function Header() {
           <span style={{ font: `500 10px ${T.mono}`, color: T.ink2 }}>{workers}/5</span>
         </div>
 
-        <CountChip label="INBOX" count={inbox} color={T.a} />
-        <CountChip label="REVIEW" count={review} color={T.violet} />
-        <CountChip label="DONE" count={done} color={T.green} />
-        <CountChip label="FAILED" count={failed} color={T.danger} />
+        <CountChip label={t("header.inboxLabel")} count={inbox} color={T.a} />
+        <CountChip label={t("header.reviewLabel")} count={review} color={T.violet} />
+        <CountChip label={t("header.doneLabel")} count={done} color={T.green} />
+        <CountChip label={t("header.failedLabel")} count={failed} color={T.danger} />
       </div>
 
       {/* Right: UPLINK status + hard reload */}
@@ -438,7 +432,7 @@ export function Header() {
           onClick={() => {
             void nuclearReload();
           }}
-          title="Hard reload — clears all browser caches and reloads"
+          title={t("header.hardReloadTitle")}
           style={{
             display: "inline-flex",
             alignItems: "center",

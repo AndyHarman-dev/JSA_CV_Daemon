@@ -6,6 +6,7 @@ import { StageTimeline } from "./StageTimeline";
 import { FollowUpPane } from "./FollowUpPane";
 import { ReviewPane } from "./ReviewPane";
 import { UnfitModal } from "./UnfitModal";
+import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase, cornerMarks } from "../theme/chrome";
 import { Icon } from "../theme/Icon";
@@ -69,6 +70,7 @@ export function JobDetail() {
   const [retryError, setRetryError] = useState<string | null>(null);
   const [showNuclearConfirm, setShowNuclearConfirm] = useState(false);
   const [jdOpen, setJdOpen] = useState(false);
+  const t = useT();
 
   if (selectedId === undefined || job === undefined) {
     return (
@@ -90,7 +92,7 @@ export function JobDetail() {
             cursor: "pointer",
           }}
         >
-          <Icon name="back" size={13} /> Back
+          <Icon name="back" size={13} /> {t("jobDetail.back")}
         </button>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ textAlign: "center", color: T.ink3 }}>
@@ -109,9 +111,9 @@ export function JobDetail() {
               <Icon name="work" size={22} />
             </div>
             <div style={{ font: `600 14px ${T.disp}`, letterSpacing: ".04em", color: T.ink2 }}>
-              NO PROCESS SELECTED
+              {t("jobDetail.noProcessSelected")}
             </div>
-            <div style={{ font: `400 11.5px ${T.mono}`, marginTop: 6 }}>← choose a job from the queue</div>
+            <div style={{ font: `400 11.5px ${T.mono}`, marginTop: 6 }}>{t("jobDetail.chooseJobHint")}</div>
           </div>
         </div>
       </div>
@@ -120,7 +122,7 @@ export function JobDetail() {
 
   async function handleDelete() {
     if (!job) return;
-    if (!window.confirm("Permanently delete this job and all its data? This cannot be undone.")) return;
+    if (!window.confirm(t("jobDetail.confirmDeleteMessage"))) return;
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -220,7 +222,7 @@ export function JobDetail() {
           cursor: "pointer",
         }}
       >
-        <Icon name="back" size={13} /> Back
+        <Icon name="back" size={13} /> {t("jobDetail.back")}
       </button>
 
       {/* Header */}
@@ -239,13 +241,13 @@ export function JobDetail() {
             padding: "3px 7px",
           }}
         >
-          TIER {job.tier}
+          {t("jobDetail.tierLabel", { tier: job.tier })}
         </span>
         <StatusBadge state={job.state} />
         <div style={{ display: "flex", gap: 7, marginLeft: "auto", flexWrap: "wrap" }}>
           {showRetry && (
             <ActionBtn
-              label={retrying ? "Retrying…" : "Retry"}
+              label={retrying ? t("jobDetail.retrying") : t("jobDetail.retry")}
               icon="refresh"
               disabled={retrying}
               onClick={() => {
@@ -257,7 +259,7 @@ export function JobDetail() {
           )}
           {showRequeue && (
             <ActionBtn
-              label={requeuing ? "Re-queuing…" : "Re-queue"}
+              label={requeuing ? t("jobDetail.requeuing") : t("jobDetail.requeue")}
               icon="refresh"
               disabled={requeuing}
               onClick={() => {
@@ -269,7 +271,7 @@ export function JobDetail() {
           )}
           {showDismiss && (
             <ActionBtn
-              label={dismissing ? "Dismissing…" : "Dismiss"}
+              label={dismissing ? t("jobDetail.dismissing") : t("jobDetail.dismiss")}
               icon="x"
               danger
               disabled={dismissing}
@@ -282,7 +284,7 @@ export function JobDetail() {
           )}
           {showCancel && (
             <ActionBtn
-              label={deleting ? "Deleting…" : "Delete"}
+              label={deleting ? t("jobDetail.deleting") : t("jobDetail.delete")}
               icon="trash"
               danger
               disabled={deleting}
@@ -309,15 +311,15 @@ export function JobDetail() {
           }}
         >
           <div style={{ font: `500 13px ${T.ui}`, color: T.ink }}>
-            This will permanently wipe all progress for this job and restart from scratch.
+            {t("jobDetail.nuclearWarning")}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <ActionBtn
-              label="Yes, restart"
+              label={t("jobDetail.yesRestart")}
               danger
               onClick={() => { handleNuclearConfirm().catch(console.error); }}
             />
-            <ActionBtn label="Cancel" onClick={() => setShowNuclearConfirm(false)} />
+            <ActionBtn label={t("jobDetail.cancel")} onClick={() => setShowNuclearConfirm(false)} />
           </div>
         </div>
       )}
@@ -417,10 +419,10 @@ export function JobDetail() {
           </span>
           <div>
             <div style={{ font: `600 11px ${T.mono}`, color: T.danger, letterSpacing: ".06em", marginBottom: 3 }}>
-              EXCEPTION
+              {t("jobDetail.exceptionLabel")}
             </div>
             <div style={{ font: `400 13px/1.5 ${T.ui}`, color: T.ink }}>
-              {job.error || "An unknown error occurred."}
+              {job.error || t("jobDetail.unknownError")}
             </div>
           </div>
         </div>

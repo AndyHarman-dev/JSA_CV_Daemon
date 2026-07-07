@@ -128,9 +128,15 @@ def _job_data(
 
 
 async def _insert_job(session: AsyncSession, **overrides) -> Job:
-    """Insert a job via upsert_job and commit."""
+    """Insert a job via upsert_job and commit.
+
+    upsert_job creates fresh jobs as `queued` (parked pending LAUNCH); this
+    fixture simulates an already-launched job so downstream transition()
+    calls (running, etc.) match this file's expectations.
+    """
     data = _job_data(**overrides)
     job = await repo.upsert_job(session, data)
+    job.state = JobState.pending
     await session.commit()
     return job
 

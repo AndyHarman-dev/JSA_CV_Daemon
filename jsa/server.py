@@ -18,6 +18,7 @@ from jsa.events.bus import bus
 from jsa.api.routes_cv_structure import router as cv_structure_router
 from jsa.api.routes_jobs import router as jobs_router
 from jsa.api.routes_meta import router as meta_router
+from jsa.api.routes_preferences import router as preferences_router
 from jsa.api.ws import router as ws_router
 from jsa.pipeline.orchestrator import Orchestrator
 from jsa.agents.registry import backend_for
@@ -103,6 +104,7 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
             settings.backends,
             output_dir=settings.output_dir,
             cv_structure_path=settings.cv_structure_path,
+            preferences_path=settings.preferences_path,
         )
         app.state.orchestrator = orchestrator
 
@@ -128,6 +130,7 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
     app.include_router(meta_router)
     app.include_router(jobs_router)
     app.include_router(cv_structure_router)
+    app.include_router(preferences_router)
     app.include_router(ws_router)
 
     # Serve built frontend bundle if present.

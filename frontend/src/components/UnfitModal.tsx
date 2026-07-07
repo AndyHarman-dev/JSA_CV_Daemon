@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { JobDTO } from "../types";
+import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase, cornerMarks } from "../theme/chrome";
 import { Icon } from "../theme/Icon";
@@ -22,6 +23,7 @@ export function UnfitModal({ job }: UnfitModalProps) {
   const refetchAll = useStore((s) => s.refetchAll);
   const [busy, setBusy] = useState<null | "dismiss" | "ignore">(null);
   const [error, setError] = useState<string | null>(null);
+  const t = useT();
 
   async function run(action: "dismiss" | "ignore") {
     setBusy(action);
@@ -69,7 +71,7 @@ export function UnfitModal({ job }: UnfitModalProps) {
             <Icon name="alert" size={18} />
           </span>
           <div style={{ font: `600 16px ${T.disp}`, color: T.ink, letterSpacing: ".02em" }}>
-            FIT_ASSESSMENT: MISMATCH
+            {t("unfitModal.title")}
           </div>
         </div>
         <div style={{ font: `400 11.5px ${T.mono}`, color: T.ink3, marginBottom: 14 }}>
@@ -85,11 +87,11 @@ export function UnfitModal({ job }: UnfitModalProps) {
             marginBottom: 14,
           }}
         >
-          {job.fit_reason || "The assessment flagged a significant mismatch."}
+          {job.fit_reason || t("unfitModal.defaultReason")}
         </div>
 
         <p style={{ font: `400 13px/1.5 ${T.ui}`, color: T.ink2, margin: "0 0 18px" }}>
-          Dismiss this job, or override the assessment and tailor your application anyway.
+          {t("unfitModal.explain")}
         </p>
 
         {error && <p style={{ font: `400 13px ${T.ui}`, color: T.danger, marginBottom: 12 }}>{error}</p>}
@@ -117,7 +119,7 @@ export function UnfitModal({ job }: UnfitModalProps) {
               opacity: busy !== null ? 0.5 : 1,
             }}
           >
-            {busy === "ignore" ? "Continuing…" : "Ignore & Continue"}
+            {busy === "ignore" ? t("unfitModal.continuing") : t("unfitModal.ignoreAndContinue")}
           </button>
           <button
             type="button"
@@ -141,7 +143,7 @@ export function UnfitModal({ job }: UnfitModalProps) {
               opacity: busy !== null ? 0.5 : 1,
             }}
           >
-            {busy === "dismiss" ? "Dismissing…" : "Dismiss Job"}
+            {busy === "dismiss" ? t("unfitModal.dismissing") : t("unfitModal.dismissJob")}
           </button>
         </div>
       </div>

@@ -2,6 +2,7 @@
 // ported from the design handoff's `chamferPath`/`panelBase`/`cornerMarks`/`badge`.
 import type { CSSProperties, ReactNode } from "react";
 import type { JobState } from "../types";
+import { useT } from "../i18n/useT";
 import type { Theme } from "./tokens";
 
 export function chamferPath(c: number): string {
@@ -54,24 +55,44 @@ export interface StateMeta {
 
 // State -> {label, code, color, spin} map (the design's STATE_META). `color` is a function
 // of the theme so the badge glows the right accent on whichever surface renders a job
-// (only the Jobs shell does today, but JobState is shared so this lives here).
+// (only the Jobs shell does today, but JobState is shared so this lives here). `label` is a
+// translation key (resolved by the caller via `useT()`, since this is a plain function, not
+// a component, and can't call hooks itself) — `code` stays a literal terminal-style
+// abbreviation, intentional HUD flavor rather than user-facing prose.
 export function stateMeta(T: Theme): Record<JobState, StateMeta> {
   return {
-    pending: { label: "PENDING", code: "STDBY", color: T.ink2 },
-    running: { label: "RUNNING", code: "PROC", color: T.accent2, spin: true },
-    awaiting_input: { label: "NEEDS INPUT", code: "WAIT", color: T.a },
-    fit_done: { label: "ASSESSED", code: "CHK", color: T.accent2 },
-    unfit: { label: "NEEDS REVIEW", code: "FLAG", color: T.a },
-    cv_done: { label: "CV DONE", code: "CV_OK", color: T.accent2 },
-    cl_done: { label: "CL DONE", code: "CL_OK", color: T.accent2 },
-    review: { label: "REVIEW", code: "RVW", color: T.violet },
-    approved: { label: "APPROVED", code: "DONE", color: T.green },
-    failed: { label: "FAILED", code: "ERR", color: T.danger },
-    dismissed: { label: "DISMISSED", code: "OFF", color: T.ink3 },
+    queued: { label: "stateMeta.queued", code: "PARK", color: T.ink3 },
+    pending: { label: "stateMeta.pending", code: "STDBY", color: T.ink2 },
+    running: { label: "stateMeta.running", code: "PROC", color: T.accent2, spin: true },
+    awaiting_input: { label: "stateMeta.awaitingInput", code: "WAIT", color: T.a },
+    fit_done: { label: "stateMeta.fitDone", code: "CHK", color: T.accent2 },
+    unfit: { label: "stateMeta.unfit", code: "FLAG", color: T.a },
+    cv_done: { label: "stateMeta.cvDone", code: "CV_OK", color: T.accent2 },
+    cl_done: { label: "stateMeta.clDone", code: "CL_OK", color: T.accent2 },
+    review: { label: "stateMeta.review", code: "RVW", color: T.violet },
+    approved: { label: "stateMeta.approved", code: "DONE", color: T.green },
+    failed: { label: "stateMeta.failed", code: "ERR", color: T.danger },
+    dismissed: { label: "stateMeta.dismissed", code: "OFF", color: T.ink3 },
   };
 }
 
+export function Spinner({ color, size = 6 }: { color: string; size?: number }) {
+  return (
+    <span
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size,
+        border: `1.5px solid ${color}`,
+        borderTopColor: "transparent",
+        animation: "jsspin .7s linear infinite",
+      }}
+    />
+  );
+}
+
 export function Badge({ T, state, className }: { T: Theme; state: JobState; className?: string }) {
+  const t = useT();
   const m = stateMeta(T)[state];
   return (
     <span
@@ -91,20 +112,11 @@ export function Badge({ T, state, className }: { T: Theme; state: JobState; clas
       }}
     >
       {m.spin ? (
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 6,
-            border: `1.5px solid ${m.color}`,
-            borderTopColor: "transparent",
-            animation: "jsspin .7s linear infinite",
-          }}
-        />
+        <Spinner color={m.color} />
       ) : (
         <span style={{ width: 5, height: 5, borderRadius: 5, background: m.color, boxShadow: `0 0 5px ${m.color}` }} />
       )}
-      {m.label}
+      {t(m.label)}
     </span>
   );
 }

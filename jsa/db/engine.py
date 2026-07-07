@@ -50,6 +50,11 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN fit_reason TEXT"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # language: snapshot of the global language pref, set on launch.
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN language VARCHAR(8)"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 // with lightweight syntax highlighting. Updates on every edit; copy + close controls.
 import { useState } from "react";
 import { exportJson, useEditorStore } from "../../editorStore";
+import { useT } from "../../i18n/useT";
 import { Icon } from "../../theme/Icon";
 import { EDITOR_THEME } from "../../theme/tokens";
 
@@ -29,6 +30,7 @@ export function JsonDrawer() {
   const cv = useEditorStore((s) => s.cv);
   const toggleJson = useEditorStore((s) => s.toggleJson);
   const [copied, setCopied] = useState(false);
+  const t = useT();
   if (!cv) return null;
 
   const text = JSON.stringify(exportJson(cv), null, 2);
@@ -53,19 +55,19 @@ export function JsonDrawer() {
             <Icon name="braces" size={16} />
           </span>
           <div>
-            <div style={{ font: `600 13px ${T.disp}`, color: T.ink, letterSpacing: ".03em" }}>SOURCE.JSON</div>
+            <div style={{ font: `600 13px ${T.disp}`, color: T.ink, letterSpacing: ".03em" }}>{t("jsonDrawer.title")}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 5, font: `500 10px ${T.mono}`, color: T.ink3, letterSpacing: ".04em" }}>
               <span
                 style={{ width: 6, height: 6, borderRadius: 6, background: T.accent2, boxShadow: `0 0 6px ${T.accent2}`, animation: "cyblink 2s ease-in-out infinite" }}
               />
-              LIVE · READ-ONLY · SCHEMA-VALID
+              {t("jsonDrawer.subtitle")}
             </div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 2 }}>
           <button
             type="button"
-            title="Copy JSON"
+            title={t("jsonDrawer.copyTitle")}
             onClick={() => {
               void navigator.clipboard?.writeText(text);
               setCopied(true);
@@ -78,7 +80,7 @@ export function JsonDrawer() {
           </button>
           <button
             type="button"
-            title="Close"
+            title={t("jsonDrawer.closeTitle")}
             onClick={toggleJson}
             className="cvbtn"
             style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, border: "none", background: "transparent", color: T.ink2, borderRadius: T.btnRadius, cursor: "pointer", padding: 0 }}
@@ -87,7 +89,7 @@ export function JsonDrawer() {
           </button>
         </div>
       </div>
-      {copied && <div style={{ padding: "4px 14px 0", font: `400 11px ${T.ui}`, color: T.accent2 }}>Copied</div>}
+      {copied && <div style={{ padding: "4px 14px 0", font: `400 11px ${T.ui}`, color: T.accent2 }}>{t("jsonDrawer.copiedLabel")}</div>}
       <pre
         style={{ margin: 0, flex: 1, overflow: "auto", padding: "14px 16px", font: `400 12px/1.6 ${T.mono}`, color: T.ink, whiteSpace: "pre", tabSize: 2 }}
         dangerouslySetInnerHTML={{ __html: highlight(text) }}

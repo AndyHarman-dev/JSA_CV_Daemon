@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { FollowUpDTO } from "../types";
 import { ChatBox } from "./ChatBox";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase } from "../theme/chrome";
 import { Icon } from "../theme/Icon";
@@ -17,6 +18,7 @@ export function FollowUpPane({ jobId }: Props) {
   const [followUp, setFollowUp] = useState<FollowUpDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const t = useT();
 
   const fetchFollowUp = useCallback(async () => {
     setLoading(true);
@@ -40,7 +42,7 @@ export function FollowUpPane({ jobId }: Props) {
 
   if (loading) {
     return (
-      <div style={{ font: `400 13px ${T.ui}`, color: T.ink3 }}>Loading follow-up…</div>
+      <div style={{ font: `400 13px ${T.ui}`, color: T.ink3 }}>{t("followUpPane.loading")}</div>
     );
   }
 
@@ -67,7 +69,7 @@ export function FollowUpPane({ jobId }: Props) {
   if (followUp === null) {
     return (
       <div style={{ font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: "italic" }}>
-        Waiting for follow-up data…
+        {t("followUpPane.waiting")}
       </div>
     );
   }

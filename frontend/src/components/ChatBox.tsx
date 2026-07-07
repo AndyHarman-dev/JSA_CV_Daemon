@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
+import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { Icon } from "../theme/Icon";
 import { panelBase } from "../theme/chrome";
@@ -48,6 +49,7 @@ export function ChatBox(props: ChatBoxProps) {
 
   const scratchEntries = useScratchStore((s) => s.entries);
   const sortedEntries = sortEntries(scratchEntries);
+  const t = useT();
 
   // Anchor point for the dropdown: tracked globally so it's available the instant the
   // mention becomes active, independent of where the textarea's own events fire.
@@ -60,8 +62,8 @@ export function ChatBox(props: ChatBoxProps) {
   }, []);
 
   const placeholder =
-    props.kind === "answer" ? "Type your answer…" : "Describe the revision you want…";
-  const buttonLabel = props.kind === "answer" ? "SUBMIT_ANSWER" : "REQUEST_REVISION";
+    props.kind === "answer" ? t("chatBox.answerPlaceholder") : t("chatBox.revisePlaceholder");
+  const buttonLabel = props.kind === "answer" ? t("chatBox.submitAnswer") : t("chatBox.requestRevision");
 
   function handleDraftChange(e: SyntheticEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget;
@@ -162,8 +164,8 @@ export function ChatBox(props: ChatBoxProps) {
             color: T.ink,
           }}
         >
-          <option value="cv">CV / Resume</option>
-          <option value="cl">Cover Letter</option>
+          <option value="cv">{t("chatBox.cvOption")}</option>
+          <option value="cl">{t("chatBox.clOption")}</option>
         </select>
       )}
       {error && <p style={{ font: `400 12.5px ${T.ui}`, color: T.danger, margin: 0 }}>{error}</p>}
@@ -194,7 +196,7 @@ export function ChatBox(props: ChatBoxProps) {
           }}
         >
           <Icon name="send" size={13} />
-          {submitting ? "Submitting…" : buttonLabel}
+          {submitting ? t("chatBox.submitting") : buttonLabel}
         </button>
       </div>
     </div>
@@ -213,6 +215,7 @@ function MentionDropdown({
   entries: ScratchEntry[];
   onSelect: (entry: ScratchEntry) => void;
 }) {
+  const t = useT();
   const w = 272;
   const maxH = 320;
   const left = Math.min(Math.max(8, pos.x), window.innerWidth - w - 8);
@@ -258,7 +261,7 @@ function MentionDropdown({
           SCRATCH_BUFFER
         </span>
         <span style={{ marginLeft: "auto", font: `400 9px ${T.mono}`, color: T.ink3 }}>
-          @ to paste
+          {t("chatBox.mentionHint")}
         </span>
       </div>
       <div style={{ overflow: "auto", flex: 1, minHeight: 0 }}>
@@ -305,7 +308,7 @@ function MentionDropdown({
               textAlign: "center",
             }}
           >
-            No notes in buffer.
+            {t("chatBox.noNotesInBuffer")}
           </div>
         )}
       </div>

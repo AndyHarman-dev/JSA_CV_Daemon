@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { useStore } from "../store";
 import { JobList } from "../components/JobList";
@@ -189,6 +189,41 @@ describe("JobList", () => {
     const btn = screen.getByText("Other Co").closest("button");
     expect(btn).not.toBeNull();
     expect(btn).toHaveStyle({ background: "transparent" });
+  });
+
+  it("shows a queued job under its own 'Queued — Not Started' section with a LAUNCH control", () => {
+    const job = makeJob({ id: "j1", state: "queued", company: "Fresh Co", role: "Grad" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    groupHeader("Queued — Not Started");
+    expect(screen.getByText("Fresh Co")).toBeInTheDocument();
+    // The LAUNCH pill replaces the usual StatusBadge for a queued row.
+    expect(screen.getByText("LAUNCH")).toBeInTheDocument();
+    expect(screen.queryByText("QUEUED")).not.toBeInTheDocument();
+  });
+
+  it("a single queued job does not show the Launch All action", () => {
+    const job = makeJob({ id: "j1", state: "queued", company: "Solo Co", role: "Dev" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.queryByText("LAUNCH ALL")).not.toBeInTheDocument();
+  });
+
+  it("multiple queued jobs show a Launch All action that calls store.launchAll", () => {
+    const launchAll = vi.fn().mockResolvedValue(undefined);
+    const job1 = makeJob({ id: "j1", state: "queued", company: "Co A", role: "Dev" });
+    const job2 = makeJob({ id: "j2", state: "queued", company: "Co B", role: "Eng" });
+    useStore.setState({ jobs: { j1: job1, j2: job2 }, launchAll });
+
+    render(<JobList />);
+
+    const btn = screen.getByText("LAUNCH ALL");
+    fireEvent.click(btn);
+    expect(launchAll).toHaveBeenCalledTimes(1);
   });
 
   it("jobs are grouped correctly when multiple states are present", () => {

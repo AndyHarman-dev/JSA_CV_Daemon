@@ -101,9 +101,10 @@ def _make_job(**overrides) -> Job:
 
 
 async def _insert_job(session: AsyncSession, **overrides) -> Job:
-    """Insert a job using upsert_job and commit."""
+    """Insert a job using upsert_job, launch it (queued → pending), and commit."""
     data = _job_data(**overrides)
     job = await repo.upsert_job(session, data)
+    job.state = JobState.pending
     await session.commit()
     return job
 

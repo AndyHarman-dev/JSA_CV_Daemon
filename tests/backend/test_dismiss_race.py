@@ -76,6 +76,7 @@ async def _insert_running_job(factory, stage: Stage = Stage.cv_adjust):
     (orchestrator.py: transition(db_job, JobState.running, stage))."""
     async with factory() as s:
         job = await repo.upsert_job(s, _job_data())
+        job.state = JobState.pending  # simulate LAUNCH (queued → pending) before dispatch
         await repo.checkpoint(s, job, JobState.running, stage)
         await s.commit()
     return job

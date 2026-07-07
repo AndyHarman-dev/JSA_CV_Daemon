@@ -12,6 +12,7 @@
 // tokens/icons instead of the reference's hardcoded hex values. See that README for the
 // full behavior spec.
 import { useEffect, useRef, useState } from "react";
+import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { chamferPath } from "../theme/chrome";
 import { Icon, Grip } from "../theme/Icon";
@@ -48,6 +49,7 @@ export function ScratchBuffer() {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+  const t = useT();
 
   useEffect(() => {
     load();
@@ -136,7 +138,7 @@ export function ScratchBuffer() {
       <button
         type="button"
         onClick={openWindow}
-        title="Scratch buffer (⌘ + Space)"
+        title={t("scratchBuffer.orbTitle")}
         style={{
           position: "fixed",
           right: 22,
@@ -236,7 +238,7 @@ export function ScratchBuffer() {
               type="button"
               className="jbtn"
               onClick={() => setOpen(false)}
-              title="Minimize"
+              title={t("scratchBuffer.minimizeTitle")}
               style={{
                 border: "none",
                 background: "transparent",
@@ -271,7 +273,7 @@ export function ScratchBuffer() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") commitDraft();
               }}
-              placeholder="quick note… (Enter to log)"
+              placeholder={t("scratchBuffer.notePlaceholder")}
               style={{
                 flex: 1,
                 border: "none",
@@ -315,7 +317,7 @@ export function ScratchBuffer() {
                   textAlign: "center",
                 }}
               >
-                No notes yet — type above.
+                {t("scratchBuffer.emptyState")}
               </div>
             )}
           </div>
@@ -329,7 +331,7 @@ export function ScratchBuffer() {
               flex: "none",
             }}
           >
-            Persists across all jobs · ⌘+Space to toggle
+            {t("scratchBuffer.footer")}
           </div>
         </div>
       )}
@@ -346,6 +348,7 @@ function ScratchRow({
   onTogglePin: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <div
       className="jrow"
@@ -374,7 +377,7 @@ function ScratchRow({
         type="button"
         className="jbtn"
         onClick={() => onTogglePin(entry.id)}
-        title="Pin"
+        title={t("scratchBuffer.pinTitle")}
         style={{
           border: "none",
           background: "transparent",
@@ -390,7 +393,7 @@ function ScratchRow({
         type="button"
         className="jbtn"
         onClick={() => onDelete(entry.id)}
-        title="Delete"
+        title={t("scratchBuffer.deleteTitle")}
         style={{
           border: "none",
           background: "transparent",

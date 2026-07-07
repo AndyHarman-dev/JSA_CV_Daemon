@@ -99,6 +99,7 @@ def main(
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser on start", is_flag=True),
     dev_tunnel: bool = typer.Option(False, "--dev-tunnel", help="Start a cloudflared quick tunnel for remote/phone access. WARNING: exposes the unauthenticated API publicly — dev use only."),
     dev_auto: bool = typer.Option(False, "--dev-auto", help="Dev-only: auto-answer NEED_INPUT gates via DEV_ANSWERS.json pattern matching.", is_flag=True),
+    select_language: bool = typer.Option(False, "--select-language", help="Show a full-screen language picker + boot sequence before the dashboard on first run.", is_flag=True),
 ) -> None:
     """Run JSA: process a CSV of job listings with a CV file."""
     # Validate --csv extension
@@ -147,6 +148,8 @@ def main(
         overrides["no_browser"] = True
     if dev_auto:
         overrides["dev_autoanswer"] = True
+    if select_language:
+        overrides["select_language"] = True
 
     settings = Settings(**overrides)
     # Resolve to absolute path now so file-serving works regardless of where

@@ -17,6 +17,20 @@ interface Store {
   // Most recent `backend_switched` WS event — additive signal so surfaces (e.g. Header's
   // backend cluster) can react without changing applyEvent's per-type behavior for others.
   lastBackendSwitch: BackendSwitchEvent | null;
+  // Global output/UI language preference (ISO 639-1 code). Hydrated from GET /api/preferences
+  // on app boot; every component rendering translatable chrome reads this via useT().
+  language: string;
+  languages: [string, string, string][];
+  // --select-language boot gate (jsa/config.py Settings.select_language, surfaced via
+  // /api/config). When true, App.tsx mounts BootGate before the dashboard on first load.
+  selectLanguageMode: boolean;
+  bootStage: "lang" | "boot" | "app";
+  bootLang: string; // the picker's in-progress selection, defaults to the current `language`
+  // False until hydrateLanguage's /api/config round-trip resolves (or fails). App.tsx keeps
+  // the screen blank until this flips — otherwise the dashboard would paint for one frame
+  // before selectLanguageMode is known, flashing behind the boot gate on a --select-language
+  // cold load (the exact case the gate exists to prevent).
+  configReady: boolean;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setWsStatus(s: Store["wsStatus"]): void;
@@ -24,6 +38,13 @@ interface Store {
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
   removeJob(id: string): void;
+  hydrateLanguage(): Promise<void>;
+  setLanguage(code: string): Promise<boolean>;
+  setBootStage(stage: Store["bootStage"]): void;
+  setBootLang(code: string): void;
+  // --- Manual job launch (jobs are parked as `queued` until explicitly launched) ---
+  launchJob(id: string): Promise<void>;
+  launchAll(): Promise<void>;
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -32,6 +53,12 @@ export const useStore = create<Store>((set, get) => ({
   wsStatus: "connecting",
   editorOpen: false,
   lastBackendSwitch: null,
+  language: "en",
+  languages: [],
+  selectLanguageMode: false,
+  bootStage: "app",
+  bootLang: "en",
+  configReady: false,
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -114,6 +141,80 @@ export const useStore = create<Store>((set, get) => ({
       });
     } catch (err) {
       console.error("refetchAll error:", err);
+    }
+  },
+
+  async hydrateLanguage() {
+    try {
+      // A stalled (not just rejected) /api/config or /api/preferences request must not
+      // leave configReady false forever — race it against a timeout so the catch below's
+      // "fail open" actually fires instead of hanging on a blank canvas indefinitely.
+      const timeout = new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error("config fetch timed out")), 8000);
+      });
+      const [prefs, config] = await Promise.race([
+        Promise.all([api.getPreferences(), api.config()]),
+        timeout,
+      ]);
+      const selectLanguageMode = Boolean(config.select_language);
+      set({
+        language: prefs.language,
+        languages: (config.languages as [string, string, string][] | undefined) ?? [],
+        selectLanguageMode,
+        bootLang: prefs.language,
+        // Only the --select-language boot gate starts at the picker; otherwise the
+        // dashboard is shown straight away (bootStage stays at its 'app' default).
+        bootStage: selectLanguageMode ? "lang" : "app",
+        configReady: true,
+      });
+    } catch (err) {
+      console.error("hydrateLanguage error:", err);
+      // Fail open — don't leave the screen blank forever if /api/config is unreachable;
+      // the dashboard renders in English rather than getting stuck pre-hydration.
+      set({ configReady: true });
+    }
+  },
+
+  async setLanguage(code: string) {
+    const previous = get().language;
+    set({ language: code });
+    try {
+      await api.putPreferences(code);
+      return true;
+    } catch (err) {
+      console.error("setLanguage failed, reverting:", err);
+      set({ language: previous });
+      return false;
+    }
+  },
+
+  setBootStage(stage) {
+    set({ bootStage: stage });
+  },
+
+  setBootLang(code: string) {
+    set({ bootLang: code });
+  },
+
+  async launchJob(id: string) {
+    try {
+      const job = await api.launch(id);
+      get().upsertJob(job);
+    } catch (err) {
+      console.error("launchJob failed:", err);
+      // Refetch so the row reverts to its real (still-queued) state rather than
+      // staying stuck on a client-side animation that never completed.
+      await get().refetchAll();
+      throw err; // let the caller (LaunchButton) know the launch didn't happen
+    }
+  },
+
+  async launchAll() {
+    try {
+      await api.launchAll();
+      await get().refetchAll();
+    } catch (err) {
+      console.error("launchAll failed:", err);
     }
   },
 }));

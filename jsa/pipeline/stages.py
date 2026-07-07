@@ -40,9 +40,11 @@ from jsa.events.schema import (
     StatusChangedEvent,
     event_to_dict,
 )
+from jsa.i18n.languages import language_name
 from jsa.pipeline.checkpoints import checkpoint
 from jsa.prompts import loader
 from jsa.store import cv_structure as cv_structure_store
+from jsa.store import preferences as preferences_store
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +155,11 @@ def _capture_failed_payload(label: str, job_id: str | None, content: str, reason
 
 
 def _parse_structured(
-    content: str, model: type[BaseModel], label: str, job_id: str | None = None
+    content: str,
+    model: type[BaseModel],
+    label: str,
+    job_id: str | None = None,
+    language: str = "en",
 ) -> BaseModel:
     """Parse a FINAL payload as JSON and validate it against ``model``.
 
@@ -162,6 +168,10 @@ def _parse_structured(
     replaces the old regex heuristics: a change-log, summary, mixed CV/CL payload, or
     third-person description cannot satisfy the schema, so it is rejected *structurally*
     rather than by pattern-matching.
+
+    ``language`` is passed through as validation context (``{"language": language}``);
+    only ``CVDocument``'s content-kind guard reads it (to pick the right per-language
+    letter-formula pattern) — other models ignore the unused context key harmlessly.
     """
     text = _strip_code_fence(content)
     try:
@@ -173,7 +183,7 @@ def _parse_structured(
             "object conforming to the schema inside <<<FINAL>>>...<<<END>>>."
         ) from exc
     try:
-        return model.model_validate(data)
+        return model.model_validate(data, context={"language": language})
     except ValidationError as exc:
         _capture_failed_payload(label, job_id, content, f"schema violation: {exc}")
         # Build a concise, model-facing reason from the validators' own messages. Never use
@@ -188,7 +198,9 @@ def _parse_structured(
         ) from exc
 
 
-def _validate_final_content(stage: Stage, content: str, job: Job) -> BaseModel | None:
+def _validate_final_content(
+    stage: Stage, content: str, job: Job, language: str = "en"
+) -> BaseModel | None:
     """Parse + validate a FINAL payload for the given stage.
 
     Returns the validated structured object (``CVDocument`` / ``CoverLetter``) for the
@@ -196,12 +208,15 @@ def _validate_final_content(stage: Stage, content: str, job: Job) -> BaseModel |
     fit_assessment). Raises ``FinalContentError`` on invalid JSON / schema violation.
     Single source of truth used by both the self-heal loop (to decide whether to
     re-prompt) and _handle_final (the authoritative gate before any DB write).
+
+    ``language`` (default ``"en"``) is threaded through to ``_parse_structured`` for the
+    ``CVDocument`` content-kind guard's per-language letter-formula matching.
     """
     job_id = job.id if job is not None else None
     if stage in (Stage.cv_adjust, Stage.revising_cv):
-        return _parse_structured(content, CVDocument, "cv_adjust", job_id)
+        return _parse_structured(content, CVDocument, "cv_adjust", job_id, language)
     if stage in (Stage.cover_letter, Stage.revising_cl):
-        return _parse_structured(content, CoverLetter, "cover_letter", job_id)
+        return _parse_structured(content, CoverLetter, "cover_letter", job_id, language)
     return None
 
 
@@ -248,6 +263,7 @@ async def _self_heal_final(
     job: Job,
     reply: AgentReply,
     accumulated_messages: list[dict],
+    language: str = "en",
 ) -> tuple[AgentReply, list[dict]]:
     """Re-prompt the open session when a FINAL block fails content validation.
 
@@ -291,7 +307,7 @@ async def _self_heal_final(
     attempts = 0
     while reply.kind == "final":
         try:
-            obj = _validate_final_content(stage, reply.content, job)
+            obj = _validate_final_content(stage, reply.content, job, language)
         except FinalContentError as exc:
             if attempts >= MAX_FINAL_CORRECTIONS:
                 break  # budget exhausted; _handle_final re-validates, raises, fails the job
@@ -321,6 +337,7 @@ async def run_stage(
     session: AsyncSession,
     output_dir: Path | None = None,
     cv_structure_path: Path | None = None,
+    preferences_path: Path | None = None,
 ) -> None:
     """Run one pipeline stage to completion or park.
 
@@ -334,6 +351,22 @@ async def run_stage(
     """
     system_prompt = _get_system_prompt(stage)
 
+    # A launched job snapshots the global language preference at LAUNCH time
+    # (job.language — see routes_jobs.py::launch_job) so its whole pipeline stays
+    # in one language even if the global preference changes mid-run. Jobs launched
+    # before this snapshot existed (job.language is None) fall back to reading the
+    # live global preference fresh at stage time (no cache) — mirrors
+    # cv_structure_path's read-at-stage-time rationale. Only used to steer NEW
+    # sessions (start_session); resumed sessions (restore_session) never see this
+    # — see _with_language_directive's docstring.
+    if job.language is not None:
+        language_code = job.language
+    else:
+        language_code = "en"
+        if preferences_path is not None:
+            prefs = await preferences_store.read(preferences_path)
+            language_code = prefs.language
+
     await bus.publish(
         event_to_dict(LogEvent(job_id=job.id, level="info", text=f"Starting stage: {stage.value}"))
     )
@@ -341,7 +374,7 @@ async def run_stage(
     if stage == Stage.fit_assessment:
         # One-shot pre-check: no resume path, no NEED_INPUT, no research. Handled
         # entirely here (FIT → fit_done, anything else → unfit) and returns early.
-        await _run_fit_assessment(job, backend, session, system_prompt)
+        await _run_fit_assessment(job, backend, session, system_prompt, language_code)
         return
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
@@ -434,10 +467,11 @@ async def run_stage(
             if stage == Stage.cv_adjust and cv_structure_path is not None:
                 base_structure = await cv_structure_store.read(cv_structure_path)
             initial_user_msg = _build_initial_user_msg(job, brief, base_structure)
-            handle, reply = await backend.start_session(system_prompt, initial_user_msg)
+            fresh_system_prompt = _with_language_directive(system_prompt, language_code)
+            handle, reply = await backend.start_session(fresh_system_prompt, initial_user_msg)
             # Accumulate all messages for this session (system, user, assistant reply)
             accumulated_messages = [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": fresh_system_prompt},
                 {"role": "user", "content": initial_user_msg},
                 {"role": "assistant", "content": reply.raw},
             ]
@@ -467,6 +501,7 @@ async def run_stage(
         job=job,
         reply=reply,
         accumulated_messages=accumulated_messages,
+        language=language_code,
     )
 
     # Guard against a stale result: the agent turn above may have run for a long
@@ -526,6 +561,7 @@ async def run_stage(
         reply=reply,
         accumulated_messages=accumulated_messages,
         output_dir=output_dir,
+        language=language_code,
     )
 
     await bus.publish(
@@ -671,6 +707,7 @@ async def _run_fit_assessment(
     backend: AgentBackend,
     session: AsyncSession,
     system_prompt: str,
+    language_code: str = "en",
 ) -> None:
     """Run the one-shot fit-assessment stage and checkpoint the outcome.
 
@@ -681,6 +718,8 @@ async def _run_fit_assessment(
     """
     initial_user_msg = _build_fit_user_msg(job)
     job.retry_count = 0
+    # Always a fresh start_session (no resume path for this stage) — safe to inject here.
+    system_prompt = _with_language_directive(system_prompt, language_code, fit_verdict=True)
 
     try:
         handle, reply = await backend.start_session(system_prompt, initial_user_msg)
@@ -761,6 +800,7 @@ async def _handle_final(
     reply: AgentReply,
     accumulated_messages: list[dict],
     output_dir: Path | None = None,
+    language: str = "en",
 ) -> None:
     """Finalize the stage: compute next state, version document, write checkpoint."""
     # A successful FINAL means any soft retry worked — reset the retry counter.
@@ -770,7 +810,7 @@ async def _handle_final(
     # Authoritative content gate before writing anything to the DB. If the model
     # emitted a change-log/summary instead of the artifact (and self-heal could not
     # recover it), this raises FinalContentError → propagates to _run_one → job failed.
-    structured_obj = _validate_final_content(stage, reply.content, job)
+    structured_obj = _validate_final_content(stage, reply.content, job, language)
 
     # Determine document stage (revision docs stored under original stage)
     if stage == Stage.revising_cv:
@@ -871,6 +911,50 @@ def _get_system_prompt(stage: Stage) -> str:
         return loader.read_prompt("cv_adjust")
     else:  # cover_letter or revising_cl
         return loader.read_prompt("cover_letter")
+
+
+def _language_directive(language_code: str, *, fit_verdict: bool = False) -> str:
+    """A short directive appended to a NEW session's system prompt for a non-English
+    language preference (see CLAUDE.md → "Language preference" / the language-preference
+    handoff's "Pipeline Integration" section).
+
+    Carves out the two things that must stay English/ASCII regardless of the chosen
+    language: the sentinel blocks (matched literally by ``jsa/agents/protocol.py``) and,
+    for ``fit_assessment`` only, the ``FIT``/``UNFIT`` verdict word itself (matched
+    literally by ``_parse_fit_verdict``).
+    """
+    name = language_name(language_code)
+    lines = [
+        "\n\n## Output language",
+        f"Write all natural-language, user-facing output in {name} ({language_code}) — "
+        "the change-log, any clarifying questions you ask, and every text VALUE in the "
+        "final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do "
+        "not translate JSON keys/field names — they are fixed schema fields and must "
+        "stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, "
+        "`entries`, etc.).",
+        "The sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay "
+        "exactly as spelled, in English/ASCII — never translate or localize them.",
+    ]
+    if fit_verdict:
+        lines.append(
+            "The verdict word itself (`FIT` or `UNFIT`) must stay in English and be the "
+            f"first word of your reply; only the reason that follows should be in {name}."
+        )
+    return "\n".join(lines)
+
+
+def _with_language_directive(system_prompt: str, language_code: str, *, fit_verdict: bool = False) -> str:
+    """Append the language directive to ``system_prompt`` for a NEW session only.
+
+    A no-op for the default ``"en"`` — the prompt files are already written in English, so
+    there is nothing to direct. Never call this for a ``restore_session`` path: a resumed
+    session already committed to a language, and re-injecting a changed directive would
+    contradict the replayed history (see the handoff's "Do not change language
+    mid-conversation").
+    """
+    if language_code == "en":
+        return system_prompt
+    return system_prompt + _language_directive(language_code, fit_verdict=fit_verdict)
 
 
 def _build_initial_user_msg(

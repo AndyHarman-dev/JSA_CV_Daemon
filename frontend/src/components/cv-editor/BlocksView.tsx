@@ -3,6 +3,7 @@
 // or up/down arrows. The card body dispatches on the section's editor `kind`.
 import { useState, type CSSProperties } from "react";
 import { useEditorStore } from "../../editorStore";
+import { useT } from "../../i18n/useT";
 import { cornerMarks, panelBase } from "../../theme/chrome";
 import { Grip, Icon, type IconName } from "../../theme/Icon";
 import { EDITOR_THEME } from "../../theme/tokens";
@@ -11,13 +12,14 @@ import { AutoTextarea, KIND_CODE, KIND_ICON, KIND_LABEL } from "./ui";
 
 const T = EDITOR_THEME;
 
+// `desc` is a translation key, resolved by the component below via `t()`.
 const ADD_KINDS: { kind: SectionKind; desc: string }[] = [
-  { kind: "summary", desc: "A short professional summary paragraph." },
-  { kind: "experience", desc: "Roles with company, dates, and achievement bullets." },
-  { kind: "projects", desc: "Projects with a description and links." },
-  { kind: "skills", desc: "Grouped keyword lists (Languages, Tools…)." },
-  { kind: "education", desc: "Degrees with institution and dates." },
-  { kind: "bullets", desc: "A flat list of highlights." },
+  { kind: "summary", desc: "blocksView.descSummary" },
+  { kind: "experience", desc: "blocksView.descExperience" },
+  { kind: "projects", desc: "blocksView.descProjects" },
+  { kind: "skills", desc: "blocksView.descSkills" },
+  { kind: "education", desc: "blocksView.descEducation" },
+  { kind: "bullets", desc: "blocksView.descBullets" },
 ];
 
 function cardField(
@@ -124,6 +126,7 @@ function ContactCard() {
   const cv = useEditorStore((s) => s.cv)!;
   const updateContact = useEditorStore((s) => s.updateContact);
   const c = cv.contact;
+  const t = useT();
 
   return (
     <div
@@ -132,24 +135,24 @@ function ContactCard() {
     >
       {cornerMarks(T, T.bd2)}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <span style={{ font: `600 10.5px ${T.mono}`, letterSpacing: ".16em", color: T.ink3, textTransform: "uppercase" }}>IDENTITY</span>
+        <span style={{ font: `600 10.5px ${T.mono}`, letterSpacing: ".16em", color: T.ink3, textTransform: "uppercase" }}>{t("blocksView.identityLabel")}</span>
         <span style={{ flex: 1, height: 1, background: T.bd }} />
-        <span style={{ font: `400 10px ${T.mono}`, color: T.ink3, letterSpacing: ".08em" }}>OPERATOR_ID</span>
+        <span style={{ font: `400 10px ${T.mono}`, color: T.ink3, letterSpacing: ".08em" }}>{t("blocksView.operatorIdLabel")}</span>
       </div>
       <input
         className="cvf cvf-card"
         style={cardField({ weight: 600, size: 23, pad: "2px 8px" })}
         value={c.name}
-        placeholder="Full name"
+        placeholder={t("blocksView.fullNamePlaceholder")}
         onChange={(e) => updateContact({ name: e.target.value })}
       />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-        <ContactRow label="email" field="email" value={c.email ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
-        <ContactRow label="phone" field="phone" value={c.phone ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
-        <ContactRow label="location" field="location" value={c.location ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
+        <ContactRow label={t("blocksView.emailLabel")} field="email" value={c.email ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
+        <ContactRow label={t("blocksView.phoneLabel")} field="phone" value={c.phone ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
+        <ContactRow label={t("blocksView.locationLabel")} field="location" value={c.location ?? ""} onChange={(f, v) => updateContact({ [f]: v })} />
       </div>
       <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.bd}` }}>
-        <div style={{ font: `600 11px ${T.disp}`, letterSpacing: ".06em", color: T.ink3, marginBottom: 4 }}>CHANNELS</div>
+        <div style={{ font: `600 11px ${T.disp}`, letterSpacing: ".06em", color: T.ink3, marginBottom: 4 }}>{t("blocksView.channelsLabel")}</div>
         <LinkList links={c.links} onChange={(links) => updateContact({ links })} />
       </div>
     </div>
@@ -157,6 +160,7 @@ function ContactCard() {
 }
 
 function LinkList({ links, onChange }: { links: string[]; onChange: (links: string[]) => void }) {
+  const t = useT();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {links.map((l, i) => (
@@ -172,7 +176,7 @@ function LinkList({ links, onChange }: { links: string[]; onChange: (links: stri
           <button
             type="button"
             className="cvih cvbtn"
-            title="Remove link"
+            title={t("blocksView.removeLinkTitle")}
             onClick={() => onChange(links.filter((_, j) => j !== i))}
             style={{
               border: "none",
@@ -210,7 +214,7 @@ function LinkList({ links, onChange }: { links: string[]; onChange: (links: stri
           alignSelf: "flex-start",
         }}
       >
-        <Icon name="plus" size={12} /> Add link
+        <Icon name="plus" size={12} /> {t("blocksView.addLink")}
       </button>
     </div>
   );
@@ -218,7 +222,8 @@ function LinkList({ links, onChange }: { links: string[]; onChange: (links: stri
 
 // --- skills tag editor ------------------------------------------------------------------
 
-function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[]) => void }) {
+function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+  const t = useT();
   const [draft, setDraft] = useState("");
   const commit = () => {
     const v = draft.trim();
@@ -227,7 +232,7 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
   };
   return (
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-      {tags.map((t, i) => (
+      {tags.map((tag, i) => (
         <span
           key={i}
           className="cvchip"
@@ -243,12 +248,12 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
             color: T.ink,
           }}
         >
-          {t}
+          {tag}
           <button
             type="button"
             className="cvx cvbtn"
             onClick={() => onChange(tags.filter((_, j) => j !== i))}
-            title="Remove"
+            title={t("blocksView.removeTagTitle")}
             style={{
               border: "none",
               background: "transparent",
@@ -271,7 +276,7 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
         className="cvf"
         style={{ border: "none", outline: "none", background: "transparent", font: `400 13px ${T.ui}`, color: T.ink, padding: "3px 2px", minWidth: 64, flex: 1 }}
         value={draft}
-        placeholder="Add skill…"
+        placeholder={t("blocksView.addSkillPlaceholder")}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === ",") {
@@ -291,6 +296,7 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
 
 function BulletList({ section, entry }: { section: EditorSection; entry: EditorEntry }) {
   const st = useEditorStore();
+  const t = useT();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       {entry.bullets.map((b, i) => (
@@ -300,13 +306,13 @@ function BulletList({ section, entry }: { section: EditorSection; entry: EditorE
             className="cvf cvf-card"
             style={{ ...cardField({ pad: "4px 7px" }), flex: 1 }}
             value={b}
-            placeholder="Achievement…"
+            placeholder={t("blocksView.achievementPlaceholder")}
             onChange={(e) => st.updateBullet(section.id, entry.id, i, e.target.value)}
           />
           <button
             type="button"
             className="cvih cvbtn"
-            title="Remove bullet"
+            title={t("blocksView.removeBulletTitle")}
             onClick={() => st.removeBullet(section.id, entry.id, i)}
             style={{
               border: "none",
@@ -345,7 +351,7 @@ function BulletList({ section, entry }: { section: EditorSection; entry: EditorE
           marginLeft: 13,
         }}
       >
-        <Icon name="plus" size={12} /> Add point
+        <Icon name="plus" size={12} /> {t("blocksView.addPoint")}
       </button>
     </div>
   );
@@ -353,17 +359,19 @@ function BulletList({ section, entry }: { section: EditorSection; entry: EditorE
 
 // --- entry editor (experience / projects / education) -----------------------------------
 
+// `ph`/`subph` are translation keys, resolved by the component below via `t()`.
 const ENTRY_FIELDS: Record<
   string,
   { sub: boolean; dates: boolean; loc: boolean; bul: boolean; text: boolean; links: boolean; ph: string; subph?: string }
 > = {
-  experience: { sub: true, dates: true, loc: true, bul: true, text: false, links: false, ph: "Role / title", subph: "Company" },
-  projects: { sub: false, dates: false, loc: false, bul: true, text: true, links: true, ph: "Project name" },
-  education: { sub: true, dates: true, loc: true, bul: false, text: false, links: false, ph: "Degree", subph: "Institution" },
+  experience: { sub: true, dates: true, loc: true, bul: true, text: false, links: false, ph: "blocksView.phRoleTitle", subph: "blocksView.subphCompany" },
+  projects: { sub: false, dates: false, loc: false, bul: true, text: true, links: true, ph: "blocksView.phProjectName" },
+  education: { sub: true, dates: true, loc: true, bul: false, text: false, links: false, ph: "blocksView.phDegree", subph: "blocksView.subphInstitution" },
 };
 
 function EntryEditor({ section, entry }: { section: EditorSection; entry: EditorEntry }) {
   const st = useEditorStore();
+  const t = useT();
   const { id: sid } = section;
   const set = (patch: Partial<EditorEntry>) => st.updateEntry(sid, entry.id, patch);
   const idx = section.entries.findIndex((e) => e.id === entry.id);
@@ -389,7 +397,7 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
             className="cvf cvf-card"
             style={cardField({ weight: 600, size: 14.5, pad: "4px 8px" })}
             value={entry.heading ?? ""}
-            placeholder={f.ph}
+            placeholder={t(f.ph)}
             onChange={(e) => set({ heading: e.target.value })}
           />
         </div>
@@ -399,7 +407,7 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
               className="cvf cvf-card"
               style={cardField({ size: 12.5, color: T.ink2, align: "right", pad: "5px 8px" })}
               value={entry.dates ?? ""}
-              placeholder="Dates"
+              placeholder={t("blocksView.datesPlaceholder")}
               onChange={(e) => set({ dates: e.target.value })}
             />
           </div>
@@ -414,7 +422,7 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
                 className="cvf cvf-card"
                 style={cardField({ size: 13, color: T.ink2, pad: "4px 8px" })}
                 value={entry.subheading ?? ""}
-                placeholder={f.subph}
+                placeholder={f.subph ? t(f.subph) : undefined}
                 onChange={(e) => set({ subheading: e.target.value })}
               />
             </div>
@@ -427,7 +435,7 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
                 className="cvf cvf-card"
                 style={cardField({ size: 12.5, color: T.ink2, align: "right", pad: "4px 8px" })}
                 value={entry.location ?? ""}
-                placeholder="Location"
+                placeholder={t("blocksView.entryLocationPlaceholder")}
                 onChange={(e) => set({ location: e.target.value })}
               />
             </div>
@@ -440,7 +448,7 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
           className="cvf cvf-card"
           style={cardField({ size: 13.5, color: T.ink2, pad: "5px 8px" })}
           value={entry.text ?? ""}
-          placeholder="Short description"
+          placeholder={t("blocksView.shortDescriptionPlaceholder")}
           onChange={(e) => set({ text: e.target.value })}
         />
       )}
@@ -453,16 +461,16 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
         className="cvtools"
         style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 1, background: T.surface, border: `1px solid ${T.bd}`, borderRadius: T.btnRadius, padding: 2, boxShadow: T.shadowSm }}
       >
-        <ToolBtn icon="up" size={24} iconSize={13} title="Move up" disabled={idx === 0} onClick={() => st.moveEntry(sid, entry.id, -1)} />
+        <ToolBtn icon="up" size={24} iconSize={13} title={t("blocksView.moveUpTitle")} disabled={idx === 0} onClick={() => st.moveEntry(sid, entry.id, -1)} />
         <ToolBtn
           icon="down"
           size={24}
           iconSize={13}
-          title="Move down"
+          title={t("blocksView.moveDownTitle")}
           disabled={idx === section.entries.length - 1}
           onClick={() => st.moveEntry(sid, entry.id, 1)}
         />
-        <ToolBtn icon="trash" size={24} iconSize={13} title="Delete entry" danger onClick={() => st.deleteEntry(sid, entry.id)} />
+        <ToolBtn icon="trash" size={24} iconSize={13} title={t("blocksView.deleteEntryTitle")} danger onClick={() => st.deleteEntry(sid, entry.id)} />
       </div>
     </div>
   );
@@ -472,6 +480,7 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
 
 function SectionBody({ section }: { section: EditorSection }) {
   const st = useEditorStore();
+  const t = useT();
   switch (section.kind) {
     case "summary":
       return (
@@ -479,7 +488,7 @@ function SectionBody({ section }: { section: EditorSection }) {
           className="cvf cvf-card"
           style={cardField({ size: 14, pad: "8px 9px" })}
           value={section.text ?? ""}
-          placeholder="Write a short professional summary…"
+          placeholder={t("blocksView.summaryPlaceholder")}
           onChange={(e) => st.updateSection(section.id, { text: e.target.value })}
         />
       );
@@ -493,13 +502,13 @@ function SectionBody({ section }: { section: EditorSection }) {
                 className="cvf cvf-card"
                 style={{ ...cardField({ pad: "4px 7px" }), flex: 1 }}
                 value={it}
-                placeholder="Highlight"
+                placeholder={t("blocksView.highlightPlaceholder")}
                 onChange={(e) => st.updateItem(section.id, i, e.target.value)}
               />
               <button
                 type="button"
                 className="cvih cvbtn"
-                title="Remove item"
+                title={t("blocksView.removeItemTitle")}
                 onClick={() => st.removeItem(section.id, i)}
                 style={{
                   border: "none",
@@ -538,7 +547,7 @@ function SectionBody({ section }: { section: EditorSection }) {
               marginLeft: 13,
             }}
           >
-            <Icon name="plus" size={12} /> Add item
+            <Icon name="plus" size={12} /> {t("blocksView.addItem")}
           </button>
         </div>
       );
@@ -556,7 +565,7 @@ function SectionBody({ section }: { section: EditorSection }) {
                   className="cvf cvf-card"
                   style={cardField({ weight: 600, size: 13, pad: "3px 7px" })}
                   value={e.heading ?? ""}
-                  placeholder="Category"
+                  placeholder={t("blocksView.categoryPlaceholder")}
                   onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
                 />
               </div>
@@ -566,7 +575,7 @@ function SectionBody({ section }: { section: EditorSection }) {
               <button
                 type="button"
                 className="cvih cvbtn"
-                title="Remove category"
+                title={t("blocksView.removeCategoryTitle")}
                 onClick={() => st.deleteEntry(section.id, e.id)}
                 style={{
                   border: "none",
@@ -604,7 +613,7 @@ function SectionBody({ section }: { section: EditorSection }) {
               alignSelf: "flex-start",
             }}
           >
-            <Icon name="plus" size={12} /> Add category
+            <Icon name="plus" size={12} /> {t("blocksView.addCategory")}
           </button>
         </div>
       );
@@ -633,7 +642,11 @@ function SectionBody({ section }: { section: EditorSection }) {
             }}
           >
             <Icon name="plus" size={13} />
-            Add {section.kind === "education" ? "education" : section.kind === "projects" ? "project" : "role"}
+            {section.kind === "education"
+              ? t("blocksView.addEducation")
+              : section.kind === "projects"
+              ? t("blocksView.addProject")
+              : t("blocksView.addRole")}
           </button>
         </div>
       );
@@ -644,6 +657,7 @@ function SectionBody({ section }: { section: EditorSection }) {
 
 function SectionCard({ section, index, total }: { section: EditorSection; index: number; total: number }) {
   const st = useEditorStore();
+  const t = useT();
   const dragId = useEditorStore((s) => s.dragId);
   const overId = useEditorStore((s) => s.overId);
   const armed = useEditorStore((s) => s.armed);
@@ -684,7 +698,7 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
           <div
             onMouseDown={() => st.arm(section.id)}
             onMouseUp={() => st.endDrag()}
-            title="Drag to reorder"
+            title={t("blocksView.dragToReorderTitle")}
             style={{ cursor: "grab", padding: "6px 3px", marginLeft: -4, display: "flex", flex: "none" }}
           >
             <Grip color={T.ink3} size={16} />
@@ -705,14 +719,14 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
             }}
           >
             <Icon name={KIND_ICON[section.kind]} size={13} />
-            {KIND_LABEL[section.kind].toUpperCase()}
+            {t(KIND_LABEL[section.kind]).toUpperCase()}
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <input
               className="cvf cvf-card"
               style={cardField({ weight: 600, size: 16, pad: "4px 8px" })}
               value={section.name}
-              placeholder="Section title"
+              placeholder={t("blocksView.sectionTitlePlaceholder")}
               onChange={(e) => st.updateSection(section.id, { name: e.target.value })}
             />
           </div>
@@ -720,9 +734,9 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
             MOD_{String(index + 1).padStart(2, "0")}
           </span>
           <div className="cvtools" style={{ display: "flex", gap: 1, flex: "none" }}>
-            <ToolBtn icon="up" title="Move section up" disabled={index === 0} onClick={() => st.moveSection(section.id, -1)} />
-            <ToolBtn icon="down" title="Move section down" disabled={index === total - 1} onClick={() => st.moveSection(section.id, 1)} />
-            <ToolBtn icon="trash" title="Delete section" danger onClick={() => st.deleteSection(section.id)} />
+            <ToolBtn icon="up" title={t("blocksView.moveSectionUpTitle")} disabled={index === 0} onClick={() => st.moveSection(section.id, -1)} />
+            <ToolBtn icon="down" title={t("blocksView.moveSectionDownTitle")} disabled={index === total - 1} onClick={() => st.moveSection(section.id, 1)} />
+            <ToolBtn icon="trash" title={t("blocksView.deleteSectionTitle")} danger onClick={() => st.deleteSection(section.id)} />
           </div>
         </div>
         <SectionBody section={section} />
@@ -741,6 +755,7 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
 function AddSectionMenu({ anchor }: { anchor: string | null }) {
   const st = useEditorStore();
   const addOpen = useEditorStore((s) => s.addOpen);
+  const t = useT();
   if (addOpen !== anchor) return null;
   return (
     <div
@@ -760,7 +775,7 @@ function AddSectionMenu({ anchor }: { anchor: string | null }) {
     >
       {cornerMarks(T, T.a, 9)}
       <div style={{ font: `600 10px ${T.mono}`, letterSpacing: ".12em", color: T.ink3, textTransform: "uppercase", padding: "6px 9px 7px" }}>
-        SELECT MODULE TYPE
+        {t("blocksView.selectModuleType")}
       </div>
       {ADD_KINDS.map(({ kind, desc }) => (
         <button
@@ -797,10 +812,10 @@ function AddSectionMenu({ anchor }: { anchor: string | null }) {
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, font: `600 13px ${T.disp}`, color: T.ink }}>
-              {KIND_LABEL[kind].toUpperCase()}
+              {t(KIND_LABEL[kind]).toUpperCase()}
               <span style={{ font: `400 9.5px ${T.mono}`, color: T.ink3 }}>{KIND_CODE[kind]}</span>
             </div>
-            <div style={{ font: `400 11.5px ${T.ui}`, color: T.ink3 }}>{desc}</div>
+            <div style={{ font: `400 11.5px ${T.ui}`, color: T.ink3 }}>{t(desc)}</div>
           </div>
         </button>
       ))}
@@ -811,6 +826,7 @@ function AddSectionMenu({ anchor }: { anchor: string | null }) {
 function AddButton({ anchor, full }: { anchor: string; full?: boolean }) {
   const st = useEditorStore();
   const addOpen = useEditorStore((s) => s.addOpen);
+  const t = useT();
   const open = addOpen === anchor;
   return (
     <div style={{ position: "relative", display: full ? "block" : "inline-block" }}>
@@ -835,7 +851,7 @@ function AddButton({ anchor, full }: { anchor: string; full?: boolean }) {
         }}
       >
         <Icon name="plus" size={14} />
-        {full ? "INJECT MODULE" : "ADD"}
+        {full ? t("blocksView.injectModule") : t("blocksView.addButton")}
       </button>
       <AddSectionMenu anchor={anchor} />
     </div>
