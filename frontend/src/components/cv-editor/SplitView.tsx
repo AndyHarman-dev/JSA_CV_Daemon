@@ -1,6 +1,7 @@
 // View C — Split: a 280px dark "INDEX" outline rail (select / reorder sections) beside the
 // selectable paper sheet (View B in selectable mode).
 import { useEditorStore } from "../../editorStore";
+import { useT } from "../../i18n/useT";
 import { Icon } from "../../theme/Icon";
 import { EDITOR_THEME } from "../../theme/tokens";
 import { PaperSheet } from "./PaperSheet";
@@ -12,12 +13,13 @@ export function SplitView() {
   const cv = useEditorStore((s) => s.cv)!;
   const st = useEditorStore();
   const selectedId = useEditorStore((s) => s.selectedId);
+  const t = useT();
 
   return (
     <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
       <aside style={{ width: 280, flex: "none", borderRight: `1px solid ${T.bd}`, background: T.subtle, overflow: "auto", padding: "18px 14px", position: "relative", zIndex: 1 }}>
         <div style={{ font: `600 10px ${T.mono}`, letterSpacing: ".14em", color: T.ink3, textTransform: "uppercase", padding: "0 6px 10px" }}>
-          INDEX
+          {t("splitView.indexLabel")}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {cv.sections.map((s, i) => {
@@ -51,17 +53,17 @@ export function SplitView() {
                     className="truncate"
                     style={{ font: `600 12.5px ${T.ui}`, color: T.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
                   >
-                    {s.name || KIND_LABEL[s.kind]}
+                    {s.name || t(KIND_LABEL[s.kind])}
                   </div>
                   <div style={{ font: `400 9.5px ${T.mono}`, color: T.ink3, letterSpacing: ".04em" }}>
-                    {KIND_LABEL[s.kind].toLowerCase()}
+                    {t(KIND_LABEL[s.kind]).toLowerCase()}
                     {count ? ` · ${count}` : ""}
                   </div>
                 </div>
                 <div className="cvtools" style={{ display: "flex", gap: 0, flex: "none" }}>
                   <button
                     type="button"
-                    title="Move up"
+                    title={t("splitView.moveUpTitle")}
                     disabled={i === 0}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -74,7 +76,7 @@ export function SplitView() {
                   </button>
                   <button
                     type="button"
-                    title="Move down"
+                    title={t("splitView.moveDownTitle")}
                     disabled={i === cv.sections.length - 1}
                     onClick={(e) => {
                       e.stopPropagation();

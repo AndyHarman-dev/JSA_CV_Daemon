@@ -81,10 +81,11 @@ def _job_data(
 
 
 async def _insert_job(factory, **overrides) -> Job:
-    """Insert a fresh pending job."""
+    """Insert a fresh job and launch it (queued → pending) so it's runnable."""
     data = _job_data(**overrides)
     async with factory() as s:
         job = await repo.upsert_job(s, data)
+        job.state = JobState.pending
         await s.commit()
     return job
 

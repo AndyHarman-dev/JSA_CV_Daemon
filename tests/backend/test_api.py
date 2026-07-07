@@ -119,12 +119,14 @@ async def _insert_job(session_factory, *, state: JobState = JobState.pending, **
         job = await repo.upsert_job(session, data)
         await session.commit()
         job_id = job.id
-    # Re-open session to set state (upsert always sets pending)
-    if state != JobState.pending:
-        async with session_factory() as session:
-            job = await repo.get_job(session, job_id)
-            job.state = state
-            await session.commit()
+    # Re-open session to set state — upsert_job always creates fresh jobs as
+    # `queued` (parked pending LAUNCH), so always force the fixture's state to
+    # the requested one (default `pending`, the already-launched baseline most
+    # tests expect).
+    async with session_factory() as session:
+        job = await repo.get_job(session, job_id)
+        job.state = state
+        await session.commit()
     async with session_factory() as session:
         job = await repo.get_job(session, job_id)
         return job
@@ -360,6 +362,70 @@ class TestIgnoreFit:
         resp = await client.post("/api/jobs/aabbccdd00112233/dismiss")
         assert resp.status_code == 200
         assert resp.json()["state"] == "dismissed"
+
+
+class TestLaunchJob:
+    """Manual job launch: queued → pending, snapshotting the global language."""
+
+    async def test_launch_transitions_queued_to_pending(self, client, db):
+        await _insert_job(db, state=JobState.queued)
+        resp = await client.post("/api/jobs/aabbccdd00112233/launch")
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "pending"
+
+    async def test_launch_snapshots_current_global_language(self, client, db):
+        await _insert_job(db, state=JobState.queued)
+        put_resp = await client.put("/api/preferences", json={"language": "es"})
+        assert put_resp.status_code == 200
+
+        resp = await client.post("/api/jobs/aabbccdd00112233/launch")
+        assert resp.status_code == 200
+        assert resp.json()["language"] == "es"
+
+        # Changing the global preference afterward must not affect the launched job.
+        await client.put("/api/preferences", json={"language": "de"})
+        async with db() as session:
+            job = await repo.get_job(session, "aabbccdd00112233")
+            assert job.language == "es"
+
+    async def test_launch_non_queued_returns_400(self, client, db):
+        await _insert_job(db, state=JobState.pending)
+        resp = await client.post("/api/jobs/aabbccdd00112233/launch")
+        assert resp.status_code == 400
+
+    async def test_launch_not_found_returns_404(self, client, db):
+        resp = await client.post("/api/jobs/doesnotexist0000/launch")
+        assert resp.status_code == 404
+
+
+class TestLaunchAllJobs:
+    """The sidebar's 'Launch All' — launches every currently-queued job in one shot."""
+
+    async def test_launch_all_launches_every_queued_job(self, client, db):
+        await _insert_job(db, state=JobState.queued, job_id="aaaa000000000001")
+        await _insert_job(db, state=JobState.queued, job_id="aaaa000000000002")
+        # A non-queued job must be left untouched.
+        await _insert_job(db, state=JobState.review, job_id="aaaa000000000003")
+
+        resp = await client.post("/api/jobs/launch-all")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 2
+        assert set(body["launched"]) == {"aaaa000000000001", "aaaa000000000002"}
+
+        async with db() as session:
+            job1 = await repo.get_job(session, "aaaa000000000001")
+            job2 = await repo.get_job(session, "aaaa000000000002")
+            job3 = await repo.get_job(session, "aaaa000000000003")
+            assert job1.state == JobState.pending
+            assert job2.state == JobState.pending
+            assert job3.state == JobState.review  # untouched
+
+    async def test_launch_all_with_no_queued_jobs_returns_zero(self, client, db):
+        await _insert_job(db, state=JobState.pending)
+        resp = await client.post("/api/jobs/launch-all")
+        assert resp.status_code == 200
+        assert resp.json() == {"launched": [], "count": 0}
 
 
 class TestGetDocument:

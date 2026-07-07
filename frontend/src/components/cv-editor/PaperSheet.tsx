@@ -12,6 +12,7 @@
 // colors/fonts via `style`. ContentInput itself is left untouched.
 import type { CSSProperties } from "react";
 import { useEditorStore } from "../../editorStore";
+import { useT } from "../../i18n/useT";
 import { chamferPath, cornerMarks } from "../../theme/chrome";
 import { Icon } from "../../theme/Icon";
 import { EDITOR_THEME, paperT } from "../../theme/tokens";
@@ -91,6 +92,7 @@ function lightToolBtn({
 
 function SectionTools({ section, index, total }: { section: EditorSection; index: number; total: number }) {
   const st = useEditorStore();
+  const t = useT();
   return (
     <div
       className="cvtools"
@@ -108,15 +110,16 @@ function SectionTools({ section, index, total }: { section: EditorSection; index
         boxShadow: "0 2px 8px rgba(0,0,0,.15)",
       }}
     >
-      {lightToolBtn({ icon: "up", title: "Move up", disabled: index === 0, onClick: () => st.moveSection(section.id, -1) })}
-      {lightToolBtn({ icon: "down", title: "Move down", disabled: index === total - 1, onClick: () => st.moveSection(section.id, 1) })}
-      {lightToolBtn({ icon: "trash", title: "Delete section", danger: true, onClick: () => st.deleteSection(section.id) })}
+      {lightToolBtn({ icon: "up", title: t("paperSheet.moveUpTitle"), disabled: index === 0, onClick: () => st.moveSection(section.id, -1) })}
+      {lightToolBtn({ icon: "down", title: t("paperSheet.moveDownTitle"), disabled: index === total - 1, onClick: () => st.moveSection(section.id, 1) })}
+      {lightToolBtn({ icon: "trash", title: t("paperSheet.deleteSectionTitle"), danger: true, onClick: () => st.deleteSection(section.id) })}
     </div>
   );
 }
 
 function PaperBody({ section, serif }: { section: EditorSection; serif: boolean }) {
   const st = useEditorStore();
+  const t = useT();
   const bodyFont = serif ? PA.serifF : PA.ui;
   switch (section.kind) {
     case "summary":
@@ -125,7 +128,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
           className="cvf cvf-paper"
           style={paperStyle({ fontFamily: bodyFont, size: 13.5 })}
           value={section.text ?? ""}
-          placeholder="Summary…"
+          placeholder={t("paperSheet.summaryPlaceholder")}
           onChange={(e) => st.updateSection(section.id, { text: e.target.value })}
         />
       );
@@ -144,7 +147,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                 type="button"
                 className="cvih cvbtn-light"
                 onClick={() => st.removeItem(section.id, i)}
-                title="Remove item"
+                title={t("paperSheet.removeItemTitle")}
                 style={{ border: "none", background: "transparent", color: PA.ink3, cursor: "pointer", width: 18, height: 18, borderRadius: 4, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
               >
                 <Icon name="x" size={10} />
@@ -163,7 +166,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                   className="cvf cvf-paper"
                   style={paperStyle({ fontFamily: bodyFont, weight: 600, width: chWidth(e.heading, "Group") })}
                   value={e.heading ?? ""}
-                  placeholder="Group"
+                  placeholder={t("paperSheet.groupPlaceholder")}
                   onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
                 />
                 <span style={{ fontWeight: 600 }}>:</span>
@@ -173,7 +176,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                   className="cvf cvf-paper"
                   style={paperStyle({ fontFamily: bodyFont, width: "100%" })}
                   value={e.bullets.join(", ")}
-                  placeholder="a, b, c"
+                  placeholder={t("paperSheet.skillsExamplePlaceholder")}
                   onChange={(ev) =>
                     st.updateEntry(section.id, e.id, {
                       bullets: ev.target.value.split(",").map((x) => x.trim()).filter(Boolean),
@@ -197,7 +200,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                     className="cvf cvf-paper"
                     style={paperStyle({ fontFamily: bodyFont, weight: 600, size: 14, width: "100%" })}
                     value={e.heading ?? ""}
-                    placeholder="Title"
+                    placeholder={t("paperSheet.titlePlaceholder")}
                     onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
                   />
                   {e.dates !== undefined && (
@@ -205,7 +208,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                       className="cvf cvf-paper"
                       style={{ ...paperStyle({ fontFamily: PA.mono, size: 11.5, color: PA.ink2, align: "right", width: chWidth(e.dates, "dates") }), flex: "none" }}
                       value={e.dates ?? ""}
-                      placeholder="dates"
+                      placeholder={t("paperSheet.datesPlaceholder")}
                       onChange={(ev) => st.updateEntry(section.id, e.id, { dates: ev.target.value })}
                     />
                   )}
@@ -216,7 +219,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                       className="cvf cvf-paper"
                       style={paperStyle({ fontFamily: bodyFont, size: 12.5, color: PA.ink2, italic: true, width: "100%" })}
                       value={e.subheading ?? ""}
-                      placeholder="Subheading"
+                      placeholder={t("paperSheet.subheadingPlaceholder")}
                       onChange={(ev) => st.updateEntry(section.id, e.id, { subheading: ev.target.value })}
                     />
                     {e.location !== undefined && (
@@ -224,7 +227,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                         className="cvf cvf-paper"
                         style={{ ...paperStyle({ fontFamily: bodyFont, size: 12, color: PA.ink2, align: "right", width: chWidth(e.location, "location") }), flex: "none" }}
                         value={e.location ?? ""}
-                        placeholder="location"
+                        placeholder={t("paperSheet.locationPlaceholder")}
                         onChange={(ev) => st.updateEntry(section.id, e.id, { location: ev.target.value })}
                       />
                     )}
@@ -235,7 +238,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                     className="cvf cvf-paper"
                     style={paperStyle({ fontFamily: bodyFont, size: 13 })}
                     value={e.text ?? ""}
-                    placeholder="Description"
+                    placeholder={t("paperSheet.descriptionPlaceholder")}
                     onChange={(ev) => st.updateEntry(section.id, e.id, { text: ev.target.value })}
                   />
                 )}
@@ -253,7 +256,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                           type="button"
                           className="cvih cvbtn-light"
                           onClick={() => st.removeBullet(section.id, e.id, i)}
-                          title="Remove bullet"
+                          title={t("paperSheet.removeBulletTitle")}
                           style={{ border: "none", background: "transparent", color: PA.ink3, cursor: "pointer", width: 18, height: 18, flex: "none", borderRadius: 4, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
                         >
                           <Icon name="x" size={10} />
@@ -270,7 +273,7 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                         className="cvf cvf-paper"
                         style={paperStyle({ fontFamily: PA.ui, size: 12, color: PA.a, width: chWidth(l, "link") })}
                         value={l}
-                        placeholder="link"
+                        placeholder={t("paperSheet.linkPlaceholder")}
                         onChange={(ev) =>
                           st.updateEntry(section.id, e.id, { links: e.links.map((x, j) => (j === i ? ev.target.value : x)) })
                         }
@@ -291,6 +294,7 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
   const st = useEditorStore();
   const serif = useEditorStore((s) => s.paperSerif);
   const selectedId = useEditorStore((s) => s.selectedId);
+  const t = useT();
   const nameFont = serif ? PA.serifF : PA.ui;
 
   const sheet = (
@@ -313,7 +317,7 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
           className="cvf cvf-paper"
           style={paperStyle({ fontFamily: nameFont, weight: 500, size: 30, align: "center" })}
           value={cv.contact.name}
-          placeholder="Your Name"
+          placeholder={t("paperSheet.yourNamePlaceholder")}
           onChange={(e) => st.updateContact({ name: e.target.value })}
         />
       </div>
@@ -379,7 +383,7 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
                 className="cvf cvf-paper"
                 style={paperStyle({ fontFamily: PA.ui, weight: 600, size: 11.5, color: PA.ink, width: chWidth(s.name, "Section") })}
                 value={s.name}
-                placeholder="Section"
+                placeholder={t("paperSheet.sectionPlaceholder")}
                 onChange={(e) => st.updateSection(s.id, { name: e.target.value })}
               />
             </div>

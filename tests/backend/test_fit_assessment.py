@@ -64,6 +64,7 @@ async def _insert_job(session: AsyncSession, **overrides) -> Job:
     )
     data.update(overrides)
     job = await repo.upsert_job(session, data)
+    job.state = JobState.pending  # simulate an already-launched job
     await session.commit()
     return job
 

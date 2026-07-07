@@ -9,12 +9,14 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api } from "../../api";
 import { useEditorStore, type EditorView } from "../../editorStore";
 import { useStore } from "../../store";
+import { useT } from "../../i18n/useT";
 import { panelBase, cornerMarks } from "../../theme/chrome";
 import { Icon, type IconName } from "../../theme/Icon";
 import { EDITOR_THEME, paperT } from "../../theme/tokens";
 import { BlocksView } from "./BlocksView";
 import { DocumentView } from "./PaperSheet";
 import { JsonDrawer } from "./JsonDrawer";
+import { LanguagePill } from "./LanguagePill";
 import { SplitView } from "./SplitView";
 
 const T = EDITOR_THEME;
@@ -77,6 +79,7 @@ function FileButton({
 
 function EmptyState() {
   const startBlank = useEditorStore((s) => s.startBlank);
+  const t = useT();
   return (
     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", zIndex: 1 }}>
       <div style={{ position: "relative", textAlign: "center", maxWidth: 460, animation: "cvfade .18s ease" }}>
@@ -95,14 +98,13 @@ function EmptyState() {
           <Icon name="doc" size={26} />
         </div>
         <h2 style={{ font: `600 22px ${T.disp}`, color: T.ink, margin: "0 0 8px", letterSpacing: ".02em" }}>
-          NO STRUCTURE DETECTED
+          {t("cvEditor.emptyTitle")}
         </h2>
         <p style={{ font: `400 14.5px/1.6 ${T.ui}`, color: T.ink2, margin: "0 0 24px" }}>
-          Run inference against an uploaded document, or initialize a blank structure. The JSON
-          is ground truth — every change here writes straight through it.
+          {t("cvEditor.emptyBody")}
         </p>
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-          <FileButton label="RUN INFERENCE" primary />
+          <FileButton label={t("cvEditor.runInference")} primary />
           <button
             type="button"
             onClick={startBlank}
@@ -122,7 +124,7 @@ function EmptyState() {
             }}
           >
             <Icon name="plus" size={16} />
-            INIT BLANK
+            {t("cvEditor.initBlank")}
           </button>
         </div>
       </div>
@@ -283,6 +285,7 @@ export function CvEditor() {
   const saveError = useEditorStore((s) => s.saveError);
   const st = useEditorStore();
   const setEditorOpen = useStore((s) => s.setEditorOpen);
+  const t = useT();
   const [loading, setLoading] = useState(true);
   const [clock, setClock] = useState(() => new Date());
   const sessionRef = useRef(
@@ -406,22 +409,22 @@ export function CvEditor() {
                 CV<span style={{ color: T.a }}> // </span>DAEMON
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 5, font: `500 10px ${T.mono}`, color: T.ink3, letterSpacing: ".08em" }}>
-                STRUCTURE_ENGINE · LIVE SYNC <span style={{ color: T.accent2 }}>⇄ JOBS</span>
+                {t("cvEditor.sub")} <span style={{ color: T.accent2 }}>⇄ JOBS</span>
               </div>
             </div>
           </button>
 
           {cv && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px 4px 12px", borderLeft: `1px solid ${T.bd}`, minWidth: 0 }}>
-              <span style={{ font: `400 9.5px ${T.mono}`, color: T.ink3, letterSpacing: ".1em", flex: "none" }}>OPERATOR</span>
+              <span style={{ font: `400 9.5px ${T.mono}`, color: T.ink3, letterSpacing: ".1em", flex: "none" }}>{t("cvEditor.operator")}</span>
               <span
                 className="truncate"
                 style={{ font: `500 13px ${T.ui}`, color: T.ink2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 180 }}
               >
-                {cv.contact.name || "UNTITLED"}
+                {cv.contact.name || t("cvEditor.untitled")}
               </span>
               <span style={{ font: `500 10.5px ${T.mono}`, color: T.accent2, background: T.sunk, padding: "2px 7px", borderRadius: T.btnRadius, flex: "none", border: `1px solid ${T.bd}` }}>
-                {sectionCount} MODULE{sectionCount === 1 ? "" : "S"}
+                {t(sectionCount === 1 ? "cvEditor.moduleCountOne" : "cvEditor.moduleCountMany", { n: sectionCount })}
               </span>
             </div>
           )}
@@ -496,16 +499,18 @@ export function CvEditor() {
           {cv && (
             <button type="button" onClick={st.toggleJson} className="cvghost" style={tbtnStyle(false)}>
               <Icon name="braces" size={14} />
-              <span className="hidden lg:inline">{jsonOpen ? "HIDE SRC" : "SRC.JSON"}</span>
+              <span className="hidden lg:inline">{jsonOpen ? t("cvEditor.hideSrc") : t("cvEditor.srcJson")}</span>
             </button>
           )}
 
-          <FileButton label={cv ? "RE-RUN" : "RUN INFERENCE"} primary={!cv} disabled={inferring} />
+          <LanguagePill />
+
+          <FileButton label={cv ? t("cvEditor.rerun") : t("cvEditor.runInference")} primary={!cv} disabled={inferring} />
 
           {cv && (
             <button type="button" onClick={() => void onDone()} disabled={saving} className="cvprimary" style={tbtnStyle(true, saving)}>
               <Icon name="check" size={14} />
-              {saving ? "SAVING…" : "COMMIT"}
+              {saving ? t("cvEditor.saving") : t("cvEditor.commit")}
             </button>
           )}
         </div>
@@ -513,7 +518,7 @@ export function CvEditor() {
 
       {saveError && (
         <div style={{ padding: "8px 18px", background: `${T.danger}1A`, color: T.danger, fontSize: 13, borderBottom: `1px solid ${T.bd}`, flex: "none" }}>
-          Couldn’t save: {saveError}
+          {t("cvEditor.saveError", { reason: saveError })}
         </div>
       )}
 

@@ -18,6 +18,7 @@ from jsa.events.bus import bus
 from jsa.events.schema import ApprovedEvent, StatusChangedEvent, JobRemovedEvent, event_to_dict
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
+from jsa.store import preferences as preferences_store
 from jsa.util import slugify as _slugify
 
 router = APIRouter()
@@ -67,6 +68,7 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "jd": job.jd,
         "state": job.state.value if job.state is not None else None,
         "current_stage": job.current_stage.value if job.current_stage is not None else None,
+        "language": job.language,
         "fit_reason": job.fit_reason,
         "error": job.error,
         "retry_count": job.retry_count,
@@ -387,6 +389,90 @@ async def ignore_fit(request: Request, job_id: str):
     request.app.state.orchestrator.kick()
 
     return job_dict
+
+
+@router.post("/api/jobs/{job_id}/launch")
+async def launch_job(request: Request, job_id: str):
+    """Launch a parked job: queued → pending, snapshotting the current global language.
+
+    Manual launch is unconditional (CLAUDE.md → "Language preference" /
+    ARCH.md → "Manual job launch") — nothing auto-runs on ingest anymore. The
+    global language preference at the moment of this click is frozen onto
+    `job.language` so the whole pipeline (fit → cv → cover letter) stays in one
+    language even if the global preference changes later while this job runs.
+    """
+    sf = _session_factory(request)
+    settings = request.app.state.settings
+    prefs = await preferences_store.load(settings)
+
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.queued:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'queued'",
+            )
+
+        prev_state = job.state.value
+        job.language = prefs.language
+        await repo.checkpoint(session, job, JobState.pending, new_stage=None)
+
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        job_dict = _job_to_dict(job, full=True)
+
+    await bus.publish(
+        event_to_dict(
+            StatusChangedEvent(
+                job_id=job_id,
+                from_state=prev_state,
+                to_state=JobState.pending.value,
+            )
+        )
+    )
+
+    request.app.state.orchestrator.kick()
+
+    return job_dict
+
+
+@router.post("/api/jobs/launch-all")
+async def launch_all_jobs(request: Request):
+    """Launch every currently-queued job in one shot (the sidebar's 'Launch All').
+
+    Same per-job semantics as launch_job (snapshot language, queued → pending),
+    just looped, with a single orchestrator.kick() at the end.
+    """
+    sf = _session_factory(request)
+    settings = request.app.state.settings
+    prefs = await preferences_store.load(settings)
+
+    launched_ids: list[str] = []
+    async with sf() as session:
+        queued_jobs = await repo.list_jobs(session, state=JobState.queued)
+        for job in queued_jobs:
+            prev_state = job.state.value
+            job.language = prefs.language
+            await repo.checkpoint(session, job, JobState.pending, new_stage=None)
+            launched_ids.append(job.id)
+            await bus.publish(
+                event_to_dict(
+                    StatusChangedEvent(
+                        job_id=job.id,
+                        from_state=prev_state,
+                        to_state=JobState.pending.value,
+                    )
+                )
+            )
+
+    if launched_ids:
+        request.app.state.orchestrator.kick()
+
+    return {"launched": launched_ids, "count": len(launched_ids)}
 
 
 @router.post("/api/jobs/{job_id}/cancel")

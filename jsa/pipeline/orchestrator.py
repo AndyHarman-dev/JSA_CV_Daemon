@@ -102,6 +102,7 @@ class Orchestrator:
         max_parallel: int = 5,
         output_dir: Path | None = None,
         cv_structure_path: Path | None = None,
+        preferences_path: Path | None = None,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
         self.wakeup = asyncio.Event()
@@ -110,6 +111,7 @@ class Orchestrator:
         self._backends = backends if backends is not None else ["claude-cli"]
         self._output_dir = output_dir
         self._cv_structure_path = cv_structure_path
+        self._preferences_path = preferences_path
         self._stopping = False
         # Keyed by job_id (not an unkeyed set) so a specific job's in-flight
         # worker task can be looked up and cancelled — see cancel_task().
@@ -272,6 +274,7 @@ class Orchestrator:
                     job, backend, stage, session,
                     output_dir=self._output_dir,
                     cv_structure_path=self._cv_structure_path,
+                    preferences_path=self._preferences_path,
                 )
 
         except PausedForInput:

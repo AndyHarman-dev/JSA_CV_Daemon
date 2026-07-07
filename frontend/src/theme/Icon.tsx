@@ -7,7 +7,7 @@ export type IconName =
   | "x" | "plus" | "minus" | "check" | "trash" | "refresh" | "send" | "download" | "chevron"
   | "alert" | "mail" | "phone" | "pin" | "bolt" | "server" | "inbox" | "doc" | "work"
   | "link" | "back" | "up" | "down" | "undo" | "redo" | "braces" | "spark" | "eye"
-  | "copy" | "text" | "list" | "tag" | "cap" | "blocks" | "cols";
+  | "copy" | "text" | "list" | "tag" | "cap" | "blocks" | "cols" | "globe" | "search" | "play";
 
 interface IconProps {
   name: IconName;
@@ -51,6 +51,9 @@ const PATHS: Record<IconName, string[]> = {
   cap: ["M8 3L1.8 6 8 9l6.2-3L8 3z", "M4.5 7.3v3c0 .9 1.6 1.7 3.5 1.7s3.5-.8 3.5-1.7v-3"],
   blocks: [],
   cols: ["M8 2.8v10.4"],
+  globe: ["M1.8 8h12.4", "M8 1.8c-2.2 1.8-2.2 10.6 0 12.4", "M8 1.8c2.2 1.8 2.2 10.6 0 12.4"],
+  search: ["M11.2 11.2L14 14"],
+  play: [],
 };
 
 // Icons that mix paths with non-path primitives (rects/circles/lines) — rendered explicitly
@@ -102,6 +105,12 @@ function extraShapes(name: IconName): ReactNode {
       );
     case "cols":
       return <rect x={2.4} y={2.8} width={11.2} height={10.4} rx={1.4} />;
+    case "globe":
+      return <circle cx={8} cy={8} r={6.2} />;
+    case "search":
+      return <circle cx={6.5} cy={6.5} r={4.2} />;
+    case "play":
+      return <polygon points="5,3.4 12.5,8 5,12.6" fill="currentColor" stroke="none" />;
     default:
       return null;
   }

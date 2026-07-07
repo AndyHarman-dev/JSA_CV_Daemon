@@ -124,7 +124,7 @@ describe("FollowUpPane", () => {
 
     await waitFor(() => {
       // ChatBox with kind="answer" renders a Submit Answer button
-      expect(screen.getByRole("button", { name: /SUBMIT_ANSWER/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Submit Answer/i })).toBeInTheDocument();
     });
   });
 

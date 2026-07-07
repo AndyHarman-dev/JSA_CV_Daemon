@@ -66,6 +66,18 @@ export const api = {
     });
   },
 
+  launch(id: string): Promise<FullJobDTO> {
+    return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}/launch`, {
+      method: "POST",
+    });
+  },
+
+  launchAll(): Promise<{ launched: string[]; count: number }> {
+    return apiFetch<{ launched: string[]; count: number }>(`/api/jobs/launch-all`, {
+      method: "POST",
+    });
+  },
+
   deleteJob(id: string): Promise<{ ok: boolean }> {
     return apiFetch<{ ok: boolean }>(`/api/jobs/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -136,5 +148,19 @@ export const api = {
 
   config(): Promise<Record<string, unknown>> {
     return apiFetch<Record<string, unknown>>("/api/config");
+  },
+
+  // --- Language preference (global, not per-job) ---
+
+  getPreferences(): Promise<{ language: string }> {
+    return apiFetch<{ language: string }>("/api/preferences");
+  },
+
+  putPreferences(language: string): Promise<{ language: string }> {
+    return apiFetch<{ language: string }>("/api/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language }),
+    });
   },
 };

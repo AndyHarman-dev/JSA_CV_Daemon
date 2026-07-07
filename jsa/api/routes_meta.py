@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter, Request
 
+from jsa.i18n.languages import LANGUAGES
+
 router = APIRouter()
 
 
@@ -19,4 +21,6 @@ async def config(request: Request):
         "output_dir": str(settings.output_dir),
         "db_path": str(settings.db_path),
         "port": settings.port,
+        "languages": LANGUAGES,
+        "select_language": settings.select_language,
     }

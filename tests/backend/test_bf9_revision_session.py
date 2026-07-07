@@ -138,6 +138,8 @@ async def _insert_job(session: AsyncSession) -> Job:
         cv_text="Curriculum vitae for BF-9 test.",
     )
     job = await repo.upsert_job(session, data)
+    # upsert_job creates fresh jobs as `queued`; simulate an already-launched job.
+    job.state = JobState.pending
     await session.commit()
     return job
 

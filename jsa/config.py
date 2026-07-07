@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     agent_timeout: float = 600.0         # Timeout for CLI backends (claude-cli, google-cli), via JSA_AGENT_TIMEOUT
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
     dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
+    select_language: bool = False          # --select-language: show the full-screen boot gate (language picker + boot log) before the dashboard on first run
 
     @property
     def cv_structure_path(self) -> Path:
@@ -29,6 +30,12 @@ class Settings(BaseSettings):
         (``~/.jsa/cv_structure.json`` by default); derived from ``db_path`` so a test that
         points ``db_path`` at a tmp dir is automatically isolated."""
         return self.db_path.parent / "cv_structure.json"
+
+    @property
+    def preferences_path(self) -> Path:
+        """Global app preferences JSON (currently just ``{"language": "en"}``). Lives next to
+        the DB, derived from ``db_path`` the same way ``cv_structure_path`` is."""
+        return self.db_path.parent / "preferences.json"
 
     @field_validator("backends", mode="before")
     @classmethod

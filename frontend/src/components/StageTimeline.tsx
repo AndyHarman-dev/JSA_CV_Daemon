@@ -1,4 +1,5 @@
 import type { JobDTO, JobState, Stage } from "../types";
+import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { Icon } from "../theme/Icon";
 
@@ -8,18 +9,22 @@ interface StageTimelineProps {
   job: JobDTO;
 }
 
-const STEPS: { label: string; key: string }[] = [
-  { label: "PENDING", key: "pending" },
-  { label: "CV_ADJUST", key: "cv_adjust" },
-  { label: "CV_DONE", key: "cv_done" },
-  { label: "COVER_LETTER", key: "cover_letter" },
-  { label: "CL_DONE", key: "cl_done" },
-  { label: "REVIEW", key: "review" },
-  { label: "APPROVED", key: "approved" },
+// `labelKey` is a translation key, resolved by the component below via `t()`.
+const STEPS: { labelKey: string; key: string }[] = [
+  { labelKey: "stageTimeline.pending", key: "pending" },
+  { labelKey: "stageTimeline.cvAdjust", key: "cv_adjust" },
+  { labelKey: "stageTimeline.cvDone", key: "cv_done" },
+  { labelKey: "stageTimeline.coverLetter", key: "cover_letter" },
+  { labelKey: "stageTimeline.clDone", key: "cl_done" },
+  { labelKey: "stageTimeline.review", key: "review" },
+  { labelKey: "stageTimeline.approved", key: "approved" },
 ];
 
 function getActiveStepIndex(state: JobState, currentStage: Stage | null): number {
   switch (state) {
+    case "queued":
+      // Parked, never launched — nothing produced yet.
+      return 0;
     case "pending":
       return 0;
     case "running":
@@ -56,6 +61,7 @@ function getActiveStepIndex(state: JobState, currentStage: Stage | null): number
 
 export function StageTimeline({ job }: StageTimelineProps) {
   const activeIdx = getActiveStepIndex(job.state, job.current_stage);
+  const t = useT();
 
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 0, overflowX: "auto", padding: "6px 2px 2px" }}>
@@ -121,7 +127,7 @@ export function StageTimeline({ job }: StageTimelineProps) {
                   whiteSpace: "nowrap",
                 }}
               >
-                {step.label}
+                {t(step.labelKey)}
               </span>
             </div>
           </div>

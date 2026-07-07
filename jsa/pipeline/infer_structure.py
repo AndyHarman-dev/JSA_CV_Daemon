@@ -85,6 +85,10 @@ async def run_infer(
     await emit(2)
     await emit(3)
     await emit(4)
+    # Deliberately NOT steered by the language preference: this structure is a skeleton
+    # (headings/shape), not final deliverable prose, and it feeds cv_adjust — which DOES
+    # apply the language directive (jsa/pipeline/stages.py) — so re-languaging it here
+    # would be redundant. See the language-preference handoff, "Pipeline Integration" §4.
     system_prompt = loader.read_prompt("infer_structure")
     user_msg = f"CV TEXT:\n{cv_text}"
     try:

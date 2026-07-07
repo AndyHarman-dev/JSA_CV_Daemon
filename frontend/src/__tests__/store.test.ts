@@ -6,6 +6,9 @@ import type { JobDTO, WSEvent } from "../types";
 vi.mock("../api", () => ({
   api: {
     getJobs: vi.fn().mockResolvedValue([]),
+    getPreferences: vi.fn().mockResolvedValue({ language: "en" }),
+    putPreferences: vi.fn().mockResolvedValue({ language: "en" }),
+    config: vi.fn().mockResolvedValue({ languages: [] }),
   },
 }));
 
@@ -33,6 +36,8 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
+    language: "en",
+    languages: [],
   });
   vi.clearAllMocks();
 });
@@ -177,5 +182,50 @@ describe("refetchAll", () => {
 
     // State is unchanged
     expect(useStore.getState().jobs["keep"]).toEqual(existingJob);
+  });
+});
+
+describe("hydrateLanguage", () => {
+  it("populates language and languages from the API", async () => {
+    vi.mocked(api.getPreferences).mockResolvedValueOnce({ language: "es" });
+    vi.mocked(api.config).mockResolvedValueOnce({
+      languages: [["en", "English", "English"], ["es", "Spanish", "Español"]],
+    });
+
+    await useStore.getState().hydrateLanguage();
+
+    expect(useStore.getState().language).toBe("es");
+    expect(useStore.getState().languages).toEqual([
+      ["en", "English", "English"],
+      ["es", "Spanish", "Español"],
+    ]);
+  });
+
+  it("leaves state unchanged when the API rejects", async () => {
+    vi.mocked(api.getPreferences).mockRejectedValueOnce(new Error("network error"));
+
+    await expect(useStore.getState().hydrateLanguage()).resolves.toBeUndefined();
+
+    expect(useStore.getState().language).toBe("en");
+  });
+});
+
+describe("setLanguage", () => {
+  it("optimistically sets the language and persists via PUT", async () => {
+    vi.mocked(api.putPreferences).mockResolvedValueOnce({ language: "ja" });
+
+    await useStore.getState().setLanguage("ja");
+
+    expect(useStore.getState().language).toBe("ja");
+    expect(api.putPreferences).toHaveBeenCalledWith("ja");
+  });
+
+  it("reverts to the previous language when the PUT fails", async () => {
+    useStore.setState({ language: "en" });
+    vi.mocked(api.putPreferences).mockRejectedValueOnce(new Error("422"));
+
+    await useStore.getState().setLanguage("xx");
+
+    expect(useStore.getState().language).toBe("en");
   });
 });

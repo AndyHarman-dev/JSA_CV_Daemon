@@ -7,6 +7,8 @@ class InvalidTransition(Exception): ...
 
 
 ALLOWED = {
+    # queued: fresh ingest, parked until the user clicks LAUNCH (queued → pending).
+    JobState.queued:         {JobState.pending, JobState.dismissed},
     JobState.pending:        {JobState.running, JobState.failed, JobState.dismissed},
     # running → pending: crash recovery OR backend-switch restart (cv_adjust limit hit)
     # running → fit_done/unfit: fit-assessment outcomes (pass / flagged mismatch)

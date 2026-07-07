@@ -25,6 +25,18 @@ def make_job(state: JobState, current_stage: Stage | None = None) -> SimpleNames
 class TestAllowedTransitions:
     """Every (from_state, to_state) pair in ALLOWED must succeed via transition()."""
 
+    def test_queued_to_pending(self):
+        """LAUNCH: a fresh, parked job becomes dispatchable."""
+        job = make_job(JobState.queued)
+        transition(job, JobState.pending)
+        assert job.state == JobState.pending
+        assert job.current_stage is None
+
+    def test_queued_to_dismissed(self):
+        job = make_job(JobState.queued)
+        transition(job, JobState.dismissed)
+        assert job.state == JobState.dismissed
+
     def test_pending_to_running(self):
         job = make_job(JobState.pending)
         transition(job, JobState.running, Stage.cv_adjust)
@@ -141,6 +153,17 @@ class TestAllowedTransitions:
 
 class TestForbiddenTransitions:
     """Transitions not in ALLOWED must raise InvalidTransition."""
+
+    def test_queued_to_running_raises(self):
+        """A queued (never-launched) job cannot be dispatched directly — must LAUNCH first."""
+        job = make_job(JobState.queued)
+        with pytest.raises(InvalidTransition):
+            transition(job, JobState.running, Stage.cv_adjust)
+
+    def test_queued_to_failed_raises(self):
+        job = make_job(JobState.queued)
+        with pytest.raises(InvalidTransition):
+            transition(job, JobState.failed)
 
     def test_pending_to_cv_done_raises(self):
         job = make_job(JobState.pending)

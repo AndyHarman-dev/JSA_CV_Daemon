@@ -71,9 +71,16 @@ def _job_data(
 
 
 async def _insert_job(session: AsyncSession, **overrides) -> Job:
-    """Insert a job using upsert_job and commit."""
+    """Insert a job via upsert_job, then launch it (queued → pending) and commit.
+
+    Most of this file's tests exercise post-launch repo behavior (list_runnable_jobs,
+    mark_failed, checkpoint, …), so this fixture simulates an already-launched job.
+    upsert_job's own fresh-insert state is covered separately by
+    test_insert_new_job_has_queued_state below.
+    """
     data = _job_data(**overrides)
     job = await repo.upsert_job(session, data)
+    job.state = JobState.pending
     await session.commit()
     return job
 
@@ -83,9 +90,11 @@ async def _insert_job(session: AsyncSession, **overrides) -> Job:
 # ---------------------------------------------------------------------------
 
 class TestUpsertJob:
-    async def test_insert_new_job_has_pending_state(self, session):
-        job = await _insert_job(session)
-        assert job.state == JobState.pending
+    async def test_insert_new_job_has_queued_state(self, session):
+        """Fresh ingest parks a job as `queued` — it requires an explicit LAUNCH."""
+        job = await repo.upsert_job(session, _job_data())
+        await session.commit()
+        assert job.state == JobState.queued
         assert job.current_stage is None
         assert job.error is None
 
@@ -213,6 +222,13 @@ class TestListJobs:
 # ---------------------------------------------------------------------------
 
 class TestListRunnableJobs:
+    async def test_queued_job_is_not_returned(self, session):
+        """A fresh, never-launched job must not be picked up by the dispatcher."""
+        await repo.upsert_job(session, _job_data(job_id="aaaa000000000001"))
+        await session.commit()
+        runnable = await repo.list_runnable_jobs(session)
+        assert runnable == []
+
     async def test_pending_job_is_returned(self, session):
         await _insert_job(session, job_id="aaaa000000000001")
         runnable = await repo.list_runnable_jobs(session)

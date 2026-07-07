@@ -102,11 +102,12 @@ async def _insert_job(session_factory, *, state: JobState = JobState.pending, **
         job = await repo.upsert_job(session, data)
         await session.commit()
         job_id = job.id
-    if state != JobState.pending:
-        async with session_factory() as session:
-            job = await repo.get_job(session, job_id)
-            job.state = state
-            await session.commit()
+    # upsert_job always creates fresh jobs as `queued`; always force the fixture
+    # to the requested state (default `pending`, the already-launched baseline).
+    async with session_factory() as session:
+        job = await repo.get_job(session, job_id)
+        job.state = state
+        await session.commit()
     async with session_factory() as session:
         job = await repo.get_job(session, job_id)
         return job
