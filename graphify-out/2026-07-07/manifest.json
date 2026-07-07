@@ -20,13 +20,13 @@
     "semantic_hash": ""
   },
   "frontend/src/__tests__/ChatBox.test.tsx": {
-    "mtime": 1783457272.3653245,
-    "ast_hash": "703e9cb8260212ff2e1cc9f866a0f591",
+    "mtime": 1783286824.3248916,
+    "ast_hash": "3aee4a00e6b83449a5bb7eb14a717f2e",
     "semantic_hash": ""
   },
   "frontend/src/__tests__/FollowUpPane.test.tsx": {
-    "mtime": 1783457225.4625225,
-    "ast_hash": "cb8c96a3fef696b0a272b1feca90f6ca",
+    "mtime": 1782863075.4322689,
+    "ast_hash": "e47a4f1547af064dc81b63b2b66fe208",
     "semantic_hash": ""
   },
   "frontend/src/__tests__/Header.test.tsx": {
@@ -100,8 +100,8 @@
     "semantic_hash": ""
   },
   "frontend/src/components/ChatBox.tsx": {
-    "mtime": 1783457040.168667,
-    "ast_hash": "0d16ae194b40dcf0c6ba86a5d863eee0",
+    "mtime": 1783291329.2871625,
+    "ast_hash": "ed2c872bef5ca11b5073cd5b464b1248",
     "semantic_hash": ""
   },
   "frontend/src/components/FollowUpPane.tsx": {
@@ -160,8 +160,8 @@
     "semantic_hash": ""
   },
   "frontend/src/store.ts": {
-    "mtime": 1783457082.681842,
-    "ast_hash": "1d0f624fd7e070832259628bb6865ef8",
+    "mtime": 1783445257.8282518,
+    "ast_hash": "d3147b2ba4978c9ea5cfceed6a670dce",
     "semantic_hash": ""
   },
   "frontend/src/types.ts": {
@@ -265,9 +265,9 @@
     "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
   },
   "jsa/db/engine.py": {
-    "mtime": 1783456952.8226418,
-    "ast_hash": "01e68b411c500206f685814bbc127163",
-    "semantic_hash": ""
+    "mtime": 1781307287.1672084,
+    "ast_hash": "1ee9cea7ae0c27fdf8191647b89f58a3",
+    "semantic_hash": "1ee9cea7ae0c27fdf8191647b89f58a3"
   },
   "jsa/db/models.py": {
     "mtime": 1783443005.6375093,
@@ -810,8 +810,8 @@
     "semantic_hash": "0fd3144a08e022cbef522f5a25dec2dc"
   },
   "jsa/schema/cv.py": {
-    "mtime": 1783456938.2085996,
-    "ast_hash": "1634e3331f28f5a585007fb68c2d5363",
+    "mtime": 1783298449.361593,
+    "ast_hash": "bbdab677e72d078cde7166e3d389f0ac",
     "semantic_hash": ""
   },
   "tests/backend/fakes/finals.py": {
@@ -975,8 +975,8 @@
     "semantic_hash": ""
   },
   "frontend/src/theme/chrome.tsx": {
-    "mtime": 1783456983.1234336,
-    "ast_hash": "145624d6a539dee4052b45c4b55051a1",
+    "mtime": 1783444247.3469484,
+    "ast_hash": "5dcb99164713620bbf7167749e712036",
     "semantic_hash": ""
   },
   "tests/backend/test_dismiss_race.py": {
@@ -1070,8 +1070,8 @@
     "semantic_hash": ""
   },
   "frontend/src/i18n/strings.en.json": {
-    "mtime": 1783457043.819087,
-    "ast_hash": "798f8817c61ea0214afab98037227b5d",
+    "mtime": 1783444354.6265516,
+    "ast_hash": "6ddf4c5b298ec3e1f1238505ae7ef533",
     "semantic_hash": ""
   },
   "frontend/src/i18n/useT.ts": {
@@ -1125,8 +1125,8 @@
     "semantic_hash": ""
   },
   "tests/backend/test_cv_lang_guard.py": {
-    "mtime": 1783457362.9881566,
-    "ast_hash": "1ee27257ed1fdc8863a390441c91e843",
+    "mtime": 1783289911.4418259,
+    "ast_hash": "e9df501e00ff8cabeaa47f5c0b273b12",
     "semantic_hash": ""
   },
   "tests/backend/test_i18n_languages.py": {
@@ -1180,23 +1180,23 @@
     "semantic_hash": ""
   },
   "frontend/src/__tests__/BootGate.test.tsx": {
-    "mtime": 1783457302.676334,
-    "ast_hash": "3bbf3fea3ec16ebc1c0bb7b0bccb202b",
+    "mtime": 1783444856.976003,
+    "ast_hash": "3fbd28ec325ffd2e742a681b73ffa93e",
     "semantic_hash": ""
   },
   "frontend/src/__tests__/LaunchButton.test.tsx": {
-    "mtime": 1783457292.3273177,
-    "ast_hash": "d5bc23388117125a5c470bdb0e97bac4",
+    "mtime": 1783444819.052977,
+    "ast_hash": "781c8d707a1a3a0b22736ae4aa75a3a0",
     "semantic_hash": ""
   },
   "frontend/src/components/BootGate.tsx": {
-    "mtime": 1783457025.1334832,
-    "ast_hash": "f6925ad4a1b7a4a02d5b943d73a3814d",
+    "mtime": 1783444715.126723,
+    "ast_hash": "3373b10d2cce6c29d54572b4d0694db3",
     "semantic_hash": ""
   },
   "frontend/src/components/LaunchButton.tsx": {
-    "mtime": 1783457062.7268088,
-    "ast_hash": "557576d9cfc6cc900b84d221126c4002",
+    "mtime": 1783444552.7420073,
+    "ast_hash": "df60d0d6fb603f4cbb87f59cca1feceb",
     "semantic_hash": ""
   },
   "frontend/src/hooks/useOutsideClick.ts": {

@@ -1,16 +1,16 @@
 # Graph Report - JSA  (2026-07-07)
 
 ## Corpus Check
-- 252 files · ~292,757 words
+- 252 files · ~291,660 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 3972 nodes · 11169 edges · 252 communities (202 shown, 50 thin omitted)
+- 3968 nodes · 11163 edges · 225 communities (186 shown, 39 thin omitted)
 - Extraction: 69% EXTRACTED · 31% INFERRED · 0% AMBIGUOUS · INFERRED: 3427 edges (avg confidence: 0.51)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `23ee26f3`
+- Built from commit: `a1a672a4`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -189,7 +189,6 @@
 - [[_COMMUNITY_Change Log H2 Strip Tests|Change Log H2 Strip Tests]]
 - [[_COMMUNITY_Runnable Jobs Query Helper|Runnable Jobs Query Helper]]
 - [[_COMMUNITY_Community 175|Community 175]]
-- [[_COMMUNITY_Community 176|Community 176]]
 - [[_COMMUNITY_Open FollowUp Integrity Test|Open FollowUp Integrity Test]]
 - [[_COMMUNITY_FollowUp Different Stages Test|FollowUp Different Stages Test]]
 - [[_COMMUNITY_Community 179|Community 179]]
@@ -219,32 +218,6 @@
 - [[_COMMUNITY_Community 222|Community 222]]
 - [[_COMMUNITY_Community 223|Community 223]]
 - [[_COMMUNITY_Community 224|Community 224]]
-- [[_COMMUNITY_Community 226|Community 226]]
-- [[_COMMUNITY_Community 227|Community 227]]
-- [[_COMMUNITY_Community 228|Community 228]]
-- [[_COMMUNITY_Community 229|Community 229]]
-- [[_COMMUNITY_Community 230|Community 230]]
-- [[_COMMUNITY_Community 231|Community 231]]
-- [[_COMMUNITY_Community 232|Community 232]]
-- [[_COMMUNITY_Community 233|Community 233]]
-- [[_COMMUNITY_Community 234|Community 234]]
-- [[_COMMUNITY_Community 235|Community 235]]
-- [[_COMMUNITY_Community 236|Community 236]]
-- [[_COMMUNITY_Community 237|Community 237]]
-- [[_COMMUNITY_Community 238|Community 238]]
-- [[_COMMUNITY_Community 239|Community 239]]
-- [[_COMMUNITY_Community 240|Community 240]]
-- [[_COMMUNITY_Community 241|Community 241]]
-- [[_COMMUNITY_Community 242|Community 242]]
-- [[_COMMUNITY_Community 243|Community 243]]
-- [[_COMMUNITY_Community 244|Community 244]]
-- [[_COMMUNITY_Community 245|Community 245]]
-- [[_COMMUNITY_Community 246|Community 246]]
-- [[_COMMUNITY_Community 247|Community 247]]
-- [[_COMMUNITY_Community 248|Community 248]]
-- [[_COMMUNITY_Community 249|Community 249]]
-- [[_COMMUNITY_Community 250|Community 250]]
-- [[_COMMUNITY_Community 251|Community 251]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `FakeAgentBackend` - 339 edges
@@ -289,39 +262,39 @@
 - **opencode-cli code-review fix set (F1-F7)** — agents_opencode_cli__run, agents_opencode_cli__parse_with_nudge, agents_opencode_cli_restore_session, agents_opencode_cli_send_message, agents_opencode_cli_run_research, pipeline_stages__gather_research, tests_test_opencode_cli [EXTRACTED 1.00]
 - **CV Structure Editor Phase 2 standalone data flow** — store_cv_structure_load, store_cv_structure_save, api_routes_cv_structure, prompts_prompt_infer_structure, src_editorstore, cv_editor_cveditor [EXTRACTED 1.00]
 
-## Communities (252 total, 50 thin omitted)
+## Communities (225 total, 39 thin omitted)
 
 ### Community 0 - "FollowUp/Document/StatusChange Domain"
-Cohesion: 0.06
-Nodes (17): _insert_job(), Insert a job via upsert_job and commit.      upsert_job creates fresh jobs as `q, BF-15: mark_failed must leave current_stage = the failing stage., mark_failed on a job that was pending (current_stage=None) keeps it None., Soft reset when cv_adjust failed → state=pending., Soft reset sets retry_count=1., Soft reset clears error, cv_session_id, session_external_id., Soft reset for cv_adjust failure deletes all Message rows. (+9 more)
+Cohesion: 0.07
+Nodes (16): _insert_job(), Insert a job via upsert_job and commit.      upsert_job creates fresh jobs as `q, BF-15: mark_failed must leave current_stage = the failing stage., mark_failed on a job that was pending (current_stage=None) keeps it None., Soft reset when cv_adjust failed → state=pending., Soft reset sets retry_count=1., Soft reset clears error, cv_session_id, session_external_id., Soft reset for cv_adjust failure deletes all Message rows. (+8 more)
 
 ### Community 1 - "Google CLI Backend Errors"
-Cohesion: 0.10
-Nodes (10): _final(), _needs_input(), Tests for tests/backend/fakes/fake_backend.py: FakeAgentBackend behaviour.  Veri, end_session is a no-op and does not affect remaining scripted replies., TestEndSession, TestExhaustion, TestHandleId, TestRestoreSession (+2 more)
+Cohesion: 0.16
+Nodes (18): _add_cover_letter_messages(), _add_cv_adjust_messages(), _insert_job(), _insert_revision_request(), _make_final_reply(), Regression tests for BF-9: CV/CL revision wrong-session bug.  Before the fix, ru, Insert message history rows for cv_adjust stage (needed by restore_session path), Insert message history rows for cover_letter stage. (+10 more)
 
 ### Community 2 - "Core Domain Models (Job/Message/Settings)"
-Cohesion: 0.06
-Nodes (98): AnswerBody, ExportBody, ReviseBody, _insert_running_job(), Tests for Phase 8: FastAPI backend — EventBus, event schema, and HTTP routes.  C, Manual job launch: queued → pending, snapshotting the global language., Create a FastAPI app with:     - Orchestrator.run patched to a no-op (prevents b, The sidebar's 'Launch All' — launches every currently-queued job in one shot. (+90 more)
+Cohesion: 0.04
+Nodes (161): AnswerBody, ExportBody, ReviseBody, _answer_open_follow_up(), _final_reply(), _insert_job(), _insert_revision_request(), _needs_input_reply() (+153 more)
 
 ### Community 3 - "Pipeline Stage & Reply Types"
 Cohesion: 0.06
-Nodes (116): AgentReply, HistoryTurn, Opaque per-backend handle. Backends may attach process/connection state.     Bac, Reconstruct a previously-ended session WITHOUT generating new assistant turns., SessionHandle, _answer_open_follow_up(), _final_reply(), _insert_job() (+108 more)
+Nodes (77): AgentBackend, HistoryTurn, AgentBackend ABC, SessionHandle, AgentReply, and HistoryTurn dataclasses., Opaque per-backend handle. Backends may attach process/connection state.     Bac, Reconstruct a previously-ended session WITHOUT generating new assistant turns., SessionHandle, FailingBackend, _insert_job() (+69 more)
 
 ### Community 4 - "Claude CLI Session Handling"
 Cohesion: 0.05
-Nodes (23): Tests for ClaudeCliBackend._parse_with_nudge (Phase BF-4).  Strategy -------- -, Nudge branch never taken → _run called 0 times (only nudge calls counted here)., Test 2 — first reply missing sentinel; second (nudge) reply has sentinel., Nudge branch taken → _run called exactly once (the nudge subprocess call)., Nudge retry must also disable all tools — same regression guard as the         o, Test 3 — both first and nudge reply missing sentinel → ProtocolError propagated., Nudge was attempted (first parse failed) → _run called exactly once., Test 4 — first reply has a different ProtocolError (unclosed sentinel).      The (+15 more)
+Nodes (38): ClaudeCliError, ClaudeSessionExpiredError, ClaudeCliBackend: subprocess -p implementation of AgentBackend for the Claude CL, Raised when the claude subprocess fails with no usable output., Raised when claude reports the session ID is no longer known., ProtocolError, FailingClaudeBackend, Tests for ClaudeCliBackend._parse_with_nudge (Phase BF-4).  Strategy -------- - (+30 more)
 
 ### Community 5 - "State Machine Transition Tests"
 Cohesion: 0.10
 Nodes (11): make_job(), Transitions not in ALLOWED must raise InvalidTransition., A queued (never-launched) job cannot be dispatched directly — must LAUNCH first., Every (from_state, to_state) pair in ALLOWED must succeed via transition()., LAUNCH: a fresh, parked job becomes dispatchable., TestAllowedTransitions, TestForbiddenTransitions, JobState (+3 more)
 
 ### Community 6 - "CV Editor Frontend Components"
-Cohesion: 0.09
-Nodes (47): MentionDropdown(), ReviewPane(), ADD_KINDS, AddButton(), AddSectionMenu(), BulletList(), cardField(), ContactCard() (+39 more)
+Cohesion: 0.10
+Nodes (45): MentionDropdown(), FollowUpPane(), ReviewPane(), UnfitModal(), ADD_KINDS, AddButton(), AddSectionMenu(), BulletList() (+37 more)
 
 ### Community 7 - "Claude CLI Backend Tests"
-Cohesion: 0.05
-Nodes (41): ClaudeCliBackend, ClaudeSessionHandle, Session handle for ClaudeCliBackend — carries the claude CLI session UUID., AgentBackend that drives the `claude` CLI via subprocess in -p (print) mode., _ok(), Unit tests for CLI backends: ClaudeCliBackend and GoogleCliBackend.  Both backen, start_session must disable all tools — these are text-only sentinel turns,, Test 4 — restore_session with external_id: no subprocess call, just returns hand (+33 more)
+Cohesion: 0.06
+Nodes (36): ClaudeCliBackend, ClaudeSessionHandle, Session handle for ClaudeCliBackend — carries the claude CLI session UUID., AgentBackend that drives the `claude` CLI via subprocess in -p (print) mode., _ok(), Unit tests for CLI backends: ClaudeCliBackend and GoogleCliBackend.  Both backen, start_session must disable all tools — these are text-only sentinel turns,, Test 4 — restore_session with external_id: no subprocess call, just returns hand (+28 more)
 
 ### Community 8 - "Stage Runner & Fake Backend Core"
 Cohesion: 0.33
@@ -329,35 +302,35 @@ Nodes (12): collectProps(), compileAttr(), compileTemplate(), contentKey(), enco
 
 ### Community 9 - "Google CLI Session Tests"
 Cohesion: 0.05
-Nodes (35): GoogleCliError, GoogleCliSessionExpiredError, Raised when the agy subprocess fails with no usable output., Raised when agy reports the conversation ID is no longer known., _ok(), Phase BF-5 additional tests for GoogleCliBackend.  Covers error-handling and edg, _run wraps plain-text agy stdout into {"response": text, "session_id": None}., If returncode != 0 but stdout has content, _run returns it (not raises). (+27 more)
+Nodes (41): AgentTimeout, Raised when a backend times out waiting for the sentinel from the agent., GoogleCliError, GoogleCliSessionExpiredError, GoogleCliBackend: subprocess -p implementation of AgentBackend for the Google `a, Raised when the agy subprocess fails with no usable output., Raised when agy reports the conversation ID is no longer known., GoogleCliBackend.start_session raises AgentTimeout (not ProtocolError)         w (+33 more)
 
 ### Community 10 - "Agent Backend Exceptions"
 Cohesion: 0.16
 Nodes (9): AnthropicSessionHandle, AnthropicAPIBackend: REST API implementation of AgentBackend using the Anthropic, Session handle for AnthropicAPIBackend; carries conversation history in memory., Reconstruct a previously-ended session from persisted message history., Tests for jsa/agents/anthropic_api.py: AnthropicAPIBackend and AnthropicSessionH, Verify the API receives all prior messages plus the new user turn.          The, TestEndSession, TestSendMessageAppendsTurns (+1 more)
 
 ### Community 11 - "Fake Backend Research Tests"
-Cohesion: 0.07
-Nodes (27): _cl_final_reply(), _cv_json_no_summary(), _final_reply(), _insert_job(), _job_data(), _needs_input_reply(), A FINAL reply carrying exactly `content` (used for raw JSON / contamination payl, A valid cv_adjust FINAL (CV JSON). `marker` appears in the serialized Markdown. (+19 more)
+Cohesion: 0.03
+Nodes (87): After run_stage completes with a FINAL reply, retry_count is reset to 0., _final(), _needs_input(), Tests for tests/backend/fakes/fake_backend.py: FakeAgentBackend behaviour.  Veri, end_session is a no-op and does not affect remaining scripted replies., TestEndSession, TestExhaustion, TestHandleId (+79 more)
 
 ### Community 12 - "Orchestrator Test Harness"
-Cohesion: 0.13
-Nodes (16): _final_reply(), _insert_job(), _job_data(), Run the orchestrator as a task, wait for all jobs to reach target_state, then st, Pending job passes through cv_adjust (cv_done) then cover_letter to reach review, Pending job goes through cv_adjust then cover_letter and reaches review., With 7 pending jobs and max_parallel=3, at most 3 are running at once., If the agent raises an unexpected exception, the job is marked failed. (+8 more)
+Cohesion: 0.16
+Nodes (10): _insert_job(), _job_data(), Run the orchestrator as a task, wait for all jobs to reach target_state, then st, With 7 pending jobs and max_parallel=3, at most 3 are running at once., If the agent raises an unexpected exception, the job is marked failed., The exception message is stored in job.error., GoogleCliSessionExpiredError triggers one auto soft-reset; second expiry → faile, If retry_count is already >0, a GoogleCliSessionExpiredError marks the job faile (+2 more)
 
 ### Community 13 - "Job Upsert/Reset DB Tests"
-Cohesion: 0.23
-Nodes (16): _build_prompt(), _hash(), _keys_needing_translation(), _load_json(), _locale_path(), main(), Incremental UI-string translation generator.  Build-time script (NOT imported by, Translate a batch via a one-shot, non-interactive `claude -p` subprocess.      M (+8 more)
+Cohesion: 0.06
+Nodes (35): get_preferences(), PreferencesBody, put_preferences(), HTTP routes for the global app preferences (currently just output/UI language)., _settings(), jsa/i18n/languages.py — the single language catalog used by /api/config and vali, TestCatalog, TestValidation (+27 more)
 
 ### Community 14 - "Orchestrator Approval Flow Tests"
 Cohesion: 0.09
-Nodes (31): _cl_final_reply(), _cv_json(), _final_reply(), _insert_job(), _job_data(), _needs_input_reply(), A minimal valid CV object. `marker` is embedded in the summary so callers can, A valid cv_adjust FINAL (CV JSON). `content` appears in the serialized Markdown. (+23 more)
+Nodes (32): _cl_final_reply(), _cv_json(), _final_reply(), _insert_job(), _job_data(), _needs_input_reply(), _poll_job_state(), A minimal valid CV object. `marker` is embedded in the summary so callers can (+24 more)
 
 ### Community 15 - "Research Gathering & Placeholder Tests"
 Cohesion: 0.12
 Nodes (9): The brief must appear before 'CV TEXT:' in the message., The brief must appear before 'JOB DESCRIPTION:' in the message., The brief must appear before 'TIER:' in the message., CV text from the job is present in the message., Job description from the job is present in the message., Tier value from the job is present in the message., All three headers (CV TEXT, JOB DESCRIPTION, TIER) appear in message., _build_initial_user_msg() (+1 more)
 
 ### Community 16 - "Frontend Store/API Types"
-Cohesion: 0.08
-Nodes (24): BootGate(), FollowUpPane(), Props, ActionBtnProps, JobDetail(), TIER_COLOR, JobList(), getActiveStepIndex() (+16 more)
+Cohesion: 0.10
+Nodes (17): BootGate(), JobDetail(), JobList(), UnfitModalProps, api, BackendSwitchEvent, Store, useStore (+9 more)
 
 ### Community 17 - "CSV Ingest Tests"
 Cohesion: 0.15
@@ -365,19 +338,19 @@ Nodes (8): jd_hash = sha1(jd)[:16]., Header 'jd' (lowercase) is not the same as 
 
 ### Community 18 - "Stages Pipeline Core"
 Cohesion: 0.08
-Nodes (70): AgentLimitReached, After run_stage completes with a FINAL reply, retry_count is reset to 0., datetime, BackendSwitchedEvent, ErrorEvent, FollowUpNeededEvent, LogEvent, Event envelope dataclasses and Literal types for the WebSocket event bus. (+62 more)
+Nodes (68): AgentLimitReached, AgentBackend, Convention (not enforced by this ABC): if an implementation spawns a     subproc, datetime, BackendSwitchedEvent, ErrorEvent, FollowUpNeededEvent, LogEvent (+60 more)
 
 ### Community 19 - "DC Runtime Template Walker"
 Cohesion: 0.09
 Nodes (27): collectProps(), compileAttr(), compileTemplate(), contentKey(), cssToObj(), dcNameFromPath(), encodeCase(), findTopLevelEquality() (+19 more)
 
 ### Community 20 - "Dev Auto-Responder Tests"
-Cohesion: 0.12
-Nodes (30): _final_cl(), _final_cv(), _fit_reply(), _insert_job(), _job_data(), _needs_input_reply(), _poll_job_state(), Tests for jsa.dev: DevAutoResponder, match_answer, load_rules.  Tests follow the (+22 more)
+Cohesion: 0.07
+Nodes (51): AgentReply, Open a fresh session. Returns the handle and the agent's first reply., _final_cl(), _final_cv(), _fit_reply(), _insert_job(), _job_data(), _needs_input_reply() (+43 more)
 
 ### Community 21 - "Jobs API Routes"
 Cohesion: 0.08
-Nodes (47): answer_follow_up(), approve_job(), cancel_job(), delete_job(), dismiss_job(), _doc_to_dict(), export_job(), _fetch_job_with_relations() (+39 more)
+Nodes (50): answer_follow_up(), approve_job(), cancel_job(), delete_job(), dismiss_job(), _doc_to_dict(), export_job(), _fetch_job_with_relations() (+42 more)
 
 ### Community 22 - "Agent Limit Detection Tests"
 Cohesion: 0.12
@@ -388,8 +361,8 @@ Cohesion: 0.07
 Nodes (23): Raw output containing 'quota' raises AgentLimitReached., Limit keyword detection is case-insensitive., Limit keywords work with mixed case., AgentLimitReached message contains the first 500 chars of raw output., When limit keyword is detected, no nudge subprocess call is made., Without limit keyword, missing-sentinel error triggers nudge., Nudge command uses --resume flag with session ID., Test double: GoogleCliBackend with scripted _run responses. (+15 more)
 
 ### Community 24 - "CV Editor Store Tests"
-Cohesion: 0.07
-Nodes (32): BlocksView(), CvEditor(), DocumentView(), api.getCvStructure(), useEditorStore.addSection(), blankCV(), cleanList(), EditorState (+24 more)
+Cohesion: 0.08
+Nodes (30): BlocksView(), CvEditor(), DocumentView(), api.getCvStructure(), useEditorStore.addSection(), blankCV(), cleanList(), EditorState (+22 more)
 
 ### Community 25 - "DC Runtime CSS/Component Helpers"
 Cohesion: 0.09
@@ -400,44 +373,44 @@ Cohesion: 0.10
 Nodes (22): Agent backend registration, Checkpoint rule, CLAUDE.md — JSA Project Conventions, Concurrency — do not block the event loop, Fit-assessment gate, graphify, Job identity and re-run semantics, Language preference (+14 more)
 
 ### Community 27 - "Frontend Job List/Detail UI"
-Cohesion: 0.17
-Nodes (12): DocPaths, emptyPaths, Props, TabKey, Backend Failover Queue Indicator, Cyberpunk Daemon Redesign (serious-daemon HUD aesthetic), Download Format Menu (PDF/DOCX), HUD Skin System (chamfered panels, no corner brackets) (+4 more)
+Cohesion: 0.08
+Nodes (27): ActionBtnProps, TIER_COLOR, Group, GROUPS, TIER_COLOR, DocPaths, emptyPaths, Props (+19 more)
 
 ### Community 28 - "Sentinel Protocol Prompt Docs"
-Cohesion: 0.12
-Nodes (17): BASE CV STRUCTURE Skeleton Injection (preserve curated order), Change Log <change_log> XML Format, CVDocument JSON Schema (contact + ordered sections), Sentinel Protocol (<<<NEED_INPUT>>>/<<<FINAL>>>/<<<END>>>), Summary Section Floating Bug (serializer overrode curated order), CV Structure Editor design handoff (elevated warm palette, separate folder), Application settings loaded from environment variables (prefix: JSA_)., FastAPI app factory; mounts routes, WS, and static frontend bundle. (+9 more)
+Cohesion: 0.09
+Nodes (22): BASE CV STRUCTURE Skeleton Injection (preserve curated order), Change Log <change_log> XML Format, CVDocument JSON Schema (contact + ordered sections), Sentinel Protocol (<<<NEED_INPUT>>>/<<<FINAL>>>/<<<END>>>), Summary Section Floating Bug (serializer overrode curated order), CV Structure Editor design handoff (elevated warm palette, separate folder), Application settings loaded from environment variables (prefix: JSA_)., _CV_SUMMARY_NUDGE (+14 more)
 
 ### Community 29 - "Log Event Publishing Tests"
 Cohesion: 0.11
 Nodes (18): 10. i18n strings (`frontend/src/i18n/strings.en.json` + `scripts/translate-ui.sh`), 1. New `queued` initial state (`jsa/db/models.py`, `jsa/pipeline/state_machine.py`), 2. Add `job.language` column (`jsa/db/models.py`), 3. Ingest creates `queued` (`jsa/db/repo.py::upsert_job`), 4. LAUNCH endpoints (`jsa/api/routes_jobs.py`), 5. Thread per-job language into the pipeline (`jsa/pipeline/stages.py::run_stage`), 6. `--select-language` flag plumbing, 7. Types & store (`frontend/src/types.ts`, `frontend/src/store.ts`, `frontend/src/api.ts`) (+10 more)
 
 ### Community 30 - "Orchestrator Failure Recovery Tests"
-Cohesion: 0.14
-Nodes (13): BACKEND_LABELS, backendLabel(), BackendState, DONE_STATES, FAILED_STATES, Header(), INBOX_STATES, REVIEW_STATES (+5 more)
+Cohesion: 0.15
+Nodes (12): BACKEND_LABELS, backendLabel(), BackendState, DONE_STATES, FAILED_STATES, Header(), INBOX_STATES, REVIEW_STATES (+4 more)
 
 ### Community 31 - "Job Cancel Endpoint Tests"
-Cohesion: 0.09
-Nodes (18): client(), db(), _insert_job(), _job_data(), Tests for Phase BF-6: POST /api/jobs/{job_id}/cancel route.  Covers: - 404 when, Cancelling a running job returns HTTP 200., Response body has state == 'pending' after cancel., Response body has current_stage == null after cancel. (+10 more)
+Cohesion: 0.08
+Nodes (23): client(), db(), _insert_job(), _job_data(), Tests for Phase BF-6: POST /api/jobs/{job_id}/cancel route.  Covers: - 404 when, POST /cancel on a non-existent job_id must return 404., Cancelling a running job returns HTTP 200., Response body has state == 'pending' after cancel. (+15 more)
 
 ### Community 32 - "WeasyPrint Renderer Tests"
-Cohesion: 0.09
-Nodes (22): _ConcurrencyProbe, Regression test for the WeasyPrint fontconfig segfault (see CLAUDE.md / plan his, Tracks the max number of simultaneous entrants into a critical section., Two renderer.render() calls launched together must serialize write_pdf., test_concurrent_renders_never_overlap_write_pdf(), render() creates parent directories that do not yet exist., render() writes a file at output_path when PDF write is exercised.          The, Markdown containing a GFM table renders without raising an exception. (+14 more)
+Cohesion: 0.07
+Nodes (27): render() creates parent directories that do not yet exist., render() writes a file at output_path when PDF write is exercised.          The, Markdown containing a GFM table renders without raising an exception., Markdown containing ~~strikethrough~~ renders without raising., The CSS from styles.css is embedded in the HTML string passed to weasyprint.HTML, weasyprint.HTML is called exactly once with a non-empty string= kwarg., write_pdf() is called with str(output_path)., CSS is read fresh from disk on every render() call (no caching).          We swa (+19 more)
 
 ### Community 33 - "Frontend package.json Config"
 Cohesion: 0.07
 Nodes (29): dependencies, marked, react, react-dom, zustand, devDependencies, autoprefixer, jsdom (+21 more)
 
 ### Community 34 - "Orchestrator Event Bus"
-Cohesion: 0.15
-Nodes (14): ChatBox(), ChatBoxProps, CLOSED_MENTION, MentionState, Pos, ScratchBuffer(), ScratchRow(), guessTag() (+6 more)
+Cohesion: 0.10
+Nodes (22): ChatBox(), ChatBoxProps, CLOSED_MENTION, MentionState, Props, MarkdownPreview(), Props, Pos (+14 more)
 
 ### Community 35 - "Prompt Loader Tests"
 Cohesion: 0.13
 Nodes (10): The stub prompt must include sentinel grammar instructions., The cv_adjust stub file contains the word STUB or similar indicator., read_prompt raises KeyError for any name not in the registry., Without caching, two calls to the same prompt return the same string., When _PROMPTS_DIR is patched to a temp dir, file edits are visible immediately., TestReadPromptHappyPath, TestReadPromptInvalidName, TestReadPromptNoCaching (+2 more)
 
 ### Community 36 - "Renderer Registry Tests"
-Cohesion: 0.07
-Nodes (25): ABC, renderer_for("docx") returns a DocxRenderer instance., DocxRenderer is a Renderer (isinstance check on ABC)., DocxRenderer.name == 'docx'., renderer_for('weasyprint') still works (no regression)., renderer_for() creates a fresh instance each call (no shared state)., TestDocxRendererRegistry, mock_weasyprint() (+17 more)
+Cohesion: 0.09
+Nodes (18): renderer_for("docx") returns a DocxRenderer instance., DocxRenderer is a Renderer (isinstance check on ABC)., DocxRenderer.name == 'docx'., renderer_for('weasyprint') still works (no regression)., renderer_for() creates a fresh instance each call (no shared state)., TestDocxRendererRegistry, mock_weasyprint(), Unit tests for Phase 7: Renderer (jsa.render.*)  Covers:   - FakeRenderer (tests (+10 more)
 
 ### Community 37 - "Fit Assessment Stage Tests"
 Cohesion: 0.15
@@ -452,8 +425,8 @@ Cohesion: 0.16
 Nodes (22): CvStructureBody, get_cv_structure(), infer_cv_structure(), put_cv_structure(), HTTP routes for the standalone base-CV ``CVDocument`` JSON (the CV Structure Edi, Return the stored base CV. 404 if it has never been saved (drives the empty stat, Validate against the CVDocument schema (422 on the hard gates — contact name, ≥1, Infer a CVDocument from an uploaded CV file. Runs the one-shot inference synchro (+14 more)
 
 ### Community 40 - "Server/CLI Startup Tests"
-Cohesion: 0.12
-Nodes (22): AsyncEngine, create_engine(), create_session_factory(), init_db(), make_engine(), make_session_factory(), Async SQLAlchemy engine and session factory., Create an async SQLAlchemy engine. db_path may be ':memory:' for tests. (+14 more)
+Cohesion: 0.13
+Nodes (21): AsyncEngine, create_engine(), create_session_factory(), init_db(), make_engine(), make_session_factory(), Async SQLAlchemy engine and session factory., Create an async SQLAlchemy engine. db_path may be ':memory:' for tests. (+13 more)
 
 ### Community 41 - "Revision Resume Tests"
 Cohesion: 0.16
@@ -468,12 +441,12 @@ Cohesion: 0.08
 Nodes (26): About the Design Files, Assets, Backend / data wiring (production), Design Tokens, Elevated palette (as designed), Empty state (no CV yet), Fidelity, Files (+18 more)
 
 ### Community 44 - "HTML Pass-Through Rendering Tests"
-Cohesion: 0.11
-Nodes (14): mock_weasyprint(), Regression tests for BF-11/BF-13: HTML handling in the PDF renderer.  BF-11 esta, Markdown with no raw HTML tags is rendered normally with html=True.          The, GFM table syntax is rendered correctly.          Table rows/cells contain no <.., Markdown mixed with raw HTML: HTML passes through, markdown structure preserved., Markdown with no HTML tags passes through markdown-it with html=True unchanged., CommonMark autolink <jane.doe@example.com> is preserved.          markdown-it wi, Prose with bare comparison operators (<, >) is preserved.          markdown-it t (+6 more)
+Cohesion: 0.09
+Nodes (22): mock_weasyprint(), Regression tests for BF-11/BF-13: HTML handling in the PDF renderer.  BF-11 esta, Markdown with no raw HTML tags is rendered normally with html=True.          The, GFM table syntax is rendered correctly.          Table rows/cells contain no <.., Markdown mixed with raw HTML: HTML passes through, markdown structure preserved., Markdown with no HTML tags passes through markdown-it with html=True unchanged., CommonMark autolink <jane.doe@example.com> is preserved.          markdown-it wi, Prose with bare comparison operators (<, >) is preserved.          markdown-it t (+14 more)
 
 ### Community 45 - "CLI Scaffold Settings Tests"
-Cohesion: 0.11
-Nodes (31): answer_follow_up(), backend_switch_reset(), checkpoint(), get_documents(), get_follow_ups(), get_job(), get_state_fresh(), list_jobs() (+23 more)
+Cohesion: 0.14
+Nodes (7): A (returncode, stdout, stderr) tuple shaped like run_killable's return value., run_research builds: claude --agent <name> --output-format text -p <query>., run_research passes cwd=str(_PROJECT_ROOT) to run_killable., run_research passes timeout=RESEARCH_TIMEOUT (300.0) to run_killable., run_research returns the raw stdout string from the subprocess., run_research uses 'cl-research' agent name when specified., Existing start_session calls do NOT pass cwd (cwd=None → cwd=None in run_killabl
 
 ### Community 46 - "Runnable Jobs Query Tests"
 Cohesion: 0.13
@@ -484,8 +457,8 @@ Cohesion: 0.15
 Nodes (12): 1. New shared spawn seam — `jsa/agents/_subprocess.py`, 2. `jsa/agents/claude_cli.py`, 3. `jsa/agents/google_cli.py`, 4. `jsa/api/routes_jobs.py` — wire the Cancel button (chosen scope), Approach, Context, Critical constraint discovered — must kill the process *group*, not just the child, Decisions (chosen while user was away — revisit if desired) (+4 more)
 
 ### Community 48 - "Dev Tunnel Start Tests"
-Cohesion: 0.14
-Nodes (10): Tests for Phase DEV-1: --dev-tunnel flag.  Covers:   - create_app CORS configura, When cloudflared is absent, _start_tunnel prints a hint and raises typer.Exit., When cloudflared is found, _start_tunnel spawns the correct subprocess., The daemon thread scans stdout and prints the trycloudflare URL., _start_tunnel launches a daemon thread to watch cloudflared output., TestStartTunnelCloudflaredNotFound, TestStartTunnelSpawnsProcess, TestStartTunnelUrlPrinted (+2 more)
+Cohesion: 0.15
+Nodes (9): When cloudflared is absent, _start_tunnel prints a hint and raises typer.Exit., When cloudflared is found, _start_tunnel spawns the correct subprocess., The daemon thread scans stdout and prints the trycloudflare URL., _start_tunnel launches a daemon thread to watch cloudflared output., TestStartTunnelCloudflaredNotFound, TestStartTunnelSpawnsProcess, TestStartTunnelUrlPrinted, Spawn a cloudflared quick tunnel and print the public URL once available.      R (+1 more)
 
 ### Community 49 - "CV Loader Tests"
 Cohesion: 0.13
@@ -493,7 +466,7 @@ Nodes (10): `.PDF` (uppercase) should use the pypdf path., Pages where extract_t
 
 ### Community 50 - "CV Serializer Layout Tests"
 Cohesion: 0.14
-Nodes (9): Tests for the deterministic schema -> canonical Markdown serializer + tolerant s, Program-owned layout decisions that don't depend on what the model emits., Normalization absorbs the shape variance that broke the live run., TestCvSerializer, TestLayoutPolicies, TestSchemaTolerance, CVDocument, cv_to_markdown() (+1 more)
+Nodes (8): Program-owned layout decisions that don't depend on what the model emits., Normalization absorbs the shape variance that broke the live run., TestCvSerializer, TestLayoutPolicies, TestSchemaTolerance, CVDocument, cv_to_markdown(), Render a validated CVDocument to canonical Markdown.
 
 ### Community 51 - "Cyberpunk Redesign Design Handoff"
 Cohesion: 0.22
@@ -501,7 +474,7 @@ Nodes (10): App(), useEditorStore.onInferProgress(), useStore.applyEvent(), useS
 
 ### Community 52 - "BF-9 Revision Session Tests"
 Cohesion: 0.15
-Nodes (9): ClaudeCliBackend.run_research, GoogleCliBackend.run_research, FakeAgentBackend + cover_letter stage → result contains [COMPANY_BRIEF]., run_research raising RuntimeError → cv_adjust NONE placeholder returned., run_research raising RuntimeError → cover_letter NONE placeholder returned., _gather_research(), Return (agent_name, query, open_tag) for the given stage.      Only ``cv_adjust`, Return a research brief block to inject into the initial user message.      Any (+1 more)
+Nodes (9): ClaudeCliBackend.run_research, GoogleCliBackend.run_research, FakeAgentBackend + cv_adjust stage → result contains [INTEL_BRIEF]., run_research raising RuntimeError → cover_letter NONE placeholder returned., _gather_research must not propagate any exception from run_research., _gather_research(), Return (agent_name, query, open_tag) for the given stage.      Only ``cv_adjust`, Return a research brief block to inject into the initial user message.      Any (+1 more)
 
 ### Community 53 - "Fake Renderer Tests"
 Cohesion: 0.24
@@ -512,12 +485,12 @@ Cohesion: 0.14
 Nodes (7): _cl_json(), _cv_json(), A minimal valid CV object. `marker` is embedded in the summary so callers can, cv_adjust FINAL is now validated as JSON against the CVDocument schema., TestValidateCvContent, Parse + validate a FINAL payload for the given stage.      Returns the validated, _validate_final_content()
 
 ### Community 55 - "CVDocument Schema Model"
-Cohesion: 0.12
-Nodes (22): CV Structure Editor — hifi HTML design prototype, Validate each backend name against the registry., Pattern, Contact, _cv_text_blob(), CVDocument, Entry, _letter_formula_re() (+14 more)
+Cohesion: 0.10
+Nodes (25): Non-RateLimitError exceptions are not caught (propagate as-is or wrapped)., CV Structure Editor — hifi HTML design prototype, Validate each backend name against the registry., Pattern, CoverLetter, Structured cover-letter schema — tolerant by design.  A CoverLetter is an option, Contact, _cv_text_blob() (+17 more)
 
 ### Community 56 - "Anthropic API Message Tests"
-Cohesion: 0.11
-Nodes (11): AnthropicAPIBackend, AgentBackend implementation that calls the Anthropic messages API directly., No-op for stateless REST API — just clear in-memory history., REST API is stateless; external_id is always None even if one was passed in., TestCallApiTimeout, TestRestoreSession, TestRestoreSessionEmptyHistory, TestTypeErrorOnWrongHandle (+3 more)
+Cohesion: 0.12
+Nodes (10): AnthropicAPIBackend, AgentBackend implementation that calls the Anthropic messages API directly., No-op for stateless REST API — just clear in-memory history., REST API is stateless; external_id is always None even if one was passed in., TestCallApiTimeout, TestRestoreSession, TestRestoreSessionEmptyHistory, TestTypeErrorOnWrongHandle (+2 more)
 
 ### Community 57 - "Backend Registry Tests"
 Cohesion: 0.13
@@ -528,8 +501,8 @@ Cohesion: 0.13
 Nodes (21): _cv_final_reply(), _final_reply(), _fit_reply(), _insert_running_job(), _job_data(), _needs_input_reply(), Regression tests for the dismiss/cancel resurrection race.  Bug: 5 jobs run in p, A passing fit-assessment verdict (first line FIT). (+13 more)
 
 ### Community 59 - "FastAPI App / CORS Tests"
-Cohesion: 0.12
-Nodes (15): _find_cors(), _make_settings(), Return the kwargs dict of the CORSMiddleware entry in user_middleware,     or No, Build a Settings object using only default values (all fields have defaults)., Default (dev_tunnel=False): CORS allows only localhost:* via regex., dev_tunnel=True: CORS uses allow_origins=["*"] for public cloudflared URL., TestCorsDefault, TestCorsDevTunnel (+7 more)
+Cohesion: 0.21
+Nodes (12): _find_cors(), _make_settings(), Tests for Phase DEV-1: --dev-tunnel flag.  Covers:   - create_app CORS configura, Return the kwargs dict of the CORSMiddleware entry in user_middleware,     or No, Build a Settings object using only default values (all fields have defaults)., Default (dev_tunnel=False): CORS allows only localhost:* via regex., dev_tunnel=True: CORS uses allow_origins=["*"] for public cloudflared URL., TestCorsDefault (+4 more)
 
 ### Community 60 - "DC Runtime Component Init"
 Cohesion: 0.22
@@ -545,15 +518,15 @@ Nodes (23): 10. CV Structure Editor — Split View, 11. CV Structure Editor — 
 
 ### Community 63 - "Async Session Factory Fixtures"
 Cohesion: 0.04
-Nodes (41): GoogleCliBackend, Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once., Open a fresh agy session and return the handle + first reply.          Spawns: a, Send a message to an existing session using --conversation mode.          Spawns, One-shot, non-interactive research via inline system prompt + agy's built-in sea, AgentBackend that drives the `agy` CLI via subprocess in -p (print) mode.      E, Scan a per-invocation agy log file for the created conversation UUID., Run an agy CLI command. Returns {"response": text, "session_id": uuid_or_None}. (+33 more)
+Nodes (36): GoogleCliBackend, AgentBackend that drives the `agy` CLI via subprocess in -p (print) mode.      E, _REGISTRY dict, Test 10 — start_session returns (GoogleSessionHandle, AgentReply)., Tests 11 + 12 — restore_session uses native --resume (no subprocess needed)., Test 11 — with external_id, no subprocess is spawned., Test 12 — without external_id, RuntimeError is raised., TestGoogleRestoreSession (+28 more)
 
 ### Community 64 - "Job Delete Endpoint Tests"
 Cohesion: 0.10
 Nodes (13): db(), _insert_job(), _job_data(), Insert a job via upsert_job and optionally override its state, then commit., DELETE on an existing pending job returns HTTP 200., Response body is exactly {"ok": True}., After DELETE, the job row is gone from the DB., After DELETE, GET /api/jobs/{id} returns 404. (+5 more)
 
 ### Community 65 - "Cover Letter Serializer Tests"
-Cohesion: 0.05
-Nodes (54): AgentLimitReached, AgentTimeout, AgentBackend ABC, SessionHandle, AgentReply, and HistoryTurn dataclasses., Raised when a backend hits its usage/rate limit.      The raw output snippet fro, Raised when a backend times out waiting for the sentinel from the agent., ClaudeCliError, ClaudeSessionExpiredError, ClaudeCliBackend: subprocess -p implementation of AgentBackend for the Claude CL (+46 more)
+Cohesion: 0.06
+Nodes (29): AgentLimitReached, Raised when a backend hits its usage/rate limit.      The raw output snippet fro, Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once., Open a fresh claude CLI session and return the handle + first reply.          Sp, Return a handle ready for send_message.          With external_id: the Claude CL, Send a message to an existing session using --resume mode.          Spawns: clau, No-op: the subprocess has already exited when start_session/send_message returne, One-shot, non-interactive research via a .claude/agents/ subagent.          Retu (+21 more)
 
 ### Community 66 - "Coordinator Memory Index"
 Cohesion: 0.10
@@ -568,16 +541,16 @@ Cohesion: 0.12
 Nodes (16): 4a — Tag the baseline, 4b — Mark in-progress, 4c — Check test infrastructure, 4d — Invoke Coder, 4e — Invoke Tester, 4f — Invoke Reviewer, 4g — Phase summary, Advisor usage (+8 more)
 
 ### Community 69 - "Cover Letter Schema Model"
-Cohesion: 0.32
-Nodes (5): Any, _as_paragraphs(), CoverLetter, Structured cover-letter schema — tolerant by design.  A CoverLetter is an option, Coerce paragraphs into a list of strings; split a blob on blank lines.
+Cohesion: 0.67
+Nodes (3): Any, _as_paragraphs(), Coerce paragraphs into a list of strings; split a blob on blank lines.
 
 ### Community 70 - "Backend Factory Tests"
 Cohesion: 0.14
 Nodes (8): backend_for(), Backend registry: backend_for(name) -> AgentBackend., Return an instantiated AgentBackend for the given backend name.      Optional kw, TestRegistryAnthropicBackend, The error message should include the names of available backends., When no backends are registered the message says '(none registered)'., All currently registered names should appear in the error message., TestBackendForUnknown
 
 ### Community 71 - "Job Dismiss Endpoint Tests"
-Cohesion: 0.12
-Nodes (10): _insert_job(), _job_data(), Insert a job and optionally set its state., Dismissing a pending job returns 200 and state='dismissed'., Dismissing an approved job returns 400., Dismissing an already-dismissed job returns 400., POST /reset on a dismissed job should return 200 and state='pending'., POST /reset on a pending job should return 400 (unchanged from pre-BF-1). (+2 more)
+Cohesion: 0.09
+Nodes (15): db(), _insert_job(), _job_data(), Tests for BF-1 bugfixes: 1. State machine dismiss transitions 2. Dismiss API end, FastAPI app with Orchestrator.run patched to noop, in-memory DB., session_factory, available after lifespan has run., Insert a job and optionally set its state., Dismissing a pending job returns 200 and state='dismissed'. (+7 more)
 
 ### Community 72 - "Dismiss State Transition Tests"
 Cohesion: 0.23
@@ -600,28 +573,28 @@ Cohesion: 0.05
 Nodes (47): Unit tests for Phase BF-20: DOCX Renderer (jsa.render.docx_render)  Covers:   -, render() handles Markdown with no headings., H1 paragraph is center-aligned., H1 content is preserved exactly., Contact line after H1 is italicized., Contact line is center-aligned., Contact line is 10pt., If no H1, first line is treated as body text, not contact line. (+39 more)
 
 ### Community 77 - "PDF Skill Advanced Reference"
-Cohesion: 0.11
-Nodes (18): 1. For Large PDFs, 2. For Text Extraction, 3. For Image Extraction, 4. For Form Filling, 5. Memory Management, Advanced Python Techniques, Advanced Table Extraction with Custom Settings, Create Professional Reports with Tables (+10 more)
+Cohesion: 0.04
+Nodes (46): 1. For Large PDFs, 2. For Text Extraction, 3. For Image Extraction, 4. For Form Filling, 5. Memory Management, Advanced Command-Line Operations, Advanced Encryption, Advanced Image Conversion (+38 more)
 
 ### Community 78 - "DOCX Skill Critical Rules"
 Cohesion: 0.13
 Nodes (15): Creating New Documents, Critical Rules for docx-js, Footnotes, Headers/Footers, Hyperlinks, Lists (NEVER use unicode bullets), Multi-Column Layouts, Page Breaks (+7 more)
 
 ### Community 79 - "PDF Form Field Extraction Guide"
-Cohesion: 0.12
-Nodes (17): A.1: Analyze the Structure, A.2: Check for Missing Elements, A.3: Create fields.json with PDF Coordinates, A.4: Validate Bounding Boxes, Approach A: Structure-Based Coordinates (Preferred), Approach B: Visual Estimation (Fallback), B.1: Convert PDF to Images, B.2: Initial Field Identification (+9 more)
+Cohesion: 0.13
+Nodes (12): A.1: Analyze the Structure, A.2: Check for Missing Elements, A.3: Create fields.json with PDF Coordinates, A.4: Validate Bounding Boxes, Approach A: Structure-Based Coordinates (Preferred), Fillable fields, Hybrid Approach: Structure + Visual, Non-fillable fields (+4 more)
 
 ### Community 80 - "JSA Core Components Overview"
 Cohesion: 0.13
 Nodes (15): Behavior to preserve (do not touch), Branch, Confirmed design decisions, Context, Critical files, Execution & parallelization, JSA — Cyberpunk Daemon Redesign, Known deviations (intentional) (+7 more)
 
 ### Community 81 - "DOCX Skill Quick Reference"
-Cohesion: 0.14
-Nodes (13): Accepting Tracked Changes, Common Pitfalls, Converting .doc to .docx, Converting to Images, Dependencies, DOCX creation, editing, and analysis, Editing Existing Documents, Overview (+5 more)
+Cohesion: 0.13
+Nodes (14): Accepting Tracked Changes, Comments, Converting .doc to .docx, Converting to Images, Dependencies, DOCX creation, editing, and analysis, Images, Images (+6 more)
 
 ### Community 82 - "CV Structure Store"
-Cohesion: 0.20
-Nodes (16): Phase 2A — standalone CV-structure store + API (CV Structure Editor backend).  C, test_app(), CVDocument, Path, Settings, CVDocument._not_a_cover_letter (content-kind guard), load(), _load_sync() (+8 more)
+Cohesion: 0.14
+Nodes (17): Phase 2A — standalone CV-structure store + API (CV Structure Editor backend).  C, test_app(), TestInfer, CVDocument, Path, Settings, CVDocument._not_a_cover_letter (content-kind guard), load() (+9 more)
 
 ### Community 83 - "PDF Skill Common Tasks"
 Cohesion: 0.14
@@ -648,16 +621,16 @@ Cohesion: 0.26
 Nodes (12): AgentBackend Abstraction (ABC), Orchestrator Concurrency Model (Semaphore 5), JSA System Overview, Park-as-Task-Exit Concurrency, Renderer Runs on Review Entry (pre-render, BF-22), Native restore_session (not user-turn replay), Frontend SPA Entry (index.html), AgentLimitReached Exception (+4 more)
 
 ### Community 89 - "Anthropic Start Session Tests"
-Cohesion: 0.13
-Nodes (16): _insert_job(), _job_data(), Run the orchestrator as a task, wait for all jobs to reach target_state, then st, Orchestrator publishes a 'log' event with level=info containing 'Picked up', The 'Picked up' LogEvent text includes the stage value (cv_adjust)., The 'Picked up' LogEvent has the correct job_id field., When the running-transition raises, a 'log' event with level='warn'         cont, The 'Failed to start' LogEvent text includes the stage value. (+8 more)
+Cohesion: 0.16
+Nodes (12): KillableResult, Shared async subprocess seam for CLI backends (claude_cli.py, google_cli.py).  B, Spawn `cmd` as an async subprocess and return (returncode, stdout, stderr)., run_killable(), captured_pid(), _pgid_is_alive(), Regression tests for jsa.agents._subprocess.run_killable.  Bug: both CLI backend, Wrap asyncio.create_subprocess_exec to record the spawned pid while     still de (+4 more)
 
 ### Community 90 - "DOCX Heading Tests"
 Cohesion: 0.17
 Nodes (13): async_sessionmaker, Yield a single AsyncSession for most tests., In-memory SQLite with StaticPool so all sessions share the same DB., session(), session_factory(), Create an in-memory SQLite engine with StaticPool (shared connection).      Stat, Yield a single AsyncSession for use in most tests., session() (+5 more)
 
 ### Community 91 - "Resume User Message Tests"
-Cohesion: 0.06
-Nodes (61): AgentBackend, Convention (not enforced by this ABC): if an implementation spawns a     subproc, Open a fresh session. Returns the handle and the agent's first reply., FastAPI app with Orchestrator.run patched to noop, in-memory DB., test_app(), TestInfer, _poll_job_state(), Tests for BF-7: LogEvent/ErrorEvent publishing at pipeline milestones.  Covers s (+53 more)
+Cohesion: 0.08
+Nodes (37): _cl_final_reply(), _final_reply(), _insert_job(), _job_data(), _needs_input_reply(), Unit tests for Phase SA-1: research subagent pre-step.  Covers: - _gather_resear, Insert a job using upsert_job, launch it (queued → pending), and commit., _gather_research routes backends without run_research to the NONE placeholder. (+29 more)
 
 ### Community 92 - "DC Runtime Component Factory"
 Cohesion: 0.19
@@ -684,12 +657,12 @@ Cohesion: 0.18
 Nodes (7): make_job(), pending/running/awaiting_input/cv_done/review/failed → dismissed succeeds.     a, approved is terminal — any outgoing transition must raise., Undismiss: dismissed → pending is the one allowed transition out., dismissed → failed is NOT in ALLOWED[dismissed]., Sanity check: dismissed key exists in ALLOWED and only has pending., TestDismissTransitions
 
 ### Community 98 - "Renderer Base ABC Tests"
-Cohesion: 0.25
-Nodes (6): Path, _add_bottom_border(), _add_runs(), DocxRenderer: Markdown -> ATS-friendly DOCX via python-docx., Add a thin bottom border to the given paragraph using OOXML manipulation., Add runs to a paragraph, respecting **bold** markers.      If default_bold is Tr
+Cohesion: 0.10
+Nodes (14): ABC, test_renderer_abc_cannot_be_instantiated(), FakeRenderer — deterministic Renderer implementation for testing.  Writes stub b, Path, Path, Renderer ABC: async render(markdown, output_path) -> None., Renderer, _add_bottom_border() (+6 more)
 
 ### Community 99 - "AGENTS.md Architecture Spine"
 Cohesion: 0.22
-Nodes (8): _fit_reply(), A passing fit-assessment verdict — pending jobs run fit_assessment first., _fit_reply(), A passing fit-assessment verdict — pending jobs run fit_assessment first., When agent returns needs_input, job goes to awaiting_input — not failed., FollowUp row is inserted when job parks to awaiting_input., A job in awaiting_input with unanswered FollowUp is NOT dispatched., Orchestrator
+Nodes (9): _fit_reply(), _needs_input_reply(), A passing fit-assessment verdict — pending jobs run fit_assessment first., When agent returns needs_input, job goes to awaiting_input — not failed., FollowUp row is inserted when job parks to awaiting_input., In-memory SQLite with StaticPool so all sessions share the same DB., A job parked in awaiting_input with an answered FollowUp resumes to review., A job in awaiting_input with unanswered FollowUp is NOT dispatched. (+1 more)
 
 ### Community 100 - "DOCX Renderer Async Tests"
 Cohesion: 0.14
@@ -759,17 +732,13 @@ Nodes (16): Architecture at a glance, Context, Decisions locked with the user, D
 Cohesion: 0.22
 Nodes (8): compilerOptions, allowSyntheticDefaultImports, composite, module, moduleResolution, skipLibCheck, strict, include
 
-### Community 117 - "DOCX Renderer Internals"
-Cohesion: 0.12
-Nodes (14): render() writes b"PDF" to the given output path., render() creates all missing parent directories., Each call to render() appends a RenderCall to self.calls., Multiple invocations produce multiple RenderCall entries in order., A freshly constructed FakeRenderer has no recorded calls., FakeRenderer must subclass Renderer (isinstance check)., TestFakeRenderer, FakeRenderer (+6 more)
-
 ### Community 118 - "PDF Skill Advanced CLI Ops"
-Cohesion: 0.18
-Nodes (7): _job_data(), _make_job(), Cover-letter placeholder has matching close tag., _gather_research must not propagate any exception from run_research., If run_research returns text lacking the expected open_tag, fall back to placeho, GoogleCliBackend.run_research returns valid brief → _gather_research returns it, Create an in-memory Job ORM instance without inserting into the DB.
+Cohesion: 0.20
+Nodes (6): _make_job(), FakeAgentBackend + cover_letter stage → result contains [COMPANY_BRIEF]., run_research raising RuntimeError → cv_adjust NONE placeholder returned., If run_research returns text lacking the expected open_tag, fall back to placeho, When run_research returns text with [INTEL_BRIEF], the verbatim brief is returne, Create an in-memory Job ORM instance without inserting into the DB.
 
 ### Community 119 - "PDF Skill JS Libraries"
-Cohesion: 0.11
-Nodes (21): bootLines(), BootLogView(), LanguagePickerView(), Logo(), Group, GROUPS, TIER_COLOR, LaunchButton() (+13 more)
+Cohesion: 0.24
+Nodes (6): LaunchButton(), Phase, Catalog, catalogs, getCatalog(), modules
 
 ### Community 120 - "opencode-cli Backend Impl Plan"
 Cohesion: 0.12
@@ -785,15 +754,15 @@ Nodes (4): revising_cv is treated like cv_adjust for placeholder tags., revising
 
 ### Community 123 - "StageTimeline Component"
 Cohesion: 0.33
-Nodes (3): Open a fresh session: send the initial user message and return the handle + firs, Append a user turn, call the API, parse and store the assistant reply., Call the Anthropic messages API and return the raw text response.          The c
+Nodes (4): Open a fresh session: send the initial user message and return the handle + firs, Append a user turn, call the API, parse and store the assistant reply., Call the Anthropic messages API and return the raw text response.          The c, AgentReply
 
 ### Community 124 - "Orchestrator Limit/Reset Handlers"
 Cohesion: 0.10
 Nodes (24): _insert_job(), _job_data(), LimitReachedBackend, _poll_job_state(), Tests for Phase BF-18: AgentLimitReached exception detection.  Tests cover: 1. A, Tests for AnthropicAPIBackend._call_api RateLimitError handling., start_session also raises AgentLimitReached if API hits rate limit., In-memory SQLite with StaticPool for testing. (+16 more)
 
 ### Community 126 - "Dev Answer Normalization Helpers"
-Cohesion: 0.33
-Nodes (4): mem_session_factory(), In-memory SQLite with StaticPool — shared across sessions in one test., A running job with no documents should revert to pending., Jobs in awaiting_input should not be modified by the recovery sweep.
+Cohesion: 0.19
+Nodes (9): _insert_running_job(), mem_session_factory(), In-memory SQLite with StaticPool — shared across sessions in one test., Insert a job in running state for recovery tests., A running job with no documents should revert to pending., A running job that has a cv_adjust document should revert to cv_done., A running job that has both a cv and a cl document should revert to cl_done., Jobs in awaiting_input should not be modified by the recovery sweep. (+1 more)
 
 ### Community 127 - "BF-18-21 Plan Doc"
 Cohesion: 0.20
@@ -812,20 +781,16 @@ Cohesion: 0.32
 Nodes (6): Inputs you receive, Output format — emit EXACTLY this block and nothing else, What to do, Inputs you receive, Output format — emit EXACTLY this block and nothing else, What to do
 
 ### Community 131 - "DOCX Bullet List Tests"
-Cohesion: 0.13
-Nodes (6): Per-language cover-letter content-kind guard (`CVDocument._not_a_cover_letter`)., TestEnglishDefault, TestFrenchGuard, TestSpanishGuard, TestThaiGuard, TestUnauthoredLanguageFallback
+Cohesion: 0.17
+Nodes (5): Per-language cover-letter content-kind guard (`CVDocument._not_a_cover_letter`)., TestEnglishDefault, TestFrenchGuard, TestSpanishGuard, TestUnauthoredLanguageFallback
 
 ### Community 132 - "DOCX Horizontal Rule Tests"
-Cohesion: 0.07
-Nodes (12): db(), _insert_job(), _job_data(), Insert a job via upsert_job and optionally override its state, then commit., A pending job cannot be approved — expects 400., A review job with both documents should succeed when renderer is patched., A pending job cannot be revised — expects 400., Resetting a failed job should transition it to pending. (+4 more)
-
-### Community 134 - "Get Follow-Ups Repo Tests"
-Cohesion: 0.08
-Nodes (44): Tests for BF-1 bugfixes: 1. State machine dismiss transitions 2. Dismiss API end, Settings().agent_timeout should default to 600.0., TestAgentTimeoutDefault, TestDismissEndpoint, TestJDInAPIResponse, TestResetDismissed, Tests for jsa.db.repo: repository functions against in-memory SQLite., Inserting two open (unanswered) FollowUps for the same (job, stage) must raise. (+36 more)
+Cohesion: 0.05
+Nodes (35): client(), db(), _insert_job(), _job_data(), Tests for Phase 8: FastAPI backend — EventBus, event schema, and HTTP routes.  C, Insert a job via upsert_job and optionally override its state, then commit., A pending job cannot be approved — expects 400., A review job with both documents should succeed when renderer is patched. (+27 more)
 
 ### Community 135 - "Phase Testing How-To Doc"
-Cohesion: 0.32
-Nodes (4): TestCoverLetterSerializer, CoverLetter, cover_letter_to_markdown(), Render a validated CoverLetter to canonical Markdown (plain prose).
+Cohesion: 0.15
+Nodes (9): Tests for the deterministic schema -> canonical Markdown serializer + tolerant s, Hard letter guard (schema) vs. soft summary predicate (used by the self-heal nud, TestContentKindGuards, TestCoverLetterSerializer, CoverLetter, cover_letter_to_markdown(), Render a validated CoverLetter to canonical Markdown (plain prose)., cv_has_summary() (+1 more)
 
 ### Community 137 - "Gemini CL Research Prompt Doc"
 Cohesion: 0.32
@@ -864,8 +829,8 @@ Cohesion: 0.17
 Nodes (11): Error message should identify the company/role for the bad row., Lowercase 'a' is not a valid tier — only 'A', 'B', 'C' are., TestCsvLoaderSoftSkipTier, _detect_delimiter(), _jd_hash(), _job_id(), load_csv(), CSV parsing and job-ID hashing for ingest. (+3 more)
 
 ### Community 148 - "PDF Skill Complex Workflows"
-Cohesion: 0.14
-Nodes (12): _cl_final_reply(), _final_reply(), _insert_job_in_session(), run_stage publishes 'Starting stage: cv_adjust' at entry., run_stage publishes 'Starting stage: cover_letter' for the cover_letter stage., The 'Starting stage' LogEvent has the correct job_id., run_stage publishes 'FINAL received' after a successful cv_adjust., run_stage publishes 'FINAL received' after a successful cover_letter. (+4 more)
+Cohesion: 0.47
+Nodes (5): bootLines(), BootLogView(), LanguagePickerView(), Logo(), chamferPath()
 
 ### Community 149 - "PDF Skill Advanced Python Techniques"
 Cohesion: 0.36
@@ -884,8 +849,8 @@ Cohesion: 0.40
 Nodes (4): Implementation process, On invocation, Rules, What to report back
 
 ### Community 153 - "Config Anthropic Timeout Tests"
-Cohesion: 0.29
-Nodes (5): Path, Canonical base-CV ``CVDocument`` JSON — the standalone source of truth edited by, Global app preferences JSON (currently just ``{"language": "en"}``). Lives next, Force WeasyPrint/fontconfig's one-time global init to happen alone.      fontcon, _warm_up_weasyprint()
+Cohesion: 0.06
+Nodes (23): TestConfigDefaults, Create a FastAPI app with:     - Orchestrator.run patched to a no-op (prevents b, test_app(), Create a FastAPI app with:     - Orchestrator.run patched to a no-op (prevents b, test_app(), Create a FastAPI test app with patched orchestrator (no background polling)., test_app(), Settings().agent_timeout should default to 600.0. (+15 more)
 
 ### Community 154 - "Change Log Need-Input Tests"
 Cohesion: 0.40
@@ -904,8 +869,8 @@ Cohesion: 0.46
 Nodes (5): Any, _first_str(), Return the first non-empty string value among ``keys`` (in order)., Coerce a value into a list of non-empty strings (drops non-string members)., _str_list()
 
 ### Community 160 - "DOCX Skill XML Reference"
-Cohesion: 0.16
-Nodes (4): jsa/i18n/translate.py — API vs CLI backend dispatch for the UI translation gener, TestRunThreadsBackend, TestTranslateBatchCli, TestTranslateBatchDispatch
+Cohesion: 0.33
+Nodes (6): Approach B: Visual Estimation (Fallback), B.1: Convert PDF to Images, B.2: Initial Field Identification, B.3: Zoom Refinement (CRITICAL for accuracy), B.4: Create fields.json with Refined Coordinates, B.5: Validate Bounding Boxes
 
 ### Community 161 - "DEV-1 Dev Tunnel Memory"
 Cohesion: 0.40
@@ -916,8 +881,8 @@ Cohesion: 0.50
 Nodes (3): Sentinel grammar parser: NEED_INPUT / FINAL block detection and ProtocolError., Remove any Change Log content from a FINAL block payload.      Strips both:, _strip_change_log()
 
 ### Community 170 - "MarkdownPreview Component"
-Cohesion: 0.20
-Nodes (8): jsa/i18n/languages.py — the single language catalog used by /api/config and vali, TestValidation, is_valid(), language_name(), Curated language catalog: the single source of truth for the language picker.  S, English name for ``code``, falling back to the code itself if unknown., _language_directive(), A short directive appended to a NEW session's system prompt for a non-English
+Cohesion: 0.40
+Nodes (5): Common Pitfalls, Editing Existing Documents, Step 1: Unpack, Step 2: Edit XML, Step 3: Pack
 
 ### Community 171 - "Phase SA-2 Research Memory"
 Cohesion: 0.50
@@ -934,10 +899,6 @@ Nodes (7): After extraction: verification, not translation-running, Deliverable 
 ### Community 174 - "Runnable Jobs Query Helper"
 Cohesion: 0.67
 Nodes (3): list_runnable_jobs(), Return jobs that are ready to be worked on, FIFO by updated_at.      Runnable co, Orchestrator.run
-
-### Community 176 - "Community 176"
-Cohesion: 0.18
-Nodes (6): _needs_input_reply(), FINAL received' is NOT published when the agent returns needs_input., run_stage publishes 'NEED_INPUT' log event when agent returns needs_input., The NEED_INPUT log event has level='info'., The NEED_INPUT log event has the correct job_id., Point F: 'NEED_INPUT' LogEvent is published before FollowUpNeededEvent.
 
 ### Community 179 - "Community 179"
 Cohesion: 0.29
@@ -959,72 +920,20 @@ Nodes (4): In-memory SQLite with StaticPool so all sessions share the same DB., 
 Cohesion: 0.50
 Nodes (4): In-memory SQLite with StaticPool so all sessions share the same DB., Yield a single AsyncSession for most tests., session(), session_factory()
 
-### Community 218 - "Community 218"
-Cohesion: 0.31
-Nodes (9): cl_final(), cv_final(), fit_reply(), Shared FINAL-reply factories emitting schema-valid JSON payloads.  The cv_adjust, A valid cv_adjust FINAL (CV JSON).      Uses the tolerant uniform section shape, A valid cover_letter FINAL (cover-letter JSON)., A passing fit-assessment verdict (plain text, not JSON)., _wrap() (+1 more)
-
-### Community 226 - "Community 226"
-Cohesion: 0.22
-Nodes (9): Advanced Command-Line Operations, Advanced Encryption, Advanced Image Conversion, Complex Page Manipulation, Extract Embedded Images, Extract Text with Bounding Box Coordinates, PDF Optimization and Repair, poppler-utils Advanced Features (+1 more)
-
-### Community 227 - "Community 227"
-Cohesion: 0.22
-Nodes (9): Advanced Merge and Split Operations, Basic PDF Loading and Rendering, Create Complex PDFs from Scratch, Extract Annotations and Forms, Extract Text with Coordinates, JavaScript Libraries, Load and Manipulate Existing PDF, pdf-lib (MIT License) (+1 more)
-
-### Community 228 - "Community 228"
-Cohesion: 0.25
-Nodes (3): AgentBackend, FailingBackend, Backend that raises RuntimeError on start_session to trigger Point C.
-
-### Community 229 - "Community 229"
-Cohesion: 0.52
-Nodes (6): get_preferences(), PreferencesBody, put_preferences(), HTTP routes for the global app preferences (currently just output/UI language)., _settings(), Request
-
-### Community 230 - "Community 230"
-Cohesion: 0.29
-Nodes (4): AgentLimitReached can be imported from jsa.agents.base., AgentLimitReached is a subclass of RuntimeError., AgentLimitReached can be instantiated with a message., TestAgentLimitReachedClass
-
-### Community 231 - "Community 231"
-Cohesion: 0.29
-Nodes (4): Hard letter guard (schema) vs. soft summary predicate (used by the self-heal nud, TestContentKindGuards, cv_has_summary(), True if the CV carries a summary/profile section with prose or items.      Used
-
-### Community 232 - "Community 232"
-Cohesion: 0.33
-Nodes (3): No-op: the subprocess has already exited when start_session/send_message returne, No-op: the subprocess has already exited when start_session/send_message returne, SessionHandle
-
-### Community 233 - "Community 233"
-Cohesion: 0.33
-Nodes (6): Comments, Images, Images, Schema Compliance, Tracked Changes, XML Reference
-
-### Community 234 - "Community 234"
-Cohesion: 0.33
-Nodes (6): Advanced PDF Cropping, Batch PDF Processing with Error Handling, Complex Workflows, Extract Figures/Images from PDF, Method 1: Using pdfimages (fastest), Method 2: Using pypdfium2 + Image Processing
-
-### Community 235 - "Community 235"
-Cohesion: 0.33
-Nodes (6): CV Adjust System Prompt (STUB), Hard rules, Output format — MANDATORY, Phase 1 — Intelligence Gathering, Phase 2 — Adjustment Strategy, Phase 3 — CV Production
-
-### Community 238 - "Community 238"
-Cohesion: 0.50
-Nodes (3): _poll_job_state(), Poll the DB until job reaches target_state or timeout expires., Orchestrator is waiting; after kick() is called with a new job, it processes it.
-
-### Community 241 - "Community 241"
-Cohesion: 0.50
-Nodes (4): Corrupted PDFs, Encrypted PDFs, Text Extraction Issues, Troubleshooting Common Issues
-
 ## Knowledge Gaps
 - **519 isolated node(s):** `name`, `private`, `version`, `type`, `dev` (+514 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **50 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `FakeAgentBackend` connect `Resume User Message Tests` to `Google CLI Backend Errors`, `Core Domain Models (Job/Message/Settings)`, `Pipeline Stage & Reply Types`, `Get Follow-Ups Repo Tests`, `Fake Backend Research Tests`, `Orchestrator Test Harness`, `Orchestrator Approval Flow Tests`, `Stages Pipeline Core`, `Dev Auto-Responder Tests`, `PDF Skill Complex Workflows`, `Structured Reply Parsing Helpers`, `Limit Keyword Detection Tests`, `Job Cancel Endpoint Tests`, `Editor WSEvent Store Hooks`, `Fit Assessment Stage Tests`, `Community 176`, `BF-9 Revision Session Tests`, `Structured Content Validation Tests`, `Backend Registry Tests`, `Dev Answer Matching Tests`, `FastAPI App / CORS Tests`, `Backend Factory Tests`, `Dismiss State Transition Tests`, `CV Structure Store`, `Community 216`, `Anthropic Start Session Tests`, `DC Runtime Template Compilation`, `AGENTS.md Architecture Spine`, `DOCX Renderer Async Tests`, `Community 228`, `Community 230`, `Fit Assessment State Machine Tests`, `Community 232`, `Community 238`, `PDF Skill Advanced CLI Ops`, `Community 247`, `Orchestrator Limit/Reset Handlers`?**
-  _High betweenness centrality (0.089) - this node is a cross-community bridge._
-- **Why does `AgentReply` connect `Pipeline Stage & Reply Types` to `Google CLI Backend Errors`, `Core Domain Models (Job/Message/Settings)`, `Claude CLI Session Handling`, `Get Follow-Ups Repo Tests`, `Claude CLI Backend Tests`, `Google CLI Session Tests`, `Agent Backend Exceptions`, `Fake Backend Research Tests`, `Orchestrator Test Harness`, `Orchestrator Approval Flow Tests`, `Stages Pipeline Core`, `Dev Auto-Responder Tests`, `PDF Skill Complex Workflows`, `Agent Limit Detection Tests`, `Limit Keyword Detection Tests`, `Structured Reply Parsing Helpers`, `Editor WSEvent Store Hooks`, `Protocol Change Log Strip Helper`, `Fit Assessment Stage Tests`, `Community 176`, `Structured Content Validation Tests`, `Anthropic API Message Tests`, `Dev Answer Matching Tests`, `Async Session Factory Fixtures`, `Cover Letter Serializer Tests`, `Dismiss State Transition Tests`, `Sentinel Reply Parser Tests`, `CV Structure Store`, `Anthropic Start Session Tests`, `Community 218`, `Resume User Message Tests`, `AGENTS.md Architecture Spine`, `DOCX Renderer Async Tests`, `Community 228`, `Community 230`, `Fit Assessment State Machine Tests`, `Orchestrator Limit/Reset Handlers`?**
-  _High betweenness centrality (0.072) - this node is a cross-community bridge._
-- **Why does `CVDocument` connect `CVDocument Schema Model` to `Pipeline Stage & Reply Types`, `DOCX Bullet List Tests`, `Cover Letter Schema Model`, `CV Structure Inference`, `CV Markdown Serializer`, `CV Structure Store`, `CV Serializer Layout Tests`, `Stages Pipeline Core`, `Structured Content Validation Tests`, `Sentinel Protocol Prompt Docs`?**
-  _High betweenness centrality (0.059) - this node is a cross-community bridge._
+- **Why does `FakeAgentBackend` connect `Fake Backend Research Tests` to `Google CLI Backend Errors`, `Core Domain Models (Job/Message/Settings)`, `Pipeline Stage & Reply Types`, `DOCX Horizontal Rule Tests`, `Orchestrator Approval Flow Tests`, `Stages Pipeline Core`, `Dev Auto-Responder Tests`, `Structured Reply Parsing Helpers`, `Limit Keyword Detection Tests`, `Config Anthropic Timeout Tests`, `Job Cancel Endpoint Tests`, `Editor WSEvent Store Hooks`, `Fit Assessment Stage Tests`, `BF-9 Revision Session Tests`, `Structured Content Validation Tests`, `Backend Registry Tests`, `Dev Answer Matching Tests`, `Cover Letter Serializer Tests`, `Backend Factory Tests`, `Job Dismiss Endpoint Tests`, `Dismiss State Transition Tests`, `CV Structure Store`, `Community 216`, `Resume User Message Tests`, `DC Runtime Template Compilation`, `AGENTS.md Architecture Spine`, `DOCX Renderer Async Tests`, `Fit Assessment State Machine Tests`, `PDF Skill Advanced CLI Ops`, `Orchestrator Limit/Reset Handlers`, `Dev Answer Normalization Helpers`?**
+  _High betweenness centrality (0.083) - this node is a cross-community bridge._
+- **Why does `AgentReply` connect `Dev Auto-Responder Tests` to `Google CLI Backend Errors`, `Core Domain Models (Job/Message/Settings)`, `Pipeline Stage & Reply Types`, `Claude CLI Session Handling`, `Claude CLI Backend Tests`, `Google CLI Session Tests`, `Agent Backend Exceptions`, `Fake Backend Research Tests`, `Orchestrator Approval Flow Tests`, `Stages Pipeline Core`, `Agent Limit Detection Tests`, `Limit Keyword Detection Tests`, `Structured Reply Parsing Helpers`, `Config Anthropic Timeout Tests`, `Editor WSEvent Store Hooks`, `Protocol Change Log Strip Helper`, `Fit Assessment Stage Tests`, `Structured Content Validation Tests`, `Anthropic API Message Tests`, `Dev Answer Matching Tests`, `Async Session Factory Fixtures`, `Cover Letter Serializer Tests`, `Dismiss State Transition Tests`, `Sentinel Reply Parser Tests`, `CV Structure Store`, `Resume User Message Tests`, `AGENTS.md Architecture Spine`, `DOCX Renderer Async Tests`, `Fit Assessment State Machine Tests`, `StageTimeline Component`, `Orchestrator Limit/Reset Handlers`?**
+  _High betweenness centrality (0.076) - this node is a cross-community bridge._
+- **Why does `CVDocument` connect `CVDocument Schema Model` to `DOCX Bullet List Tests`, `Phase Testing How-To Doc`, `CV Structure Inference`, `CV Markdown Serializer`, `Fake Backend Research Tests`, `CV Structure Store`, `Stages Pipeline Core`, `Structured Content Validation Tests`, `Sentinel Protocol Prompt Docs`?**
+  _High betweenness centrality (0.054) - this node is a cross-community bridge._
 - **Are the 202 inferred relationships involving `FakeAgentBackend` (e.g. with `TestAnswerFollowUp` and `TestApproveJob`) actually correct?**
   _`FakeAgentBackend` has 202 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 243 inferred relationships involving `JobState` (e.g. with `AgentLimitReached` and `AnswerBody`) actually correct?**
