@@ -6,7 +6,7 @@ is spent tailoring a CV or writing a cover letter.
 
 You will receive a single message containing:
 - `COMPANY` and `ROLE`
-- `CV TEXT` — the candidate's current, untailored CV
+- `CV` — the candidate's current base CV (rendered from their curated CV structure)
 - `JOB DESCRIPTION` — the full posting
 
 ## What you are deciding

@@ -38,6 +38,7 @@ beforeEach(() => {
     wsStatus: "connecting",
     language: "en",
     languages: [],
+    cvStructureExists: null,
   });
   vi.clearAllMocks();
 });
@@ -207,6 +208,34 @@ describe("hydrateLanguage", () => {
     await expect(useStore.getState().hydrateLanguage()).resolves.toBeUndefined();
 
     expect(useStore.getState().language).toBe("en");
+  });
+
+  it("sets cvStructureExists from /api/config's cv_structure_exists", async () => {
+    vi.mocked(api.getPreferences).mockResolvedValueOnce({ language: "en" });
+    vi.mocked(api.config).mockResolvedValueOnce({
+      languages: [],
+      cv_structure_exists: true,
+    });
+
+    await useStore.getState().hydrateLanguage();
+
+    expect(useStore.getState().cvStructureExists).toBe(true);
+  });
+
+  it("defaults cvStructureExists to false when /api/config omits it", async () => {
+    vi.mocked(api.getPreferences).mockResolvedValueOnce({ language: "en" });
+    vi.mocked(api.config).mockResolvedValueOnce({ languages: [] });
+
+    await useStore.getState().hydrateLanguage();
+
+    expect(useStore.getState().cvStructureExists).toBe(false);
+  });
+});
+
+describe("setCvStructureExists", () => {
+  it("updates cvStructureExists", () => {
+    useStore.getState().setCvStructureExists(true);
+    expect(useStore.getState().cvStructureExists).toBe(true);
   });
 });
 

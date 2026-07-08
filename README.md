@@ -198,7 +198,7 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | Flag | Default | Environment variable | Description |
 |------|---------|----------------------|-------------|
 | `--csv` | required | — | Path to the jobs CSV file |
-| `--cv` | required | — | Path to your CV (`.pdf` or `.docx`) |
+| `--cv` | optional | — | Path to a CV (`.pdf` or `.docx`) — used **once**, to seed the CV Structure Editor's `cv_structure.json` if it doesn't exist yet. Ignored (with a printed note) once a structure exists. The editor is the source of truth from then on — see [CV Structure Editor](#cv-structure-editor) |
 | `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where rendered PDF/DOCX files are written |
 | `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (single), backward-compat alias for `--backends`: `claude-cli` \| `google-cli` \| `anthropic` |
 | `--backends` | `claude-cli` | `JSA_BACKENDS` | Comma-separated ordered backend fallback chain, e.g. `claude-cli,google-cli` |
@@ -251,7 +251,7 @@ New backends register in `jsa/agents/registry.py` by adding an entry to `_REGIST
 
 ## Workflow
 
-1. **Start JSA.** Run `jsa --csv jobs.csv --cv resume.pdf`. The browser opens at `http://localhost:8765`.
+1. **Start JSA.** Run `jsa --csv jobs.csv --cv resume.pdf` (first run — seeds your CV structure) or just `jsa --csv jobs.csv` on subsequent runs. The browser opens at `http://localhost:8765`.
 
 2. **Pipeline runs in background.** For each job in the CSV, the AI runs up to three stages:
    - *Fit assessment* — a one-shot gate that judges whether the role is a good fit before spending pipeline time on it
@@ -284,7 +284,9 @@ New backends register in `jsa/agents/registry.py` by adding an entry to `_REGIST
 
 ## CV Structure Editor
 
-Separate from the per-job pipeline, JSA maintains one canonical, job-less **base CV** as structured JSON (`CVDocument`, `jsa/schema/cv.py`) — this is the source of truth that `cv_adjust` tailors per job. You edit it at `/api/cv-structure` (`jsa/store/cv_structure.py`, `jsa/api/routes_cv_structure.py`), either by hand-building it or by running inference against an uploaded PDF/DOCX resume.
+Separate from the per-job pipeline, JSA maintains one canonical, job-less **base CV** as structured JSON (`CVDocument`, `jsa/schema/cv.py`) — this is the **single source of truth** for CV content: both `fit_assessment` and `cv_adjust` read it, and nothing else feeds them CV text. You edit it at `/api/cv-structure` (`jsa/store/cv_structure.py`, `jsa/api/routes_cv_structure.py`), either by hand-building it or by running inference against an uploaded PDF/DOCX resume. `--cv` on the command line only seeds this structure once, on first run — see [CLI flags](#cli-flags).
+
+**Jobs stay pending until a structure exists.** If you start JSA without `--cv` and never open the editor, launched jobs sit in `pending` — the dashboard shows a banner pointing at the editor. Saving a structure (inferred or hand-built) unblocks them immediately, no restart needed.
 
 Before anything is saved, the editor shows an empty state offering to run inference or start from a blank structure:
 

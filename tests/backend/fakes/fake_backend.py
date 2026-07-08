@@ -64,3 +64,21 @@ class FakeAgentBackend(AgentBackend):
 
     async def end_session(self, handle: SessionHandle) -> None:
         """No-op."""
+
+
+class CapturingBackend(FakeAgentBackend):
+    """FakeAgentBackend that also records the initial_user_msg of a fresh session, so a
+    test can assert what was actually injected into the prompt (e.g. a base-CV skeleton,
+    or the absence thereof)."""
+
+    def __init__(self, replies: list[AgentReply]) -> None:
+        super().__init__(replies)
+        self.captured_initial_msg: str | None = None
+
+    async def start_session(
+        self,
+        system_prompt: str,
+        initial_user_msg: str,
+    ) -> tuple[FakeSessionHandle, AgentReply]:
+        self.captured_initial_msg = initial_user_msg
+        return await super().start_session(system_prompt, initial_user_msg)

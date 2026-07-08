@@ -21,8 +21,9 @@ from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.db.repo import recovery_sweep, upsert_job
 from jsa.ingest.csv_loader import load_csv
-from jsa.ingest.cv_loader import load_cv
-from jsa.server import create_app
+from jsa.pipeline.infer_structure import InferError, run_infer
+from jsa.server import create_app, make_backend_factory
+from jsa.store import cv_structure
 
 # Dump a per-thread Python traceback to stderr on native crashes (e.g. a
 # SIGSEGV inside a C extension like WeasyPrint's fontconfig/pango stack)
@@ -83,10 +84,14 @@ def main(
         dir_okay=False,
         readable=True,
     ),
-    cv: Path = typer.Option(
-        ...,
+    cv: Optional[Path] = typer.Option(
+        None,
         "--cv",
-        help="CV file (.pdf or .docx)",
+        help=(
+            "CV file (.pdf or .docx) — used once to seed the CV structure "
+            "(~/.jsa/cv_structure.json) if none exists yet; ignored afterwards. "
+            "The CV Structure Editor is the source of truth from then on."
+        ),
         exists=True,
         dir_okay=False,
         readable=True,
@@ -107,8 +112,8 @@ def main(
         typer.echo(f"Error: --csv must be a .csv file, got: {csv}", err=True)
         raise typer.Exit(code=1)
 
-    # Validate --cv extension
-    if cv.suffix.lower() not in {".pdf", ".docx"}:
+    # Validate --cv extension (only when provided — it's optional now)
+    if cv is not None and cv.suffix.lower() not in {".pdf", ".docx"}:
         typer.echo(f"Error: --cv must be a .pdf or .docx file, got: {cv}", err=True)
         raise typer.Exit(code=1)
 
@@ -172,7 +177,7 @@ def main(
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Run async pre-flight: DB bootstrap → CV extract → CSV ingest → recovery sweep
+    # Run async pre-flight: DB bootstrap → CV-structure bootstrap → CSV ingest → recovery sweep
     asyncio.run(_preflight(settings, csv_path=csv, cv_path=cv))
 
     # Start server
@@ -189,16 +194,71 @@ def main(
     uvicorn.run(fastapi_app, host="127.0.0.1", port=settings.port, log_level="info")
 
 
-async def _preflight(settings: Settings, csv_path: Path, cv_path: Path) -> None:
-    """DB bootstrap → CV extract → CSV ingest → crash-recovery sweep."""
+async def _bootstrap_cv_structure(settings: Settings, cv_path: Optional[Path]) -> None:
+    """Seed ``cv_structure.json`` from ``--cv`` exactly once, if it doesn't exist yet.
+
+    The CV Structure Editor is the single source of truth for CV content from then on:
+    - structure already exists + ``--cv`` given → note that ``--cv`` is ignored.
+    - structure missing + ``--cv`` given        → infer + save it (one LLM call).
+    - structure missing + no ``--cv``           → proceed; jobs stay pending until the
+      user sets up their CV in the editor (see Orchestrator.run()'s gate).
+
+    Factored out of ``_preflight`` so it can be exercised directly with a
+    ``FakeAgentBackend`` in tests.
+    """
+    structure_exists = await asyncio.to_thread(settings.cv_structure_path.exists)
+
+    if structure_exists:
+        if cv_path is not None:
+            typer.echo(
+                f"Note: CV structure already exists at {settings.cv_structure_path}; "
+                "--cv is ignored. Edit your CV in the app's Structure Editor."
+            )
+        return
+
+    if cv_path is None:
+        typer.echo(
+            "No CV structure found — jobs will stay pending until you set up your CV "
+            "(open the app and use the CV Structure Editor)."
+        )
+        return
+
+    async def _print_progress(event: dict) -> None:
+        if event.get("type") != "infer_progress":
+            return
+        status = event.get("status", "active")
+        label = event.get("label", "")
+        if status == "error":
+            typer.echo(f"[JSA] CV setup failed: {event.get('message', label)}", err=True)
+        elif status == "done":
+            typer.echo("[JSA] CV setup complete.")
+        else:
+            typer.echo(f"[JSA] CV setup {event.get('step')}/{event.get('total')}: {label}")
+
+    backend = make_backend_factory(settings)(settings.backends[0])
+    try:
+        cv = await run_infer(backend, cv_path, task_id="cli-bootstrap", publish=_print_progress)
+    except InferError as exc:
+        typer.echo(
+            f"Error: could not set up your CV from {cv_path}: {exc}\n"
+            "Fix the file and re-run, or start without --cv and build your CV in the "
+            "Structure Editor instead.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    await cv_structure.save(settings, cv)
+
+
+async def _preflight(settings: Settings, csv_path: Path, cv_path: Optional[Path]) -> None:
+    """DB bootstrap → CV-structure bootstrap → CSV ingest → crash-recovery sweep."""
     engine = create_engine(settings.db_path)
     session_factory = create_session_factory(engine)
 
     # 1. DB bootstrap
     await init_db(engine)
 
-    # 2. Extract CV text (blocking — run in thread)
-    cv_text = await asyncio.to_thread(load_cv, cv_path)
+    # 2. Seed the CV structure from --cv, once, if none exists yet.
+    await _bootstrap_cv_structure(settings, cv_path)
 
     # 3. CSV ingest
     jobs, ingest_errors = load_csv(csv_path)
@@ -206,7 +266,6 @@ async def _preflight(settings: Settings, csv_path: Path, cv_path: Path) -> None:
         typer.echo(f"Warning: {err}", err=True)
     async with session_factory() as session:
         for job_data in jobs:
-            job_data["cv_text"] = cv_text
             await upsert_job(session, job_data)
         await session.commit()
 

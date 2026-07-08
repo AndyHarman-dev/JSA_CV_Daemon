@@ -59,6 +59,9 @@ async def upsert_job(session: AsyncSession, job_data: dict) -> Job:
             tier=job_data["tier"],
             jd=job_data["jd"],
             jd_hash=job_data["jd_hash"],
+            # DEPRECATED — no longer populated or read; cv_structure.json is the source
+            # of truth for CV content. Kept only because existing sqlite DBs have this
+            # column NOT NULL (create_all + additive ALTER TABLE, no migration/drop story).
             cv_text=job_data.get("cv_text", ""),
             state=JobState.queued,
             current_stage=None,
@@ -73,8 +76,6 @@ async def upsert_job(session: AsyncSession, job_data: dict) -> Job:
         job.jd_hash = job_data["jd_hash"]
         job.tier = job_data["tier"]
         job.link = job_data["link"]
-        if "cv_text" in job_data:
-            job.cv_text = job_data["cv_text"]
         # Per ARCH.md § Job identity: failed jobs reset to pending on re-run so
         # the pipeline re-processes them without requiring a manual /reset call.
         # CSV re-import of a failed job is always nuclear (ARCH.md BF-15).

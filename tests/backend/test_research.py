@@ -26,6 +26,7 @@ from jsa.agents.base import AgentReply
 from jsa.agents.claude_cli import ClaudeCliBackend, _PROJECT_ROOT
 from jsa.db import repo
 from jsa.db.models import Base, FollowUp, Job, JobState, Message, Stage
+from jsa.schema import CVDocument
 from jsa.pipeline.stages import (
     PausedForInput,
     _build_initial_user_msg,
@@ -235,15 +236,22 @@ class TestGatherResearchFallbackOnException:
 # ---------------------------------------------------------------------------
 
 
-class TestBuildInitialUserMsg:
-    """_build_initial_user_msg(job, brief) injects brief at the top."""
+def _make_structure(**contact_overrides) -> CVDocument:
+    return CVDocument.model_validate({
+        "contact": {"name": "Alice Example", **contact_overrides},
+        "sections": [{"name": "Summary", "text": "Alice's full CV"}],
+    })
 
-    def test_brief_appears_before_cv_text(self):
-        """The brief must appear before 'CV TEXT:' in the message."""
-        job = _make_job(cv_text="My CV here")
+
+class TestBuildInitialUserMsg:
+    """_build_initial_user_msg(job, brief, base_structure) injects brief at the top."""
+
+    def test_brief_appears_before_skeleton(self):
+        """The brief must appear before the 'BASE CV STRUCTURE' block in the message."""
+        job = _make_job()
         brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
-        msg = _build_initial_user_msg(job, brief)
-        assert msg.index(brief) < msg.index("CV TEXT:")
+        msg = _build_initial_user_msg(job, brief, _make_structure())
+        assert msg.index(brief) < msg.index("BASE CV STRUCTURE")
 
     def test_brief_appears_before_job_description(self):
         """The brief must appear before 'JOB DESCRIPTION:' in the message."""
@@ -259,11 +267,11 @@ class TestBuildInitialUserMsg:
         msg = _build_initial_user_msg(job, brief)
         assert msg.index(brief) < msg.index("TIER:")
 
-    def test_cv_text_preserved(self):
-        """CV text from the job is present in the message."""
-        job = _make_job(cv_text="Alice's full CV")
+    def test_base_structure_preserved(self):
+        """The base CV structure's content is present in the message."""
+        job = _make_job()
         brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
-        msg = _build_initial_user_msg(job, brief)
+        msg = _build_initial_user_msg(job, brief, _make_structure())
         assert "Alice's full CV" in msg
 
     def test_jd_preserved(self):
@@ -280,14 +288,22 @@ class TestBuildInitialUserMsg:
         msg = _build_initial_user_msg(job, brief)
         assert "TIER: C" in msg
 
-    def test_all_three_section_headers_present(self):
-        """All three headers (CV TEXT, JOB DESCRIPTION, TIER) appear in message."""
+    def test_headers_present_with_base_structure(self):
+        """The BASE CV STRUCTURE, JOB DESCRIPTION, and TIER headers all appear in the message."""
         job = _make_job()
         brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
-        msg = _build_initial_user_msg(job, brief)
-        assert "CV TEXT:" in msg
+        msg = _build_initial_user_msg(job, brief, _make_structure())
+        assert "BASE CV STRUCTURE" in msg
         assert "JOB DESCRIPTION:" in msg
         assert "TIER:" in msg
+
+    def test_no_skeleton_when_base_structure_absent(self):
+        """Without a base structure, no BASE CV STRUCTURE block (and no CV TEXT fallback)."""
+        job = _make_job()
+        brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
+        msg = _build_initial_user_msg(job, brief, None)
+        assert "BASE CV STRUCTURE" not in msg
+        assert "CV TEXT:" not in msg
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,14 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("../api", () => ({
+  api: {
+    saveCvStructure: vi.fn(),
+  },
+}));
+
 import { useEditorStore, exportJson, inferKind, toEditor } from "../editorStore";
+import { useStore } from "../store";
+import { api } from "../api";
 import type { CVDocument } from "../types";
 
 const SAMPLE: CVDocument = {
@@ -30,6 +39,8 @@ function loadSample() {
 
 beforeEach(() => {
   useEditorStore.getState().reset();
+  useStore.setState({ cvStructureExists: null });
+  vi.clearAllMocks();
 });
 
 describe("kind inference + round-trip", () => {
@@ -173,5 +184,27 @@ describe("undo/redo with coalescing", () => {
     expect(useEditorStore.getState().canRedo).toBe(true);
     useEditorStore.getState().addSection("education", null);
     expect(useEditorStore.getState().canRedo).toBe(false);
+  });
+});
+
+describe("save", () => {
+  it("flips the global cvStructureExists flag to true on a successful commit", async () => {
+    loadSample();
+    vi.mocked(api.saveCvStructure).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    const ok = await useEditorStore.getState().save();
+
+    expect(ok).toBe(true);
+    expect(useStore.getState().cvStructureExists).toBe(true);
+  });
+
+  it("does not flip cvStructureExists when the save fails", async () => {
+    loadSample();
+    vi.mocked(api.saveCvStructure).mockRejectedValueOnce(new Error("HTTP 422: {\"detail\":\"bad\"}"));
+
+    const ok = await useEditorStore.getState().save();
+
+    expect(ok).toBe(false);
+    expect(useStore.getState().cvStructureExists).toBe(null);
   });
 });

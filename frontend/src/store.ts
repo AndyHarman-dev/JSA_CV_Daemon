@@ -31,10 +31,15 @@ interface Store {
   // before selectLanguageMode is known, flashing behind the boot gate on a --select-language
   // cold load (the exact case the gate exists to prevent).
   configReady: boolean;
+  // Whether cv_structure.json exists yet (GET /api/config's cv_structure_exists). null =
+  // not yet known (pre-hydration). The orchestrator keeps jobs pending until this is true —
+  // JobList surfaces a gate banner pointing at the Structure Editor while it's false.
+  cvStructureExists: boolean | null;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setWsStatus(s: Store["wsStatus"]): void;
   setEditorOpen(open: boolean): void;
+  setCvStructureExists(exists: boolean): void;
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
   removeJob(id: string): void;
@@ -59,6 +64,7 @@ export const useStore = create<Store>((set, get) => ({
   bootStage: "app",
   bootLang: "en",
   configReady: false,
+  cvStructureExists: null,
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -76,6 +82,10 @@ export const useStore = create<Store>((set, get) => ({
 
   setEditorOpen(open: boolean) {
     set({ editorOpen: open });
+  },
+
+  setCvStructureExists(exists: boolean) {
+    set({ cvStructureExists: exists });
   },
 
   removeJob(id: string) {
@@ -166,6 +176,7 @@ export const useStore = create<Store>((set, get) => ({
         // dashboard is shown straight away (bootStage stays at its 'app' default).
         bootStage: selectLanguageMode ? "lang" : "app",
         configReady: true,
+        cvStructureExists: Boolean(config.cv_structure_exists),
       });
     } catch (err) {
       console.error("hydrateLanguage error:", err);
