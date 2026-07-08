@@ -147,8 +147,40 @@ class Orchestrator:
            c. Spawn _run_one as an asyncio task.
         4. Wait for the wakeup event.
         """
+        # Tracks whether the "no CV structure" gate LogEvent has already been published,
+        # so it fires once per blocked spell rather than once per loop cycle. Loop-local
+        # (not self. state) — it's only ever meaningful within this one run() call.
+        cv_gate_blocked_announced = False
+
         while not self._stopping:
             self.wakeup.clear()
+
+            # Gate: cv_structure is the single source of truth for CV content. Inert
+            # when _cv_structure_path is None (tests / legacy callers) — production
+            # always passes it (see server.py). Checks loadability, not just existence,
+            # so a present-but-corrupt file (bad hand-edit, or a save that raced a crash)
+            # blocks dispatch the same as a missing one — jobs stay pending, never failed.
+            # The editor's PUT calls kick() on save so this unblocks without a restart.
+            if self._cv_structure_path is not None and (
+                await stages._read_base_structure(self._cv_structure_path)
+            ) is None:
+                if not cv_gate_blocked_announced:
+                    cv_gate_blocked_announced = True
+                    await bus.publish(
+                        event_to_dict(
+                            LogEvent(
+                                job_id="",
+                                level="info",
+                                text=(
+                                    "No usable CV structure — jobs stay pending until you set "
+                                    "up your CV in the Structure Editor."
+                                ),
+                            )
+                        )
+                    )
+                await self.wakeup.wait()
+                continue
+            cv_gate_blocked_announced = False
 
             async with self._db_session_factory() as session:
                 runnable: list[Job] = await repo.list_runnable_jobs(session)

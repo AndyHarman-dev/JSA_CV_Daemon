@@ -37,7 +37,7 @@ from jsa.pipeline.stages import (
     run_stage,
 )
 from jsa.pipeline.state_machine import transition
-from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
+from tests.backend.fakes.fake_backend import CapturingBackend, FakeAgentBackend, FakeSessionHandle
 
 
 # ---------------------------------------------------------------------------
@@ -936,18 +936,7 @@ class TestCvAdjustCoverLetterGuard:
 # ---------------------------------------------------------------------------
 
 
-class _CapturingBackend(FakeAgentBackend):
-    """Records the initial_user_msg of the fresh session so a test can assert what was
-    injected into the prompt (the base-CV skeleton, or the absence thereof)."""
-
-    def __init__(self, replies):
-        super().__init__(replies)
-        self.captured_initial_msg: str | None = None
-
-    async def start_session(self, system_prompt, initial_user_msg):
-        self.captured_initial_msg = initial_user_msg
-        handle = FakeSessionHandle(id=str(uuid4()), external_id=None)
-        return handle, self._pop_reply()
+_CapturingBackend = CapturingBackend
 
 
 class TestCvAdjustConsumesBaseStructure:
@@ -975,9 +964,11 @@ class TestCvAdjustConsumesBaseStructure:
         assert msg is not None
         assert "BASE CV STRUCTURE" in msg
         assert "Open Source Leadership" in msg  # the curated section name was injected
+        assert "CV TEXT:" not in msg  # structure JSON is the only CV content now
 
-    async def test_falls_back_to_cv_text_when_file_absent(self, session, tmp_path):
-        # Path points at a non-existent file → no skeleton, raw cv_text behavior preserved.
+    async def test_no_skeleton_and_no_raw_cv_when_file_absent(self, session, tmp_path):
+        # Path points at a non-existent file → no skeleton AND no raw cv_text fallback;
+        # cv_text is deprecated and never injected into any prompt.
         missing = tmp_path / "nope.json"
 
         job = await _insert_job(session, cv_text="MY UNIQUE CV BODY")
@@ -990,10 +981,13 @@ class TestCvAdjustConsumesBaseStructure:
         msg = backend.captured_initial_msg
         assert msg is not None
         assert "BASE CV STRUCTURE" not in msg
-        assert "MY UNIQUE CV BODY" in msg
+        assert "MY UNIQUE CV BODY" not in msg
+        assert "CV TEXT:" not in msg
 
-    async def test_skeleton_not_injected_for_cover_letter(self, session, tmp_path):
-        # The base structure is a CV concept; the cover_letter stage must not receive it.
+    async def test_skeleton_also_injected_for_cover_letter(self, session, tmp_path):
+        # cover_letter is a fresh session with no cv_adjust history to draw on — it needs
+        # the same base-CV structure (for background/achievements), so this must NOT be
+        # cv_adjust-only. See CVL_PROMPT.md step 2.
         structure_path = tmp_path / "cv_structure.json"
         structure_path.write_text(json.dumps({
             "contact": {"name": "Jane Doe"},
@@ -1014,4 +1008,5 @@ class TestCvAdjustConsumesBaseStructure:
 
         msg = backend.captured_initial_msg
         assert msg is not None
-        assert "Open Source Leadership" not in msg
+        assert "BASE CV STRUCTURE" in msg
+        assert "Open Source Leadership" in msg

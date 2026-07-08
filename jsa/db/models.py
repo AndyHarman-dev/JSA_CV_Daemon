@@ -45,7 +45,7 @@ class Job(Base):
     tier: Mapped[str] = mapped_column(String(1))                   # A | B | C
     jd: Mapped[str] = mapped_column(Text)
     jd_hash: Mapped[str] = mapped_column(String(16))
-    cv_text: Mapped[str] = mapped_column(Text)                     # extracted CV text snapshot
+    cv_text: Mapped[str] = mapped_column(Text)                     # DEPRECATED — no longer read; cv_structure.json is the source of truth
     state: Mapped[JobState] = mapped_column(SAEnum(JobState))
     current_stage: Mapped[Stage | None] = mapped_column(SAEnum(Stage), nullable=True)
     session_external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # backend resume token

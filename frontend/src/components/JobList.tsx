@@ -4,6 +4,7 @@ import { LaunchButton } from "./LaunchButton";
 import type { JobDTO, JobState } from "../types";
 import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
+import { panelBase } from "../theme/chrome";
 
 const T = SHELL_THEME;
 
@@ -101,11 +102,52 @@ function JobRow({
   );
 }
 
+function CvGateBanner() {
+  const setEditorOpen = useStore((s) => s.setEditorOpen);
+  const t = useT();
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        padding: "10px 11px",
+        marginBottom: 16,
+        ...panelBase(T, { bg: T.surface, border: T.aBorder, radius: T.btnRadius }),
+      }}
+    >
+      <div style={{ font: `600 10px ${T.mono}`, letterSpacing: ".1em", color: T.a, textTransform: "uppercase" }}>
+        {t("cvGate.title")}
+      </div>
+      <div style={{ font: `400 11.5px ${T.ui}`, color: T.ink2 }}>{t("cvGate.body")}</div>
+      <button
+        type="button"
+        onClick={() => setEditorOpen(true)}
+        style={{
+          alignSelf: "flex-start",
+          font: `600 9px ${T.mono}`,
+          letterSpacing: ".06em",
+          color: T.a,
+          background: "transparent",
+          border: `1px solid ${T.aBorder}`,
+          borderRadius: T.btnRadius,
+          padding: "4px 9px",
+          cursor: "pointer",
+          textTransform: "uppercase",
+        }}
+      >
+        {t("cvGate.cta")}
+      </button>
+    </div>
+  );
+}
+
 export function JobList() {
   const jobs = useStore((s) => Object.values(s.jobs));
   const selectedId = useStore((s) => s.selectedId);
   const selectJob = useStore((s) => s.selectJob);
   const launchAll = useStore((s) => s.launchAll);
+  const cvStructureExists = useStore((s) => s.cvStructureExists);
   const t = useT();
 
   return (
@@ -130,6 +172,7 @@ export function JobList() {
       >
         PROCESS_QUEUE
       </div>
+      {cvStructureExists === false && <CvGateBanner />}
       {GROUPS.map((group) => {
         const groupJobs = jobs.filter((j) => (group.states as string[]).includes(j.state));
         if (groupJobs.length === 0) return null;

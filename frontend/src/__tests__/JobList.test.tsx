@@ -33,6 +33,7 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
+    cvStructureExists: null,
   });
 });
 
@@ -243,5 +244,39 @@ describe("JobList", () => {
     expect(screen.queryByText("Done")).toBeNull();
     // "Failed" is not present anywhere — no failed jobs and no group header
     expect(screen.queryByText("Failed")).toBeNull();
+  });
+
+  it("shows the CV setup gate banner when cvStructureExists is false", () => {
+    useStore.setState({ cvStructureExists: false });
+
+    render(<JobList />);
+
+    expect(screen.getByText("Set up your CV first")).toBeInTheDocument();
+    expect(screen.getByText("Open CV editor")).toBeInTheDocument();
+  });
+
+  it("hides the CV setup gate banner when cvStructureExists is true", () => {
+    useStore.setState({ cvStructureExists: true });
+
+    render(<JobList />);
+
+    expect(screen.queryByText("Set up your CV first")).toBeNull();
+  });
+
+  it("hides the CV setup gate banner when cvStructureExists is still unknown (null)", () => {
+    useStore.setState({ cvStructureExists: null });
+
+    render(<JobList />);
+
+    expect(screen.queryByText("Set up your CV first")).toBeNull();
+  });
+
+  it("clicking the gate banner's CTA opens the CV editor", () => {
+    useStore.setState({ cvStructureExists: false });
+
+    render(<JobList />);
+
+    fireEvent.click(screen.getByText("Open CV editor"));
+    expect(useStore.getState().editorOpen).toBe(true);
   });
 });

@@ -12,6 +12,8 @@ Uses FakeAgentBackend (scripted replies) + in-memory SQLite, mirroring test_stag
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -23,7 +25,7 @@ from jsa.db.models import Base, Document, Job, JobState, Message, Stage
 from jsa.pipeline.orchestrator import _next_stage_for
 from jsa.pipeline.stages import _parse_fit_verdict, run_stage
 from jsa.pipeline.state_machine import InvalidTransition, transition
-from tests.backend.fakes.fake_backend import FakeAgentBackend
+from tests.backend.fakes.fake_backend import CapturingBackend, FakeAgentBackend
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,51 @@ async def _run_fit(session: AsyncSession, job: Job, reply: AgentReply) -> Job:
     backend = FakeAgentBackend([reply])
     await run_stage(job, backend, Stage.fit_assessment, session)
     return await repo.get_job(session, job.id)
+
+
+_CapturingBackend = CapturingBackend
+
+
+class TestFitAssessmentConsumesBaseStructure:
+    async def test_uses_markdown_rendered_structure_not_job_cv_text(self, session, tmp_path):
+        structure_path = tmp_path / "cv_structure.json"
+        structure_path.write_text(json.dumps({
+            "contact": {"name": "Jane Doe", "email": "jane@x.com"},
+            "sections": [
+                {"name": "Summary", "text": "Backend engineer."},
+                {"name": "Distinctive Section Name", "items": ["A distinctive skill"]},
+            ],
+        }), encoding="utf-8")
+
+        job = await _insert_job(session, cv_text="STALE RAW CV TEXT — should never appear")
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+
+        backend = _CapturingBackend([_final("FIT")])
+        await run_stage(
+            job, backend, Stage.fit_assessment, session, cv_structure_path=structure_path
+        )
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "Distinctive Section Name" in msg  # structure content, rendered to markdown
+        assert "A distinctive skill" in msg
+        assert "STALE RAW CV TEXT" not in msg  # job.cv_text is deprecated, never injected
+        assert "CV TEXT:" not in msg
+
+    async def test_no_cv_block_when_structure_absent(self, session, tmp_path):
+        missing = tmp_path / "nope.json"
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+
+        backend = _CapturingBackend([_final("FIT")])
+        await run_stage(job, backend, Stage.fit_assessment, session, cv_structure_path=missing)
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "CV:" not in msg
+        assert "CV TEXT:" not in msg
 
 
 # ---------------------------------------------------------------------------

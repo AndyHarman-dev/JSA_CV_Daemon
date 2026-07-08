@@ -330,6 +330,29 @@ async def _self_heal_final(
     return reply, accumulated_messages
 
 
+async def _read_base_structure(cv_structure_path: Path | None) -> CVDocument | None:
+    """Read the standalone base-CV structure, tolerating a corrupt/invalid file.
+
+    ``None`` covers both "no path given" and "file missing" (see
+    ``cv_structure_store.read``'s own contract) as well as "file present but not valid
+    JSON / doesn't pass the CVDocument schema" — a hand-edited or partially-written file.
+    Orchestrator.run()'s gate normally keeps jobs pending until the file is loadable, but
+    a job already past that gate could still race a concurrent edit; treating a corrupt
+    read the same as "absent" here means that race degrades to a missing-CV prompt rather
+    than crashing the job (caught by run_one's generic except → mark_failed).
+    """
+    if cv_structure_path is None:
+        return None
+    try:
+        return await cv_structure_store.read(cv_structure_path)
+    except (json.JSONDecodeError, ValidationError):
+        logger.warning(
+            "base-CV structure at %s is present but invalid — treating as absent",
+            cv_structure_path,
+        )
+        return None
+
+
 async def run_stage(
     job: Job,
     backend: AgentBackend,
@@ -374,7 +397,8 @@ async def run_stage(
     if stage == Stage.fit_assessment:
         # One-shot pre-check: no resume path, no NEED_INPUT, no research. Handled
         # entirely here (FIT → fit_done, anything else → unfit) and returns early.
-        await _run_fit_assessment(job, backend, session, system_prompt, language_code)
+        base_structure = await _read_base_structure(cv_structure_path)
+        await _run_fit_assessment(job, backend, session, system_prompt, language_code, base_structure)
         return
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
@@ -459,13 +483,12 @@ async def run_stage(
         else:
             # Fresh session — run research pre-step (claude-cli only; best-effort)
             brief = await _gather_research(job, backend, stage)
-            # cv_adjust only: inject the standalone base-CV structure (if the editor has saved
-            # one) as the authoritative skeleton. Read at stage time so edits apply to the next
-            # job without a restart. Soft steer — the schema gate stays the only hard check; a
-            # missing/absent file falls back to today's raw cv_text behavior.
-            base_structure = None
-            if stage == Stage.cv_adjust and cv_structure_path is not None:
-                base_structure = await cv_structure_store.read(cv_structure_path)
+            # Read the standalone base-CV structure — it IS the base CV, the only CV
+            # content either stage's agent sees. Only needed here (fresh session), not on
+            # the resume branch above, so the read is deferred to this branch. cv_adjust
+            # treats it as the authoritative skeleton to preserve (see PROMPT_CDADJUST.md);
+            # cover_letter draws on it for background/achievements (see CVL_PROMPT.md).
+            base_structure = await _read_base_structure(cv_structure_path)
             initial_user_msg = _build_initial_user_msg(job, brief, base_structure)
             fresh_system_prompt = _with_language_directive(system_prompt, language_code)
             handle, reply = await backend.start_session(fresh_system_prompt, initial_user_msg)
@@ -654,15 +677,20 @@ _FIT_FALLBACK_REASON = (
 )
 
 
-def _build_fit_user_msg(job: Job) -> str:
+def _build_fit_user_msg(job: Job, base_structure: CVDocument | None) -> str:
     """Build the (single) user message for the fit-assessment stage.
 
     Deliberately minimal — no research brief — so the pre-check stays cheap.
+    ``base_structure`` is the standalone base-CV structure (Structure Editor); rendered
+    to markdown for readability. Absent (no structure saved yet) → no CV block — the
+    gate in Orchestrator.run() keeps jobs pending until a structure exists, so this
+    should not normally happen in production.
     """
+    cv_block = f"CV:\n{cv_to_markdown(base_structure)}\n\n" if base_structure is not None else ""
     return (
         f"COMPANY: {job.company}\n"
         f"ROLE: {job.role}\n\n"
-        f"CV TEXT:\n{job.cv_text}\n\n"
+        f"{cv_block}"
         f"JOB DESCRIPTION:\n{job.jd}"
     )
 
@@ -708,6 +736,7 @@ async def _run_fit_assessment(
     session: AsyncSession,
     system_prompt: str,
     language_code: str = "en",
+    base_structure: CVDocument | None = None,
 ) -> None:
     """Run the one-shot fit-assessment stage and checkpoint the outcome.
 
@@ -716,7 +745,7 @@ async def _run_fit_assessment(
     continues to cv_adjust). Anything else → ``unfit`` (parked), storing the agent's
     reason in ``job.fit_reason`` for the frontend modal.
     """
-    initial_user_msg = _build_fit_user_msg(job)
+    initial_user_msg = _build_fit_user_msg(job, base_structure)
     job.retry_count = 0
     # Always a fresh start_session (no resume path for this stage) — safe to inject here.
     system_prompt = _with_language_directive(system_prompt, language_code, fit_verdict=True)
@@ -967,26 +996,23 @@ def _build_initial_user_msg(
     injected first so the main agent sees it immediately and the resumed Message
     history replays it verbatim (research runs at most once per stage).
 
-    ``base_structure`` (cv_adjust only) is the standalone base-CV ``CVDocument`` the user
-    shaped in the Structure Editor. When present it is injected as the authoritative
-    skeleton: tailor content to the JD but preserve these sections, their order, and shape.
-    It is a soft steer — the schema gate remains the only hard check; absence falls back to
-    the raw ``cv_text`` behavior. Injected here (rather than after research) so it is part of
-    the persisted initial message and replays verbatim on an awaiting_input resume.
+    ``base_structure`` is the standalone base-CV ``CVDocument`` the user shaped in the
+    Structure Editor — the only CV content either stage's agent sees (used by cv_adjust
+    and cover_letter). This block only supplies the data; stage-specific instructions for
+    *how* to use it (cv_adjust: preserve the skeleton exactly; cover_letter: draw on it for
+    background/achievements) live in each stage's own system prompt, not here. Injected
+    here (rather than after research) so it is part of the persisted initial message and
+    replays verbatim on an awaiting_input resume.
     """
     skeleton = ""
     if base_structure is not None:
         skeleton = (
-            "BASE CV STRUCTURE (authoritative skeleton — the user curated this in the "
-            "Structure Editor). Tailor the content to the job, but PRESERVE this structure: "
-            "the same sections, in the same order, each with the same shape. Do not invent "
-            "or drop sections.\n"
+            "BASE CV STRUCTURE (the candidate's base CV, curated in the Structure Editor):\n"
             f"{base_structure.model_dump_json(indent=2)}\n\n"
         )
     return (
         f"{brief}\n\n"
         f"{skeleton}"
-        f"CV TEXT:\n{job.cv_text}\n\n"
         f"JOB DESCRIPTION:\n{job.jd}\n\n"
         f"TIER: {job.tier}"
     )

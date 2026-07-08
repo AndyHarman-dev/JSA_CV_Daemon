@@ -75,6 +75,39 @@ exactly like `cv_done` in `list_runnable_jobs` and `_next_stage_for`. See ARCH.m
 
 ---
 
+## CV structure — single source of truth
+
+`cv_structure.json` (`jsa/store/cv_structure.py`, edited via the CV Structure Editor,
+`Settings.cv_structure_path` — `~/.jsa/cv_structure.json` by default) is the **only**
+source of CV content for the pipeline. Both `fit_assessment` and `cv_adjust` read it at
+stage time (`jsa/pipeline/stages.py::run_stage`) and inject it into their prompts —
+`cv_adjust` as the `BASE CV STRUCTURE` JSON skeleton, `fit_assessment` as
+`cv_to_markdown(structure)` under a `CV:` header. Neither stage reads `Job.cv_text`.
+
+**`Job.cv_text` is DEPRECATED.** It is never populated (the CLI's `--cv` no longer
+stamps it) and never read by any prompt. The column still exists only because
+`jsa/db/engine.py`'s migration story is `create_all` + additive `ALTER TABLE` — there is
+no column-drop path, and existing sqlite DBs have it `NOT NULL`. Do not read or write it
+in new code; do not "fix" this by reintroducing a `CV TEXT:` block into a prompt.
+
+**`--cv` is optional and bootstrap-only.** `jsa/cli.py::_bootstrap_cv_structure` seeds
+`cv_structure.json` from `--cv` exactly once, if the file doesn't exist yet (via the same
+`jsa/pipeline/infer_structure.py::run_infer` the editor's "infer" button uses). If a
+structure already exists, `--cv` is ignored (a note is printed). If neither `--cv` nor a
+saved structure exists, startup proceeds anyway — see the gate below.
+
+**CV structure gate.** `Orchestrator.run()` (`jsa/pipeline/orchestrator.py`) checks
+`cv_structure_path.exists()` at the top of every dispatch cycle when a path was given
+(production always passes one via `server.py`; tests passing `cv_structure_path=None`
+are exempt — the gate is inert for them). While the file is missing, the loop skips
+dispatch entirely and jobs stay `pending` (never `failed`); a one-shot `LogEvent`
+announces the block. `PUT /api/cv-structure` calls `orchestrator.kick()` on save, and
+`GET /api/config`'s `cv_structure_exists` field drives the frontend's gate banner
+(`frontend/src/components/JobList.tsx`) — so saving a structure in the editor unblocks
+pending jobs live, no restart required.
+
+---
+
 ## Testing conventions
 
 - **Fakes over mocks.** Use `tests/backend/fakes/fake_backend.py` (`FakeAgentBackend`) for all pipeline and orchestrator tests. Do not `patch` or `MagicMock` internal functions.
@@ -204,7 +237,12 @@ npm test           # runs: vitest run
 # Verify basic invocation prints the scaffold message
 jsa --csv /path/to/jobs.csv --cv /path/to/resume.pdf
 
-# Verify validation rejects bad inputs
+# --cv is optional — it only seeds cv_structure.json once, if none exists yet.
+# Jobs stay pending (gated, not failed) until a structure exists — see CLAUDE.md
+# → "CV structure gate".
+jsa --csv /path/to/jobs.csv
+
+# Verify validation rejects bad inputs (the --cv extension check only fires when --cv is given)
 jsa --csv jobs.txt --cv resume.pdf         # should error: bad csv extension
 jsa --csv jobs.csv --cv resume.txt         # should error: bad cv extension
 jsa --csv jobs.csv --cv resume.pdf --backend bad  # should error: bad backend

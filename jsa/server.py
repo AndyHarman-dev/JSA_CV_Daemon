@@ -6,12 +6,14 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse as _FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from jsa.agents.base import AgentBackend
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.events.bus import bus
@@ -24,6 +26,27 @@ from jsa.pipeline.orchestrator import Orchestrator
 from jsa.agents.registry import backend_for
 
 logger = logging.getLogger(__name__)
+
+
+def make_backend_factory(settings: Settings) -> Callable[[str], AgentBackend]:
+    """Instantiate a backend by name, forwarding the appropriate settings.
+
+    Shared by the app's startup (orchestrator + the CV-structure infer endpoint) and
+    the CLI's one-shot bootstrap infer call, so both construct backends identically.
+    """
+
+    def _backend_factory(name: str) -> AgentBackend:
+        if name == "anthropic":
+            return backend_for(
+                "anthropic",
+                model=settings.model,
+                timeout=settings.anthropic_timeout,
+            )
+        if name == "claude-cli":
+            return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
+        return backend_for(name, timeout=settings.agent_timeout)
+
+    return _backend_factory
 
 
 async def _warm_up_weasyprint() -> None:
@@ -82,20 +105,9 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
         app.state.engine = engine
         app.state.session_factory = session_factory
 
-        def _backend_factory(name: str):
-            """Instantiate a backend by name, forwarding the appropriate settings."""
-            if name == "anthropic":
-                return backend_for(
-                    "anthropic",
-                    model=settings.model,
-                    timeout=settings.anthropic_timeout,
-                )
-            if name == "claude-cli":
-                return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
-            return backend_for(name, timeout=settings.agent_timeout)
-
         # Exposed for the job-less CV-structure infer endpoint (routes_cv_structure), which
         # needs a backend the same way the orchestrator does. Tests override this post-startup.
+        _backend_factory = make_backend_factory(settings)
         app.state.backend_factory = _backend_factory
 
         orchestrator = Orchestrator(

@@ -12,6 +12,7 @@
 
 import { create } from "zustand";
 import { api } from "./api";
+import { useStore } from "./store";
 import type {
   CVDocument,
   CVSection,
@@ -676,6 +677,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         // Reload from the server's canonical form so ids/kinds re-derive cleanly.
         get().load(saved);
         set({ saving: false });
+        // Unblock the orchestrator's gate banner without a page reload.
+        useStore.getState().setCvStructureExists(true);
         return true;
       } catch (err) {
         const raw = err instanceof Error ? err.message : "Save failed";

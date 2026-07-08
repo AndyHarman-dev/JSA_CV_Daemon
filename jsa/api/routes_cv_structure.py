@@ -54,6 +54,8 @@ async def put_cv_structure(request: Request, body: CvStructureBody) -> dict:
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=_concise_reason(exc)) from exc
     await cv_structure.save(_settings(request), cv)
+    # Unblock the orchestrator's "no CV structure" gate without requiring a restart.
+    request.app.state.orchestrator.kick()
     return {"structured": cv.model_dump()}
 
 
