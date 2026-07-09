@@ -18,6 +18,7 @@ Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vi
 - Revision loop: request edits on generated CV or cover letter; new document version written without re-running the whole pipeline
 - Browser UI with live pipeline progress, PDF document preview, and PDF/DOCX export
 - Standalone CV Structure Editor: infer a structured JSON representation of your base CV and edit it directly — this JSON is what `cv_adjust` tailors per job
+- Multi-language output and UI: one global preference drives the pipeline's output language (CV/cover-letter JSON, clarifying questions, change-log, fit-assessment reasons) *and* the frontend's own chrome, picked from a 20-language catalog
 - Three AI backends: Claude CLI, Google `agy` CLI, Anthropic REST API — configurable as an ordered fallback chain
 - All data stored locally in SQLite (`~/.jsa/jsa.sqlite`)
 
@@ -34,6 +35,7 @@ Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vi
 - [Backends](#backends)
 - [Workflow](#workflow)
 - [CV Structure Editor](#cv-structure-editor)
+- [Language preference](#language-preference)
 - [Prompt customisation](#prompt-customisation)
 - [Persistence and re-runs](#persistence-and-re-runs)
 - [Development](#development)
@@ -128,6 +130,7 @@ Backends implement a common `AgentBackend` ABC (`jsa/agents/base.py`) and are tr
 | Jobs | `GET /api/jobs`, `GET /api/jobs/{id}`, `POST /api/jobs/{id}/answer`, `POST /api/jobs/{id}/approve`, `POST /api/jobs/{id}/revise`, `POST /api/jobs/{id}/dismiss`, `POST /api/jobs/{id}/ignore-fit`, `POST /api/jobs/{id}/cancel`, `DELETE /api/jobs/{id}`, `POST /api/jobs/{id}/reset`, `GET /api/jobs/{id}/document/{stage}`, `POST /api/jobs/{id}/export` |
 | Files | `GET /api/files/{relpath}` — serves rendered PDF/DOCX with `Content-Disposition: inline` |
 | CV Structure Editor | `GET /api/cv-structure`, `PUT /api/cv-structure`, `POST /api/cv-structure/infer` |
+| Preferences | `GET /api/preferences`, `PUT /api/preferences` — global output/UI language, `{"language": "es"}` |
 | Meta | `GET /api/health`, `GET /api/config` |
 | Realtime | `WS /ws` — pushes `status_changed`, `stage_complete`, `approved`, `log`, and `infer_progress` events to the React store |
 
@@ -205,6 +208,7 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | `--db` | `~/.jsa/jsa.sqlite` | `JSA_DB_PATH` | SQLite database path |
 | `--port` | `8765` | `JSA_PORT` | Port for the local web server |
 | `--no-browser` | false | — | Skip opening the browser automatically |
+| `--select-language` | false | — | Show a full-screen language picker + boot sequence before the dashboard on launch — see [Language preference](#language-preference) |
 
 ---
 
@@ -308,6 +312,54 @@ Once a structure exists (inferred or hand-built), three synchronized views edit 
 
 ---
 
+## Language preference
+
+A single global setting drives both the pipeline's output language and the frontend's UI
+chrome — there's no separate "app language" vs. "CV language" toggle. Switch it any time from
+the globe pill in the CV Structure Editor's top bar, which opens a searchable dropdown over a
+20-language catalog (English, Spanish, French, German, Portuguese, Italian, Dutch, Swedish,
+Polish, Russian, Turkish, Arabic, Hebrew, Hindi, Chinese, Japanese, Korean, Vietnamese, Thai,
+Indonesian):
+
+<p align="center">
+  <img src="assets/JSA_Screens_CV_DAEMON_LANGUAGE_PICKER.png" alt="Globe capsule button in the CV Structure Editor top bar, open to a searchable language dropdown" width="420">
+</p>
+
+- **Pipeline output** — the CV/cover-letter JSON, the AI's clarifying questions, its
+  change-log, and the fit-assessment reason text are all generated in the selected language.
+  Only the `<<<FINAL>>>`/`<<<NEED_INPUT>>>`/`<<<END>>>` sentinels and the literal `FIT`/`UNFIT`
+  verdict word stay English/ASCII, since the pipeline parser matches on them.
+- **UI chrome** — every frontend string is looked up through the same preference, with an
+  English fallback for anything not yet translated.
+- The preference is stored server-side (`GET`/`PUT /api/preferences`) and takes effect on the
+  **next** new pipeline session — a job whose session is already underway keeps the language it
+  started with, so a change mid-run doesn't contradict the conversation history.
+
+Changing the language does not require any local translation work — the UI locale catalogs
+ship pre-generated. Maintainers adding new UI strings should see [Development](#development).
+
+### Boot sequence (`--select-language`)
+
+Launch with `--select-language` to force a full-screen language picker in front of the
+dashboard, useful for a first-time or shared-machine setup where you want to pick a language
+before anything else loads:
+
+```bash
+jsa --csv jobs.csv --select-language
+```
+
+This mounts a full-viewport overlay (`frontend/src/components/BootGate.tsx`) with two stages:
+a language picker, then an animated HUD-style boot log that applies the choice and counts up to
+100% before revealing the already-mounted dashboard underneath. It's purely a frontend
+presentation layer over the same `PUT /api/preferences` call the globe pill makes — no separate
+backend state.
+
+<p align="center">
+  <img src="assets/JSA_Screens_JSA_DAEMON_BOOT_SEQUENCE.png" alt="Full-screen boot sequence shown on launch with --select-language: language picker followed by an animated HUD boot log" width="820">
+</p>
+
+---
+
 ## Prompt customisation
 
 The AI prompts live at:
@@ -395,6 +447,21 @@ Backend tests use **fakes over mocks** — `tests/backend/fakes/fake_backend.py`
 cd frontend && npm test
 ```
 
+### Adding a new UI string (i18n)
+
+Every user-visible frontend string must go through the translation catalog, not a hardcoded
+literal — add the key to `frontend/src/i18n/strings.en.json` and read it via `useT()`
+(`frontend/src/i18n/useT.ts`), then regenerate the other locale catalogs:
+
+```bash
+scripts/translate-ui.sh          # incremental — only translates new/changed keys
+scripts/translate-ui.sh --check  # CI/pre-merge: fails if a catalog has fallen behind
+```
+
+The script mirrors the pipeline's two-backend split (`--backend api`, needs
+`ANTHROPIC_API_KEY`; `--backend cli`, shells out to the `claude` CLI). CSS class names,
+`data-testid`s, log strings, and dates/numbers/IDs/URLs are intentionally left untranslated.
+
 ### Frontend dev server (hot reload)
 
 ```bash
@@ -424,15 +491,18 @@ jsa/                   Python package
   pipeline/              Orchestrator, stage runners (stages.py), state machine, CV structure inference
   render/                PDF (WeasyPrint) and DOCX (python-docx) renderers
   events/                In-process pub/sub bus + WS event schema
-  api/                   FastAPI route handlers (jobs, cv-structure, meta, websocket)
+  api/                   FastAPI route handlers (jobs, cv-structure, preferences, meta, websocket)
   schema/                Structured CV/cover-letter Pydantic schemas
-  store/                 CV Structure Editor persistence (canonical base-CV JSON)
+  store/                 CV Structure Editor + preferences persistence (canonical base-CV JSON, language)
+  i18n/                   Language catalog (languages.py) + translation helper (translate.py)
   dev/                   Dev-only helpers (auto-answer NEED_INPUT gates)
 frontend/               React + Vite + TypeScript UI
   src/components/        JobList, JobDetail, ReviewPane, ChatBox, FollowUpPane, UnfitModal, StageTimeline, StatusBadge
-  src/components/cv-editor/  CvEditor (Blocks / Document / Split views), PaperSheet, JsonDrawer
+  src/components/cv-editor/  CvEditor (Blocks / Document / Split views), PaperSheet, JsonDrawer, LanguagePill
+  src/i18n/                useT() hook + per-language strings.<code>.json catalogs
   src/store.ts            Zustand store for job list/detail state
   src/editorStore.ts       Zustand store for the CV Structure Editor
   src/ws.ts                WebSocket client wiring live events into the stores
 tests/                  pytest (backend) + vitest (frontend)
+scripts/                translate-ui.sh — regenerates frontend i18n catalogs
 ```
