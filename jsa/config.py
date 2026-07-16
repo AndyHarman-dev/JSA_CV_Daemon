@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
     dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
     select_language: bool = False          # --select-language: show the full-screen boot gate (language picker + boot log) before the dashboard on first run
+    enable_fit_assessment: bool = True    # Global fit-gate toggle, via JSA_ENABLE_FIT_ASSESSMENT.
+    # ON (default) preserves the documented "Fit-assessment gate" behavior (CLAUDE.md):
+    # every pending job runs fit_assessment before cv_adjust. OFF skips fit_assessment
+    # entirely — pending jobs dispatch straight to cv_adjust (see
+    # jsa/pipeline/orchestrator.py::_next_stage_for). Backend-only / restart-to-change:
+    # no UI toggle and no live-reload, unlike the Preferences-backed language setting —
+    # there's no frontend surface for this (see CLAUDE.md scope note on this unit).
 
     @property
     def cv_structure_path(self) -> Path:

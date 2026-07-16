@@ -23,8 +23,9 @@ from jsa.agents.base import AgentReply
 from jsa.db import repo
 from jsa.db.models import Base, Document, Job, JobState, Message, Stage
 from jsa.pipeline.orchestrator import _next_stage_for
-from jsa.pipeline.stages import _parse_fit_verdict, run_stage
+from jsa.pipeline.stages import _build_fit_user_msg, _parse_fit_verdict, run_stage
 from jsa.pipeline.state_machine import InvalidTransition, transition
+from jsa.schema import CVDocument
 from tests.backend.fakes.fake_backend import CapturingBackend, FakeAgentBackend
 
 
@@ -300,6 +301,16 @@ class TestStateMachine:
         with pytest.raises(InvalidTransition):
             transition(j, JobState.approved, None)
 
+    def test_pending_to_running_cv_adjust_direct_skip_is_allowed(self):
+        """The fit-gate-off path (U10): pending → running(cv_adjust) directly, skipping
+        fit_assessment/fit_done entirely. No new ALLOWED/STAGE_FOR_STATE edge was needed —
+        cv_adjust is already in STAGE_FOR_STATE[running] regardless of the prior state —
+        but this test pins that down explicitly so a future edit to the table can't
+        silently break the skip-gate path without a red test."""
+        j = self._job(JobState.pending)
+        transition(j, JobState.running, Stage.cv_adjust)
+        assert j.state == JobState.running and j.current_stage == Stage.cv_adjust
+
 
 class TestDispatchMapping:
     def _job(self, state, stage=None):
@@ -309,8 +320,25 @@ class TestDispatchMapping:
     def test_pending_dispatches_fit_assessment(self):
         assert _next_stage_for(self._job(JobState.pending)) == Stage.fit_assessment
 
+    def test_pending_dispatches_fit_assessment_when_flag_explicitly_on(self):
+        assert _next_stage_for(self._job(JobState.pending), True) == Stage.fit_assessment
+
     def test_fit_done_dispatches_cv_adjust(self):
         assert _next_stage_for(self._job(JobState.fit_done)) == Stage.cv_adjust
+
+    def test_pending_dispatches_cv_adjust_directly_when_fit_gate_disabled(self):
+        """Settings.enable_fit_assessment=False (U10): pending jobs skip fit_assessment
+        and go straight to cv_adjust."""
+        assert (
+            _next_stage_for(self._job(JobState.pending), False) == Stage.cv_adjust
+        )
+
+    def test_fit_done_still_dispatches_cv_adjust_when_flag_disabled(self):
+        """The flag only affects routing FROM pending; a job that already passed (or was
+        ignored past) the gate while it was on still routes normally."""
+        assert (
+            _next_stage_for(self._job(JobState.fit_done), False) == Stage.cv_adjust
+        )
 
 
 class TestRunnable:
@@ -331,3 +359,59 @@ class TestRunnable:
 
         runnable = await repo.list_runnable_jobs(session)
         assert job.id not in {j.id for j in runnable}
+
+
+# ---------------------------------------------------------------------------
+# Cache-friendly prefix (U10 Part 2): the CV-markdown block must be a stable,
+# byte-identical prefix, positioned first, across calls sharing the same
+# base_structure — this is the property whichever unit lands a cache_control
+# breakpoint (on this stage or on the Anthropic backend generally) depends on.
+# ---------------------------------------------------------------------------
+
+
+class TestFitUserMsgCacheableStructure:
+    def _structure(self) -> CVDocument:
+        return CVDocument.model_validate({
+            "contact": {"name": "Jane Doe", "email": "jane@x.com"},
+            "sections": [{"name": "Summary", "text": "Backend engineer."}],
+        })
+
+    def _job(self, **overrides) -> Job:
+        data = dict(id="x", company="Acme", role="Engineer", link="l", tier="A",
+                    jd="Job description text", jd_hash="h", cv_text="",
+                    state=JobState.pending, current_stage=None)
+        data.update(overrides)
+        return Job(**data)
+
+    def test_cv_block_is_the_prefix(self):
+        """The CV markdown must lead the message so it forms a stable prefix — the
+        variable, per-job content (company/role/JD) must come strictly after it."""
+        msg = _build_fit_user_msg(self._job(), self._structure())
+        assert msg.startswith("CV:\n")
+        assert msg.index("CV:") < msg.index("COMPANY:")
+        assert msg.index("COMPANY:") < msg.index("JOB DESCRIPTION:")
+
+    def test_cv_prefix_byte_identical_across_calls_with_same_structure(self):
+        """Same base_structure, different job-specific fields → the CV-block prefix
+        (everything up to COMPANY:) must be byte-for-byte identical across calls, which
+        is exactly the property a cache_control breakpoint would rely on."""
+        structure = self._structure()
+        msg1 = _build_fit_user_msg(
+            self._job(company="Acme", role="Engineer", jd="JD one"), structure
+        )
+        msg2 = _build_fit_user_msg(
+            self._job(company="Globex", role="Staff Engineer", jd="JD two"), structure
+        )
+        prefix1 = msg1[: msg1.index("COMPANY:")]
+        prefix2 = msg2[: msg2.index("COMPANY:")]
+        assert prefix1 == prefix2
+        assert prefix1.startswith("CV:\n")
+
+    def test_no_cv_block_still_has_stable_empty_prefix(self):
+        """When no structure is saved, the (empty) CV block still yields a message that
+        starts directly with the variable content — no stray leading whitespace that
+        would vary the 'prefix' shape between structure-present and structure-absent
+        calls in a way that isn't itself deterministic."""
+        msg = _build_fit_user_msg(self._job(), None)
+        assert msg.startswith("COMPANY:")
+        assert "CV:" not in msg

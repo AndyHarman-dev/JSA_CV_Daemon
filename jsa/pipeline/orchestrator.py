@@ -30,17 +30,27 @@ from jsa.pipeline.state_machine import transition
 logger = logging.getLogger(__name__)
 
 
-def _next_stage_for(job: Job) -> Stage:
+def _next_stage_for(job: Job, enable_fit_assessment: bool = True) -> Stage:
     """Determine which stage to run for the given job.
 
     State / current_stage mapping:
-    - pending                     → fit_assessment (fresh)
+    - pending                     → fit_assessment (fresh), or cv_adjust directly when
+                                     enable_fit_assessment is False (Settings.enable_fit_assessment
+                                     / JSA_ENABLE_FIT_ASSESSMENT — see CLAUDE.md "Fit-assessment
+                                     gate"). Default True preserves the documented always-on gate.
     - fit_done                    → cv_adjust (fresh; fit check passed or was ignored)
     - cv_done                     → cover_letter (fresh)
     - awaiting_input              → job.current_stage (resume)
     - review + unconsumed rev req → job.current_stage (revising_cv / revising_cl)
     """
     if job.state == JobState.pending:
+        if not enable_fit_assessment:
+            # pending → running(cv_adjust) is already a valid transition: cv_adjust is
+            # in STAGE_FOR_STATE[running] (jsa/pipeline/state_machine.py) regardless of
+            # the prior state, so no new state-machine edge is needed here — see the
+            # skip-gate tests in tests/backend/test_fit_assessment.py (TestStateMachine
+            # and TestDispatchMapping) for the corresponding transition() check.
+            return Stage.cv_adjust
         return Stage.fit_assessment
     if job.state == JobState.fit_done:
         return Stage.cv_adjust
@@ -91,6 +101,8 @@ class Orchestrator:
         _db_session_factory: Callable that returns a new async SQLAlchemy session.
         _backend_factory: Callable(name: str) -> AgentBackend — instantiates a backend by name.
         _backends: Ordered list of backend names forming the fallback chain (BF-19).
+        _enable_fit_assessment: Global fit-gate toggle (Settings.enable_fit_assessment);
+            False routes pending jobs straight to cv_adjust, skipping fit_assessment.
         _stopping: Flag to signal graceful shutdown.
     """
 
@@ -103,6 +115,7 @@ class Orchestrator:
         output_dir: Path | None = None,
         cv_structure_path: Path | None = None,
         preferences_path: Path | None = None,
+        enable_fit_assessment: bool = True,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
         self.wakeup = asyncio.Event()
@@ -112,6 +125,10 @@ class Orchestrator:
         self._output_dir = output_dir
         self._cv_structure_path = cv_structure_path
         self._preferences_path = preferences_path
+        # Backend-only global toggle (Settings.enable_fit_assessment); read once at
+        # construction, mirroring max_parallel's startup-fixed semantics rather than
+        # preferences.py's live-reread pattern — see CLAUDE.md scope note for this unit.
+        self._enable_fit_assessment = enable_fit_assessment
         self._stopping = False
         # Keyed by job_id (not an unkeyed set) so a specific job's in-flight
         # worker task can be looked up and cancelled — see cancel_task().
@@ -192,7 +209,7 @@ class Orchestrator:
 
                 # Transition to running in the DB before spawning, so a new
                 # list_runnable_jobs call won't re-pick this job.
-                stage = _next_stage_for(job)
+                stage = _next_stage_for(job, self._enable_fit_assessment)
                 try:
                     async with self._db_session_factory() as session:
                         # Re-fetch to get a fresh, session-bound ORM object

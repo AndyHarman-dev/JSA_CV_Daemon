@@ -685,12 +685,21 @@ def _build_fit_user_msg(job: Job, base_structure: CVDocument | None) -> str:
     to markdown for readability. Absent (no structure saved yet) → no CV block — the
     gate in Orchestrator.run() keeps jobs pending until a structure exists, so this
     should not normally happen in production.
+
+    Ordering is deliberate for prompt-cache economics: the CV-markdown block is placed
+    FIRST as a stable, byte-for-byte-identical prefix across every fit-assessment call
+    for the same user (there is exactly one cv_structure.json — see CLAUDE.md "CV
+    structure — single source of truth"), with the per-job variable content
+    (company/role/JD) as the suffix. This function does not itself add a
+    ``cache_control`` breakpoint (that wiring belongs to whichever unit lands it on the
+    Anthropic backend — see jsa/agents/anthropic_api.py); it only guarantees the prefix
+    stays maximally reorderable/cacheable whenever that lands.
     """
     cv_block = f"CV:\n{cv_to_markdown(base_structure)}\n\n" if base_structure is not None else ""
     return (
+        f"{cv_block}"
         f"COMPANY: {job.company}\n"
         f"ROLE: {job.role}\n\n"
-        f"{cv_block}"
         f"JOB DESCRIPTION:\n{job.jd}"
     )
 

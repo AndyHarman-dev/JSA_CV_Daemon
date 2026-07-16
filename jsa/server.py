@@ -117,6 +117,7 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
             output_dir=settings.output_dir,
             cv_structure_path=settings.cv_structure_path,
             preferences_path=settings.preferences_path,
+            enable_fit_assessment=settings.enable_fit_assessment,
         )
         app.state.orchestrator = orchestrator
 
