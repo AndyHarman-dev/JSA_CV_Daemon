@@ -2,10 +2,27 @@
 
 import csv
 import hashlib
+import sys
 from pathlib import Path
 
 _REQUIRED_HEADERS = {"company", "role", "link", "tier", "JD"}
 _VALID_TIERS = {"A", "B", "C"}
+
+# Python's csv module defaults field_size_limit() to 128 KiB per field. The JD
+# (job description) column is a single CSV field and can easily exceed that,
+# which would otherwise raise `_csv.Error: field larger than field limit` from
+# *within* csv.DictReader iteration and abort ingest of the entire file — one
+# oversized JD would brick every other (perfectly fine) row too. Raise the
+# limit here, at import time, so it's in effect for every load_csv() call.
+#
+# sys.maxsize can overflow the C `long` backing the underlying _csv module on
+# some platforms (a known csv module quirk on 64-bit systems), so fall back to
+# a large, fixed, comfortably-above-any-realistic-JD cap if that happens.
+_FALLBACK_FIELD_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:
+    csv.field_size_limit(_FALLBACK_FIELD_SIZE_LIMIT)
 
 
 def _job_id(company: str, role: str, link: str) -> str:
@@ -65,35 +82,55 @@ def load_csv(path: Path) -> tuple[list[dict], list[str]]:
         jobs: list[dict] = []
         errors: list[str] = []
 
-        for row_num, row in enumerate(reader, start=2):  # row 1 is header
-            company = row["company"].strip()
-            role = row["role"].strip()
-            link = row["link"].strip()
-            tier = row["tier"].strip()
-            jd = row["JD"].strip()
-
-            # Skip completely blank rows
-            if not company and not role and not link and not tier and not jd:
+        # Manually step the iterator (rather than a plain `for row in reader`)
+        # so that an exception raised by *advancing* the DictReader itself —
+        # e.g. a still-oversized field, a decode hiccup, or any other row-level
+        # corruption — can be soft-skipped without losing the rest of the
+        # file. A plain for-loop can't catch exceptions from the iterator's
+        # own __next__ without wrapping (and thereby aborting) the whole loop.
+        row_num = 1  # row 1 is the header
+        while True:
+            row_num += 1
+            try:
+                row = next(reader)
+            except StopIteration:
+                break
+            except Exception as exc:
+                errors.append(f"Row {row_num}: could not parse row ({exc}); row skipped")
                 continue
 
-            # Validate tier
-            if tier not in _VALID_TIERS:
-                errors.append(
-                    f"Row {row_num}: invalid tier {tier!r} (must be A, B, or C) — "
-                    f"company={company!r}, role={role!r}; row skipped"
+            try:
+                company = row["company"].strip()
+                role = row["role"].strip()
+                link = row["link"].strip()
+                tier = row["tier"].strip()
+                jd = row["JD"].strip()
+
+                # Skip completely blank rows
+                if not company and not role and not link and not tier and not jd:
+                    continue
+
+                # Validate tier
+                if tier not in _VALID_TIERS:
+                    errors.append(
+                        f"Row {row_num}: invalid tier {tier!r} (must be A, B, or C) — "
+                        f"company={company!r}, role={role!r}; row skipped"
+                    )
+                    continue
+
+                jobs.append(
+                    {
+                        "id": _job_id(company, role, link),
+                        "company": company,
+                        "role": role,
+                        "link": link,
+                        "tier": tier,
+                        "jd": jd,
+                        "jd_hash": _jd_hash(jd),
+                    }
                 )
+            except Exception as exc:
+                errors.append(f"Row {row_num}: could not parse row ({exc}); row skipped")
                 continue
-
-            jobs.append(
-                {
-                    "id": _job_id(company, role, link),
-                    "company": company,
-                    "role": role,
-                    "link": link,
-                    "tier": tier,
-                    "jd": jd,
-                    "jd_hash": _jd_hash(jd),
-                }
-            )
 
     return jobs, errors

@@ -260,8 +260,20 @@ async def _preflight(settings: Settings, csv_path: Path, cv_path: Optional[Path]
     # 2. Seed the CV structure from --cv, once, if none exists yet.
     await _bootstrap_cv_structure(settings, cv_path)
 
-    # 3. CSV ingest
-    jobs, ingest_errors = load_csv(csv_path)
+    # 3. CSV ingest — load_csv() is sync file I/O + CPU-bound parsing, so run it
+    # off the event loop thread (CLAUDE.md "Concurrency" convention). A hard
+    # ingest failure (e.g. an unhandled parse exception) must not abort daemon
+    # startup — degrade to zero jobs ingested and surface it through the same
+    # warning channel used for soft-skipped rows (see CLAUDE.md unit U3).
+    try:
+        jobs, ingest_errors = await asyncio.to_thread(load_csv, csv_path)
+    except Exception as exc:
+        typer.echo(
+            f"Warning: failed to ingest CSV {csv_path}: {exc!r}; "
+            "starting with zero jobs ingested",
+            err=True,
+        )
+        jobs, ingest_errors = [], []
     for err in ingest_errors:
         typer.echo(f"Warning: {err}", err=True)
     async with session_factory() as session:

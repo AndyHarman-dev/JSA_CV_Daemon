@@ -407,6 +407,89 @@ class TestCsvLoaderMixed:
         assert errors == []
 
 
+class TestCsvLoaderOversizedField:
+    """U3 — CSV oversized-field resilience.
+
+    Python's csv module defaults field_size_limit() to 128 KiB per field, and
+    that limit was never raised anywhere in this repo, so a job description
+    (JD) >=128 KB used to raise `_csv.Error: field larger than field limit`
+    from *within* DictReader iteration and abort ingest of the whole file —
+    even rows that were perfectly fine. These tests cover the fix.
+    """
+
+    def test_oversized_jd_no_longer_raises_and_is_ingested(self, tmp_path):
+        """A JD well past the old 128 KiB default limit must parse normally now."""
+        big_jd = "A" * (200 * 1024)  # 200 KB, no commas/quotes/newlines
+        csv_file = _write_csv(
+            tmp_path / "jobs.csv",
+            [
+                "company,role,link,tier,JD",
+                "Acme,Engineer,https://acme.com/1,A,Normal JD.",
+                f"BigCo,Analyst,https://bigco.com/2,B,{big_jd}",
+            ],
+        )
+
+        jobs, errors = load_csv(csv_file)  # must not raise csv.Error
+
+        assert errors == []
+        assert len(jobs) == 2
+        big_job = next(j for j in jobs if j["company"] == "BigCo")
+        assert len(big_job["jd"]) == len(big_jd)
+
+    def test_oversized_jd_and_malformed_row_alongside_valid_rows(self, tmp_path):
+        """Oversized JD ingests fine; a genuinely malformed row still soft-skips;
+        valid rows are unaffected either way."""
+        big_jd = "B" * (200 * 1024)
+        csv_file = _write_csv(
+            tmp_path / "jobs.csv",
+            [
+                "company,role,link,tier,JD",
+                "Acme,Engineer,https://acme.com/1,A,Good JD.",          # valid
+                f"BigCo,Analyst,https://bigco.com/2,B,{big_jd}",         # oversized JD, now valid
+                "Beta,Designer,https://beta.com/3,Q,Bad tier JD.",       # malformed → soft-skip
+                "Gamma,PM,https://gamma.com/4,C,Another good JD.",       # valid
+            ],
+        )
+
+        jobs, errors = load_csv(csv_file)
+
+        assert len(jobs) == 3
+        companies = {j["company"] for j in jobs}
+        assert companies == {"Acme", "BigCo", "Gamma"}
+        assert len(errors) == 1
+        assert "Q" in errors[0]
+
+    def test_field_exceeding_configured_cap_is_soft_skipped_not_fatal(self, tmp_path):
+        """Defense-in-depth: even if a field exceeds whatever cap is configured
+        (simulated here via a lowered limit), the manual next()-in-a-loop
+        iteration must soft-skip the offending row into `errors` rather than
+        letting the csv.Error propagate and abort the whole load — subsequent
+        valid rows must still be returned."""
+        import csv as csv_module
+
+        original_limit = csv_module.field_size_limit()
+        csv_module.field_size_limit(1024)  # artificially tiny, to force a real csv.Error
+        try:
+            too_big = "C" * 2048  # exceeds the 1024 cap set above
+            csv_file = _write_csv(
+                tmp_path / "jobs.csv",
+                [
+                    "company,role,link,tier,JD",
+                    "Acme,Engineer,https://acme.com/1,A,Good JD.",
+                    f"BigCo,Analyst,https://bigco.com/2,B,{too_big}",
+                ],
+            )
+
+            jobs, errors = load_csv(csv_file)  # must not raise
+
+            assert len(errors) >= 1
+            # The valid row must still come through even though a later (or same)
+            # row blew the configured field-size cap.
+            assert any(j["company"] == "Acme" for j in jobs)
+        finally:
+            csv_module.field_size_limit(original_limit)
+
+
 # ---------------------------------------------------------------------------
 # cv_loader tests
 # ---------------------------------------------------------------------------
