@@ -29,6 +29,26 @@ def backend_for(name: str, **kwargs: object) -> "AgentBackend":
     return _REGISTRY[name](**kwargs)
 
 
+def supports_history_replay(name: str) -> bool:
+    """Return whether the backend registered under ``name`` can reconstruct a
+    session purely from replayed ``history`` (see
+    ``AgentBackend.supports_history_replay``), without instantiating it.
+
+    Used by ``jsa.db.repo.backend_switch_reset`` to decide whether a limit-hit
+    stage's Message history can be retained for replay on the new backend, or
+    must be discarded (CLI backends, whose sessions live in a native,
+    backend-specific store).
+
+    An unregistered ``name`` conservatively returns False — same as "cannot
+    replay" — so an unknown target backend gets the safe (full-reset) path
+    rather than an incorrect retention path.
+    """
+    cls = _REGISTRY.get(name)
+    if cls is None:
+        return False
+    return getattr(cls, "supports_history_replay", False)
+
+
 # Register CLI backends
 from jsa.agents.claude_cli import ClaudeCliBackend  # noqa: E402
 from jsa.agents.google_cli import GoogleCliBackend  # noqa: E402

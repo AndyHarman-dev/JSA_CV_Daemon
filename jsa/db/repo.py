@@ -274,48 +274,90 @@ async def backend_switch_reset(
     new_backend_name: str,
     failed_stage: "Stage",
 ) -> None:
-    """Reset job state after AgentLimitReached so the new backend starts fresh (BF-19).
+    """Reset job state after AgentLimitReached so the new backend can proceed (BF-19).
 
     Strategy mirrors soft_reset_job but is invoked from a running job (not a
     failed one) and writes backend_name in the same atomic commit.
 
-    failed_stage mapping:
+    Whether the failed stage's Message/FollowUp history is DELETED (full reset,
+    new backend starts fresh) or RETAINED (new backend resumes by replaying
+    history) depends on whether ``new_backend_name`` is "history-capable" —
+    see ``jsa.agents.registry.supports_history_replay``. A CLI backend
+    (claude-cli, google-cli) keeps session state in its own native, on-disk
+    session store keyed by an external id; switching TO one cannot replay an
+    old conversation because there is no way to seed that native store from a
+    plain message list. The Anthropic REST backend is stateless per call — its
+    restore_session rebuilds `messages` purely from a `history` argument — so
+    switching TO it CAN retain and replay history.
+
+    failed_stage mapping (full-reset case, history NOT capable — unchanged
+    from the original BF-19 behavior):
       revising_cv / revising_cl → rewind to review  (delete revision Messages+FollowUps)
       cover_letter              → rewind to cv_done (delete CL Messages only)
-      cv_adjust / None          → rewind to pending (delete all Messages)
+      cv_adjust / fit_assessment / None → rewind to pending (delete all Messages)
+
+    failed_stage mapping (retention case, history IS capable):
+      revising_cv / revising_cl → rewind to review, KEEP Messages+FollowUps so
+        run_stage's existing _is_revision_resume/_load_history-based branch
+        selection naturally resumes the revision on the new backend.
+      cover_letter              → rewind to cv_done, KEEP cv_adjust AND
+        cover_letter Messages so run_stage's history-based branch selection
+        naturally resumes cover_letter on the new backend.
+      cv_adjust                 → rewind to fit_done (NOT pending — pending
+        would re-run fit_assessment, which has no resume path and doesn't need
+        one), KEEP Messages so run_stage's history-based branch selection
+        naturally resumes cv_adjust on the new backend.
+      fit_assessment / None     → rewind to pending, same as the full-reset
+        case. fit_assessment is always a single fresh start_session with no
+        resume path (see run_stage/_run_fit_assessment) — there is nothing to
+        retain, and it doesn't persist a per-stage Message row before its own
+        checkpoint, so retention is a no-op here; keep it simple/identical.
 
     Revision stages rewind to review (not cv_done/pending) so the unconsumed
     RevisionRequest is still in place and the orchestrator re-dispatches the
     revision on the new backend.
 
-    Session IDs for the failed stage are cleared so run_stage takes the
-    fresh-session branch on the next dispatch.
+    Session IDs for the failed stage are always cleared (regardless of
+    retention) — a CLI-native session id is meaningless to a different
+    backend, and even the Anthropic backend's restore_session ignores
+    external_id entirely, rebuilding purely from history.
     """
+    from jsa.agents.registry import supports_history_replay
     from jsa.pipeline.state_machine import transition, set_current_stage
 
     job.backend_name = new_backend_name
+    history_capable = supports_history_replay(new_backend_name)
 
     if failed_stage in (Stage.revising_cv, Stage.revising_cl):
-        # Delete revision-stage Messages and ALL FollowUps for this revision.
-        # Important: delete answered FollowUps too, not just open ones.
-        # _is_revision_resume checks for answered FollowUps with answered_at >
-        # rev_req.created_at; leaving them causes the resume path to run with
-        # empty history (Messages were deleted) → silent divergence on new backend.
-        # Deleting all FollowUps ensures _is_revision_resume returns False and
-        # the revision restarts fresh on the new backend.
-        await session.execute(
-            delete(Message).where(
-                Message.job_id == job.id,
-                Message.stage == failed_stage,
+        if not history_capable:
+            # Delete revision-stage Messages and ALL FollowUps for this revision.
+            # Important: delete answered FollowUps too, not just open ones.
+            # _is_revision_resume checks for answered FollowUps with answered_at >
+            # rev_req.created_at; leaving them causes the resume path to run with
+            # empty history (Messages were deleted) → silent divergence on new backend.
+            # Deleting all FollowUps ensures _is_revision_resume returns False and
+            # the revision restarts fresh on the new backend.
+            await session.execute(
+                delete(Message).where(
+                    Message.job_id == job.id,
+                    Message.stage == failed_stage,
+                )
             )
-        )
-        await session.execute(
-            delete(FollowUp).where(
-                FollowUp.job_id == job.id,
-                FollowUp.stage == failed_stage,
+            await session.execute(
+                delete(FollowUp).where(
+                    FollowUp.job_id == job.id,
+                    FollowUp.stage == failed_stage,
+                )
             )
-        )
-        # Clear the relevant session ID
+        # else (history-capable): retain both Messages and FollowUps for this
+        # revision stage untouched. _is_revision_resume's discriminator
+        # (answered FollowUp newer than the RevisionRequest) and
+        # _load_history's Message read both keep working unmodified — the
+        # retained rows let run_stage's existing resume branch replay the full
+        # revision conversation (original stage + revision turns) into the new
+        # backend via restore_session, instead of restarting the revision.
+
+        # Clear the relevant session ID — meaningless on the new backend either way.
         if failed_stage == Stage.revising_cv:
             job.cv_session_id = None
         else:
@@ -335,13 +377,18 @@ async def backend_switch_reset(
         set_current_stage(job, failed_stage)  # restore revising_* so orchestrator re-dispatches
 
     elif failed_stage == Stage.cover_letter:
-        # Delete cover_letter Messages and open FollowUps — keep cv_adjust Messages.
-        await session.execute(
-            delete(Message).where(
-                Message.job_id == job.id,
-                Message.stage == Stage.cover_letter,
+        if not history_capable:
+            # Delete cover_letter Messages and open FollowUps — keep cv_adjust Messages.
+            await session.execute(
+                delete(Message).where(
+                    Message.job_id == job.id,
+                    Message.stage == Stage.cover_letter,
+                )
             )
-        )
+        # else (history-capable): retain cover_letter Messages so run_stage's
+        # existing "if history:" branch (Stage.cover_letter) naturally resumes
+        # by replaying them via restore_session + send_message on the new
+        # backend, instead of re-running research + a fresh start_session.
         await session.execute(
             delete(FollowUp).where(
                 FollowUp.job_id == job.id,
@@ -354,8 +401,32 @@ async def backend_switch_reset(
         # running(cover_letter) → cv_done (guard extended in state_machine for BF-19)
         transition(job, JobState.cv_done, None)
 
+    elif failed_stage == Stage.cv_adjust and history_capable:
+        # Retain ALL Messages (do NOT delete) so run_stage's existing
+        # "if history:" branch (Stage.cv_adjust) naturally resumes by
+        # replaying them via restore_session + send_message on the new
+        # backend, instead of re-running research + a fresh start_session.
+        #
+        # Rewind to fit_done, NOT pending: pending → fit_assessment (see
+        # orchestrator._next_stage_for), which would needlessly re-run the
+        # one-shot fit check. fit_done → cv_adjust is the correct rewind
+        # target that lets the retained history actually be used.
+        await session.execute(delete(FollowUp).where(
+            FollowUp.job_id == job.id,
+            FollowUp.answered_at.is_(None),
+        ))
+        job.cv_session_id = None
+        job.cl_session_id = None
+        job.session_external_id = None
+        transition(job, JobState.fit_done, None)
+
     else:
-        # cv_adjust, or None (failure before any stage started) → rewind to pending
+        # cv_adjust (non-history-capable target), fit_assessment, or None
+        # (failure before any stage started) → rewind to pending, deleting all
+        # Messages. fit_assessment/None have no retainable history regardless
+        # of target-backend capability (see docstring above), so this is the
+        # correct path unconditionally for those; for cv_adjust it's the
+        # correct path only when the new backend can't replay history.
         await session.execute(delete(Message).where(Message.job_id == job.id))
         await session.execute(delete(FollowUp).where(
             FollowUp.job_id == job.id,

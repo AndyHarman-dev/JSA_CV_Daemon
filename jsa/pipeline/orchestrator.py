@@ -55,6 +55,53 @@ def _next_stage_for(job: Job) -> Stage:
     raise ValueError(f"Job {job.id} is in unexpected state {job.state} for dispatch")
 
 
+class _RateLimitedBackend(AgentBackend):
+    """Wraps an AgentBackend so all of ITS provider calls share a per-backend-name
+    semaphore across concurrently-running jobs (see Orchestrator._call_semaphore).
+
+    This is deliberately separate from Orchestrator.sem: `sem` bounds how many
+    JOBS run concurrently (max_parallel job slots); this wrapper bounds how many
+    in-flight PROVIDER CALLS share the same backend/account at once. Without it,
+    all 5 job slots can call out to the same account-rate-limited provider at
+    the same instant and trip a shared limit together. Pacing calls through a
+    smaller shared semaphore reduces (does not eliminate) that chance.
+
+    Only wraps the AgentBackend ABC methods, plus `run_research` if the wrapped
+    backend defines it (duck-typed, checked via hasattr by
+    jsa.pipeline.stages._gather_research) — forwarding is conditional so
+    hasattr(wrapper, "run_research") stays False for backends that don't have it.
+    """
+
+    def __init__(self, inner: AgentBackend, call_sem: asyncio.Semaphore) -> None:
+        self._inner = inner
+        self._call_sem = call_sem
+        self.name = inner.name
+        self.supports_history_replay = getattr(inner, "supports_history_replay", False)
+        if hasattr(inner, "run_research"):
+            self.run_research = self._run_research  # type: ignore[method-assign]
+
+    async def start_session(self, system_prompt, initial_user_msg):
+        async with self._call_sem:
+            return await self._inner.start_session(system_prompt, initial_user_msg)
+
+    async def restore_session(self, system_prompt, history, external_id):
+        async with self._call_sem:
+            return await self._inner.restore_session(system_prompt, history, external_id)
+
+    async def send_message(self, handle, text):
+        async with self._call_sem:
+            return await self._inner.send_message(handle, text)
+
+    async def end_session(self, handle) -> None:
+        # Teardown is cheap/no-op for every current backend — no need to gate
+        # it behind the same semaphore as the actual generation calls.
+        await self._inner.end_session(handle)
+
+    async def _run_research(self, agent_name: str, query: str) -> str:
+        async with self._call_sem:
+            return await self._inner.run_research(agent_name, query)
+
+
 def _wrap_factory(backend_factory: Callable) -> Callable[[str], AgentBackend]:
     """Normalise backend_factory to always accept a backend name string.
 
@@ -92,6 +139,14 @@ class Orchestrator:
         _backend_factory: Callable(name: str) -> AgentBackend — instantiates a backend by name.
         _backends: Ordered list of backend names forming the fallback chain (BF-19).
         _stopping: Flag to signal graceful shutdown.
+        _call_semaphores: Per-backend-name semaphores (lazily created) that pace
+            concurrent PROVIDER calls to the same backend — separate from `sem`,
+            which paces concurrent JOBS. See _RateLimitedBackend.
+        _limit_retry_max_attempts / _limit_retry_base_delay / _limit_retry_max_delay:
+            Bounded exponential backoff applied to an AgentLimitReached on the
+            SAME backend before falling through to _handle_limit_reached's
+            backend-switch/fail logic — gives a transient/shared rate limit a
+            chance to clear without discarding a stage's progress via switch.
     """
 
     def __init__(
@@ -103,6 +158,10 @@ class Orchestrator:
         output_dir: Path | None = None,
         cv_structure_path: Path | None = None,
         preferences_path: Path | None = None,
+        max_concurrent_calls_per_backend: int | None = None,
+        limit_retry_max_attempts: int = 3,
+        limit_retry_base_delay: float = 0.25,
+        limit_retry_max_delay: float = 5.0,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
         self.wakeup = asyncio.Event()
@@ -116,6 +175,33 @@ class Orchestrator:
         # Keyed by job_id (not an unkeyed set) so a specific job's in-flight
         # worker task can be looked up and cancelled — see cancel_task().
         self._tasks: dict[str, asyncio.Task] = {}
+        # Shared provider-call rate limiter: one semaphore per backend name,
+        # created lazily so tests/simple callers that never hit this path pay
+        # nothing extra. Defaults to max_parallel (i.e. never actually blocks
+        # — an uncontended asyncio.Semaphore.acquire() doesn't suspend, so
+        # this is a no-op by default, byte-identical to pre-U6 concurrency)
+        # so pacing is opt-in: an operator who wants to throttle a single
+        # backend/account below full job-slot concurrency passes a smaller
+        # value explicitly.
+        self._max_concurrent_calls_per_backend = (
+            max_concurrent_calls_per_backend
+            if max_concurrent_calls_per_backend is not None
+            else max_parallel
+        )
+        self._call_semaphores: dict[str, asyncio.Semaphore] = {}
+        # Backoff/retry (same backend) before treating AgentLimitReached as a
+        # switch-worthy event — see _retry_stage_with_backoff.
+        self._limit_retry_max_attempts = limit_retry_max_attempts
+        self._limit_retry_base_delay = limit_retry_base_delay
+        self._limit_retry_max_delay = limit_retry_max_delay
+
+    def _get_call_semaphore(self, backend_name: str) -> asyncio.Semaphore:
+        """Return (creating if needed) the shared provider-call semaphore for backend_name."""
+        sem = self._call_semaphores.get(backend_name)
+        if sem is None:
+            sem = asyncio.Semaphore(self._max_concurrent_calls_per_backend)
+            self._call_semaphores[backend_name] = sem
+        return sem
 
     def kick(self) -> None:
         """Wake the run() loop. Called by API routes after answer/revise."""
@@ -268,9 +354,18 @@ class Orchestrator:
     async def _run_one(self, job_id: str) -> None:
         """Worker task: open a session, run the stage, handle outcome.
 
+        The FIRST attempt at the stage uses exactly the original (pre-BF-19
+        retry/backoff) single-session shape — open one session, fetch the
+        job once, dispatch — so the common case (no limit hit) pays zero
+        extra session-churn cost. Only if that first attempt raises
+        AgentLimitReached do we fall through to _retry_stage_with_backoff,
+        which retries on fresh sessions (see its docstring for why).
+
         Always releases the semaphore and kicks the loop in finally.
         """
         try:
+            backend: AgentBackend | None = None
+            stage: Stage | None = None
             async with self._db_session_factory() as session:
                 job = await repo.get_job(session, job_id)
                 if job is None:
@@ -301,13 +396,24 @@ class Orchestrator:
                     await session.commit()
 
                 active_backend_name = job.backend_name
-                backend = self._backend_factory(active_backend_name)
-                await stages.run_stage(
-                    job, backend, stage, session,
-                    output_dir=self._output_dir,
-                    cv_structure_path=self._cv_structure_path,
-                    preferences_path=self._preferences_path,
+                backend = _RateLimitedBackend(
+                    self._backend_factory(active_backend_name),
+                    self._get_call_semaphore(active_backend_name),
                 )
+                try:
+                    await stages.run_stage(
+                        job, backend, stage, session,
+                        output_dir=self._output_dir,
+                        cv_structure_path=self._cv_structure_path,
+                        preferences_path=self._preferences_path,
+                    )
+                    return
+                except AgentLimitReached:
+                    pass  # session closes normally on exit; retry below on fresh ones
+
+            # Only reached if the first attempt (just above) raised
+            # AgentLimitReached. backend/stage are always set by this point.
+            await self._retry_stage_with_backoff(job_id, backend, stage)
 
         except PausedForInput:
             # Job successfully parked — not an error
@@ -358,6 +464,87 @@ class Orchestrator:
         finally:
             self.sem.release()
             self.kick()
+
+    async def _retry_stage_with_backoff(
+        self,
+        job_id: str,
+        backend: AgentBackend,
+        stage: Stage,
+    ) -> None:
+        """Retry run_stage on the SAME backend with bounded exponential backoff,
+        after the caller's (_run_one's) OWN first attempt already raised
+        AgentLimitReached once.
+
+        This sits strictly before backend-switch handling: if every retry here
+        also raises, this re-raises AgentLimitReached so _run_one's existing
+        `except AgentLimitReached` still triggers _handle_limit_reached exactly
+        as before — the existing switch-then-eventually-mark-failed behavior is
+        unchanged. This only adds a chance for a transient/shared rate limit to
+        clear before that happens.
+
+        Only called on the (rare) retry path — the common, no-limit-hit case
+        never reaches this method, so it costs nothing there. Each retry here
+        opens a BRAND NEW session and re-fetches the Job fresh (rather than
+        reusing one across retries): a prior attempt's `run_stage` call may
+        have issued reads (e.g. _load_history) that leave an implicit
+        transaction open, and/or left the in-memory `job` object holding
+        uncommitted mutations (e.g. `job.session_external_id`) when the backend
+        call raised. Reusing that same session/object on retry risks a stuck or
+        failing later commit — a fresh session + fresh fetch per attempt
+        sidesteps that entirely. Since nothing is committed to the DB until a
+        stage actually completes (FINAL/NEED_INPUT checkpoint), re-running from
+        a fresh fetch is safe and side-effect-free beyond re-paying for the
+        calls made so far.
+        """
+        attempt = 1  # the caller's own first attempt already failed once
+        while True:
+            if attempt > self._limit_retry_max_attempts:
+                raise AgentLimitReached(
+                    f"Backend {backend.name} limit reached after "
+                    f"{self._limit_retry_max_attempts} retries"
+                )
+            delay = min(
+                self._limit_retry_base_delay * (2 ** (attempt - 1)),
+                self._limit_retry_max_delay,
+            )
+            logger.warning(
+                "_retry_stage_with_backoff: job %s hit backend %s limit "
+                "(attempt %d/%d) — retrying same backend after %.2fs",
+                job_id, backend.name, attempt, self._limit_retry_max_attempts, delay,
+            )
+            await bus.publish(
+                event_to_dict(
+                    LogEvent(
+                        job_id=job_id,
+                        level="warn",
+                        text=(
+                            f"Backend limit reached — retrying {backend.name} "
+                            f"(attempt {attempt}/{self._limit_retry_max_attempts}) "
+                            f"after {delay:.1f}s"
+                        ),
+                    )
+                )
+            )
+            await asyncio.sleep(delay)
+
+            async with self._db_session_factory() as session:
+                job = await repo.get_job(session, job_id)
+                if job is None:
+                    logger.error(
+                        "_retry_stage_with_backoff: job %s not found", job_id
+                    )
+                    return
+                try:
+                    await stages.run_stage(
+                        job, backend, stage, session,
+                        output_dir=self._output_dir,
+                        cv_structure_path=self._cv_structure_path,
+                        preferences_path=self._preferences_path,
+                    )
+                    return
+                except AgentLimitReached:
+                    attempt += 1
+                    continue
 
     async def _handle_limit_reached(self, job_id: str, exc: AgentLimitReached) -> None:
         """Handle AgentLimitReached: switch to next backend or mark failed (BF-19).

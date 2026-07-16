@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from uuid import uuid4
 
-from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, HistoryTurn, SessionHandle
 
 
 @dataclass
@@ -29,15 +29,48 @@ class FakeAgentBackend(AgentBackend):
     """
 
     name = "fake"
+    # Default: behaves like a CLI backend (no history-only replay). Pass
+    # supports_history_replay=True at construction (or subclass and override
+    # the class attribute) to simulate an Anthropic-style history-capable
+    # backend for backend-switch-retention tests.
+    supports_history_replay = False
 
-    def __init__(self, replies: list[AgentReply]) -> None:
-        """replies: scripted sequence. Each start_session and send_message pops the next."""
+    def __init__(
+        self,
+        replies: list[AgentReply],
+        *,
+        raise_limit_times: int = 0,
+        supports_history_replay: bool | None = None,
+    ) -> None:
+        """replies: scripted sequence. Each start_session and send_message pops the next.
+
+        raise_limit_times: if > 0, the first N calls to start_session/send_message
+        (whichever is invoked next) raise AgentLimitReached instead of popping a
+        reply, simulating a backend that hits its rate limit N times before
+        succeeding — for backoff/retry tests.
+
+        supports_history_replay: overrides the class-level default for this
+        instance, so a single test can construct both a "history-capable" fake
+        (like AnthropicAPIBackend) and a "CLI-style" fake (like ClaudeCliBackend)
+        without separate subclasses.
+        """
         self._replies: list[AgentReply] = list(replies)
+        self._raise_limit_times = raise_limit_times
+        self._limit_raises_done = 0
+        if supports_history_replay is not None:
+            self.supports_history_replay = supports_history_replay
 
     def _pop_reply(self) -> AgentReply:
         if not self._replies:
             raise IndexError("FakeAgentBackend: no more scripted replies")
         return self._replies.pop(0)
+
+    def _maybe_raise_limit(self) -> None:
+        if self._limit_raises_done < self._raise_limit_times:
+            self._limit_raises_done += 1
+            raise AgentLimitReached(
+                f"Simulated limit hit ({self._limit_raises_done}/{self._raise_limit_times})"
+            )
 
     async def start_session(
         self,
@@ -45,6 +78,7 @@ class FakeAgentBackend(AgentBackend):
         initial_user_msg: str,
     ) -> tuple[FakeSessionHandle, AgentReply]:
         """Consume the first reply and return (handle, reply)."""
+        self._maybe_raise_limit()
         handle = FakeSessionHandle(id=str(uuid4()), external_id=None)
         reply = self._pop_reply()
         return handle, reply
@@ -60,6 +94,7 @@ class FakeAgentBackend(AgentBackend):
 
     async def send_message(self, handle: SessionHandle, text: str) -> AgentReply:
         """Consume and return the next scripted reply."""
+        self._maybe_raise_limit()
         return self._pop_reply()
 
     async def end_session(self, handle: SessionHandle) -> None:

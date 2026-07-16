@@ -23,6 +23,11 @@ class AnthropicAPIBackend(AgentBackend):
     """AgentBackend implementation that calls the Anthropic messages API directly."""
 
     name = "anthropic"
+    # Stateless REST API: restore_session rebuilds `messages` purely from the
+    # `history` argument (see below) — no backend-native session required, so
+    # a limit-hit stage's history can be retained and replayed here after a
+    # backend switch (see AgentBackend.supports_history_replay).
+    supports_history_replay = True
 
     def __init__(self, model: str = "claude-haiku-4-5", timeout: float = 180.0) -> None:
         self._model = model

@@ -50,6 +50,20 @@ class AgentBackend(ABC):
 
     name: str                                   # "claude-cli" | "google-cli" | "anthropic"
 
+    # True iff restore_session() can fully reconstruct a session from `history`
+    # alone (a `list[HistoryTurn]`), with no dependency on a backend-native
+    # external session id. CLI backends (Claude, Google) hold session state in
+    # their own on-disk session store, keyed by `external_id`; their
+    # restore_session raises when `external_id` is None because there is no
+    # native session to attach to and no way to replay history into one. The
+    # Anthropic REST backend is stateless per call — its restore_session
+    # rebuilds `messages` purely from `history` — so it overrides this to True.
+    # Used by jsa.db.repo.backend_switch_reset (BF-19 backend-switch handling)
+    # to decide whether a limit-hit stage's Message history can be retained and
+    # replayed on the new backend, or must be discarded (see CLAUDE.md / the
+    # reliability-review unit for backend-switch history retention).
+    supports_history_replay: bool = False
+
     @abstractmethod
     async def start_session(
         self,
