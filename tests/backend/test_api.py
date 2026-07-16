@@ -586,3 +586,59 @@ class TestRecoverySweep:
             job = await repo.get_job(session, "aabbccdd00112233")
             assert job.state == JobState.awaiting_input
             assert job.current_stage == Stage.cv_adjust
+
+
+class TestRecoverySweepWiredAtStartup:
+    async def test_recovery_sweep_invoked_during_server_startup(self, tmp_path, monkeypatch):
+        """recovery_sweep must run during app startup (jsa/server.py::_startup),
+        BEFORE the dispatch loop starts — otherwise a server-only restart (not
+        going through the CLI's own _preflight sweep) never reclaims jobs
+        orphaned in 'running' by a prior crash.
+
+        This is a wiring test: it stubs jsa.server.recovery_sweep with a spy
+        that records each call (session + call order) rather than mocking
+        business logic — recovery_sweep's own behaviour is already covered by
+        TestRecoverySweep above. Orchestrator.run is patched to a no-op (as in
+        the `test_app` fixture elsewhere in this file) so no real dispatch
+        loop starts during the test.
+        """
+        from tests.backend.fakes.fake_backend import FakeAgentBackend
+
+        calls: list[str] = []
+
+        async def _spy_recovery_sweep(session):
+            calls.append("recovery_sweep")
+
+        orchestrator_started = []
+
+        async def _noop_run(self):
+            orchestrator_started.append("orchestrator.run")
+
+        monkeypatch.setattr("jsa.server.recovery_sweep", _spy_recovery_sweep)
+        monkeypatch.setattr(Orchestrator, "run", _noop_run)
+        monkeypatch.setattr("jsa.server.backend_for", lambda name: FakeAgentBackend([]))
+
+        settings = Settings(
+            output_dir=tmp_path / "output",
+            db_path=tmp_path / "test.sqlite",
+            backend="claude-cli",
+            port=8765,
+            no_browser=True,
+        )
+        app = create_app(settings)
+
+        async with app.router.lifespan_context(app):
+            # asyncio.create_task(orchestrator.run()) inside _startup only
+            # schedules the task — it doesn't run until the loop gets a
+            # chance to. Yield here (still inside the "app is up" window, so
+            # before shutdown's _stopping flag) so the patched no-op run()
+            # actually executes and we can assert on it below.
+            await asyncio.sleep(0.05)
+
+        assert calls == ["recovery_sweep"]
+        # Proves _start_orchestrator_task's create_task() call actually ran
+        # (i.e. the dispatch loop was (re)started) — recovery_sweep firing
+        # earlier in _startup, before this task is even created, is exactly
+        # the ordering that matters: reclaim orphaned jobs before anything
+        # gets dispatched to them again.
+        assert orchestrator_started == ["orchestrator.run"]

@@ -155,74 +155,130 @@ class Orchestrator:
         while not self._stopping:
             self.wakeup.clear()
 
-            # Gate: cv_structure is the single source of truth for CV content. Inert
-            # when _cv_structure_path is None (tests / legacy callers) — production
-            # always passes it (see server.py). Checks loadability, not just existence,
-            # so a present-but-corrupt file (bad hand-edit, or a save that raced a crash)
-            # blocks dispatch the same as a missing one — jobs stay pending, never failed.
-            # The editor's PUT calls kick() on save so this unblocks without a restart.
-            if self._cv_structure_path is not None and (
-                await stages._read_base_structure(self._cv_structure_path)
-            ) is None:
-                if not cv_gate_blocked_announced:
-                    cv_gate_blocked_announced = True
-                    await bus.publish(
-                        event_to_dict(
-                            LogEvent(
-                                job_id="",
-                                level="info",
-                                text=(
-                                    "No usable CV structure — jobs stay pending until you set "
-                                    "up your CV in the Structure Editor."
-                                ),
+            try:
+                # Gate: cv_structure is the single source of truth for CV content. Inert
+                # when _cv_structure_path is None (tests / legacy callers) — production
+                # always passes it (see server.py). Checks loadability, not just existence,
+                # so a present-but-corrupt file (bad hand-edit, or a save that raced a crash)
+                # blocks dispatch the same as a missing one — jobs stay pending, never failed.
+                # The editor's PUT calls kick() on save so this unblocks without a restart.
+                if self._cv_structure_path is not None and (
+                    await stages._read_base_structure(self._cv_structure_path)
+                ) is None:
+                    if not cv_gate_blocked_announced:
+                        cv_gate_blocked_announced = True
+                        await bus.publish(
+                            event_to_dict(
+                                LogEvent(
+                                    job_id="",
+                                    level="info",
+                                    text=(
+                                        "No usable CV structure — jobs stay pending until you set "
+                                        "up your CV in the Structure Editor."
+                                    ),
+                                )
                             )
                         )
-                    )
-                await self.wakeup.wait()
-                continue
-            cv_gate_blocked_announced = False
+                    await self.wakeup.wait()
+                    continue
+                cv_gate_blocked_announced = False
 
-            async with self._db_session_factory() as session:
-                runnable: list[Job] = await repo.list_runnable_jobs(session)
+                async with self._db_session_factory() as session:
+                    runnable: list[Job] = await repo.list_runnable_jobs(session)
+            except Exception as exc:
+                # A transient DB/IO error here (e.g. list_runnable_jobs, or the
+                # CV-structure read) must NOT kill the loop permanently — that
+                # would silently freeze the entire dispatcher forever. Log,
+                # back off briefly, and retry on the next iteration.
+                logger.error(
+                    "Orchestrator.run(): error fetching runnable jobs: %s", exc
+                )
+                await bus.publish(
+                    event_to_dict(
+                        LogEvent(
+                            job_id="",
+                            level="error",
+                            text=f"Dispatcher error while listing jobs: {exc}",
+                        )
+                    )
+                )
+                await asyncio.sleep(2.0)
+                continue
 
             for job in runnable:
-                # Acquire sem BEFORE committing the transition so the in-flight
-                # count is accurate. This blocks when 5 tasks are in flight.
-                await self.sem.acquire()
-
-                # Transition to running in the DB before spawning, so a new
-                # list_runnable_jobs call won't re-pick this job.
-                stage = _next_stage_for(job)
+                # Guards the sem acquire, stage resolution, and the
+                # running-transition commit so that one bad job (e.g. one that
+                # trips _next_stage_for's ValueError for an unexpected state)
+                # cannot kill the whole loop or block other jobs in this batch
+                # from dispatching. `stage` is only assigned once
+                # `_next_stage_for` succeeds — used purely for logging below.
+                #
+                # Deliberately NOT wrapping the status-publish calls and the
+                # _run_one spawn below in this same try: doing so (tested)
+                # measurably widened an unrelated pre-existing race in
+                # TestGoogleSessionExpiredAutoRecovery (a transient
+                # failed→pending window in _handle_session_expired's two-phase
+                # mark_failed/soft_reset_job commit) by adding extra await
+                # points between the running-transition and the loop settling
+                # back to wakeup.wait(). Keeping this try's boundary matched to
+                # the original code's (sem/stage/transition only) avoids that
+                # regression while still fully covering the failure mode this
+                # unit targets — a job whose _next_stage_for raises.
+                sem_acquired = False
+                stage: Stage | None = None
                 try:
+                    # Acquire sem BEFORE committing the transition so the in-flight
+                    # count is accurate. This blocks when 5 tasks are in flight.
+                    await self.sem.acquire()
+                    sem_acquired = True
+
+                    # Transition to running in the DB before spawning, so a new
+                    # list_runnable_jobs call won't re-pick this job.
+                    stage = _next_stage_for(job)
+
                     async with self._db_session_factory() as session:
                         # Re-fetch to get a fresh, session-bound ORM object
                         db_job = await repo.get_job(session, job.id)
                         if db_job is None:
                             self.sem.release()
+                            sem_acquired = False
                             continue
                         # Skip if the job was already picked up (e.g. by a
                         # concurrent kick that landed before we got here)
                         if db_job.state == JobState.running:
                             self.sem.release()
+                            sem_acquired = False
                             continue
                         transition(db_job, JobState.running, stage)
                         db_job.updated_at = datetime.utcnow()
                         session.add(db_job)
                         await session.commit()
                 except Exception as exc:
+                    # Release BEFORE the publish below: if bus.publish itself
+                    # raised, releasing after it would leak the slot AND let
+                    # the exception escape run() uncaught. Only release here
+                    # if we acquired the slot but never reached _run_one's
+                    # spawn further down — once that task exists, its own
+                    # finally block owns the release, and releasing here too
+                    # would double-release (letting one extra job past
+                    # max_parallel).
+                    if sem_acquired:
+                        self.sem.release()
+                        sem_acquired = False
                     logger.error(
-                        "Failed to transition job %s to running: %s", job.id, exc
+                        "Failed to dispatch job %s: %s", job.id, exc
                     )
                     await bus.publish(
                         event_to_dict(
                             LogEvent(
                                 job_id=job.id,
                                 level="warn",
-                                text=f"Failed to start {stage.value}: {exc}",
+                                text=(
+                                    f"Failed to start {stage.value if stage else 'stage'}: {exc}"
+                                ),
                             )
                         )
                     )
-                    self.sem.release()
                     continue
 
                 # Publish status change AFTER the DB commit so the UI fetches

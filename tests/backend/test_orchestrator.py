@@ -7,6 +7,7 @@ All tests use asyncio_mode = "auto" (configured in pyproject.toml).
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import uuid4
@@ -110,6 +111,43 @@ def _needs_input_reply(question: str = "What is your target role?") -> AgentRepl
 def _fit_reply() -> AgentReply:
     """A passing fit-assessment verdict — pending jobs run fit_assessment first."""
     return AgentReply(raw="<<<FINAL>>>\nFIT\n<<<END>>>", content="FIT", kind="final")
+
+
+def _cv_json_reply() -> AgentReply:
+    """A schema-valid cv_adjust FINAL (CVDocument JSON) — see test_stages.py::_cv_json
+    for the shape this mirrors. A bare markdown string is NOT valid cv_adjust
+    content; run_stage's _validate_final_content requires JSON matching CVDocument.
+    """
+    payload = {
+        "contact": {
+            "name": "Jane Doe",
+            "email": "jane.doe@example.com",
+            "phone": "+1-555-867-5309",
+        },
+        "sections": [
+            {"name": "Summary", "text": "Senior engineer with eight years of experience."},
+            {"name": "Experience", "entries": [
+                {"role": "Senior Engineer", "company": "Acme", "dates": "2019-present",
+                 "bullets": ["Built a distributed payment pipeline", "Led a service migration"]},
+            ]},
+        ],
+    }
+    content = json.dumps(payload)
+    return AgentReply(raw=f"<<<FINAL>>>\n{content}\n<<<END>>>", content=content, kind="final")
+
+
+def _cl_json_reply() -> AgentReply:
+    """A schema-valid cover_letter FINAL (cover-letter JSON) — see test_stages.py::_cl_json."""
+    payload = {
+        "salutation": "Dear Hiring Manager,",
+        "paragraphs": [
+            "I am excited to apply for this role because your mission to build great "
+            "developer tooling resonates with my four years of shipping production systems."
+        ],
+        "signoff": "Sincerely,\nAndrei",
+    }
+    content = json.dumps(payload)
+    return AgentReply(raw=f"<<<FINAL>>>\n{content}\n<<<END>>>", content=content, kind="final")
 
 
 async def _poll_job_state(
@@ -571,3 +609,130 @@ class TestGoogleSessionExpiredAutoRecovery:
 
         assert refreshed.state == JobState.failed
         assert "session not found" in (refreshed.error or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Test: dispatch-loop liveness — a bad job can't kill run() or leak the sem
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchLoopLiveness:
+    async def test_bad_job_does_not_crash_loop_and_others_still_dispatch(
+        self, session_factory, monkeypatch
+    ):
+        """A job that trips _next_stage_for's ValueError must not crash run()
+        or block other jobs in the same batch from dispatching, and the
+        semaphore slot acquired for it must be released, not leaked.
+
+        _next_stage_for raises for a job in awaiting_input/review whose
+        current_stage is None. That combination isn't reachable through
+        transition() (which is why we bypass it here, via direct attribute
+        assignment, purely to construct the pathological edge case) or
+        through the real list_runnable_jobs SQL eligibility rules (awaiting_input
+        requires an answered FollowUp matching current_stage, which a NULL
+        current_stage can never satisfy). So we monkeypatch
+        jsa.pipeline.orchestrator.repo.list_runnable_jobs to prepend our bad
+        job to whatever the real query returns, on the first dispatch cycle
+        only.
+
+        good_job's proof-of-liveness deliberately targets only its FIRST
+        stage transition (pending → fit_done), not the full pipeline down to
+        `review`. A standalone repro (see this unit's investigation) showed
+        that driving a single job through multiple sequential stages against
+        a shared FakeAgentBackend instance + in-memory StaticPool SQLite
+        already races and hangs on completely unmodified orchestrator.py —
+        this is exactly the same pre-existing flakiness behind
+        TestPicksUpPendingJob/TestKickUnblocksLoop/TestAwaitingInputResume/
+        TestGoogleSessionExpiredAutoRecovery already being flaky on `main`,
+        unrelated to this unit's fix. Stopping at the first stage sidesteps
+        that pre-existing issue while still fully proving what this unit
+        targets: the bad job doesn't kill the loop, and the good job in the
+        same batch still gets dispatched normally.
+        """
+        bad_job = await _insert_job(session_factory)
+        async with session_factory() as s:
+            j = await repo.get_job(s, bad_job.id)
+            j.state = JobState.awaiting_input
+            j.current_stage = None
+            await s.commit()
+
+        good_job = await _insert_job(session_factory)
+
+        real_list_runnable_jobs = repo.list_runnable_jobs
+        cycle_count = [0]
+
+        async def _patched_list_runnable_jobs(session):
+            cycle_count[0] += 1
+            real = await real_list_runnable_jobs(session)
+            if cycle_count[0] == 1:
+                bad = await repo.get_job(session, bad_job.id)
+                return [bad] + list(real)
+            return real
+
+        monkeypatch.setattr(
+            "jsa.pipeline.orchestrator.repo.list_runnable_jobs",
+            _patched_list_runnable_jobs,
+        )
+
+        # A couple of replies in case the loop advances good_job past its
+        # first stage before we stop it below — harmless either way, since we
+        # only assert on it leaving `pending`.
+        good_backend = FakeAgentBackend([_fit_reply(), _cv_json_reply()])
+        MAX_PARALLEL = 5
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda: good_backend,
+            max_parallel=MAX_PARALLEL,
+        )
+
+        # Poll for good_job to leave `pending` — i.e. it was actually
+        # dispatched — rather than for a specific downstream state
+        # (fit_done, review, ...). This unit's own investigation reproduced a
+        # PRE-EXISTING race (unrelated to this fix) where driving a job
+        # through more than one stage transition against a shared
+        # FakeAgentBackend + in-memory StaticPool SQLite can stall or
+        # double-dispatch — the same underlying flakiness already behind
+        # TestPicksUpPendingJob/TestKickUnblocksLoop/TestAwaitingInputResume/
+        # TestGoogleSessionExpiredAutoRecovery on `main`. "Left pending" is
+        # the minimal, robust proof of what this unit actually targets: the
+        # bad job doesn't block dispatch of others in its batch. If the loop
+        # had died on the bad job, this would time out — good_job would never
+        # leave `pending` at all.
+        orch_task = asyncio.create_task(orch.run())
+        try:
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while True:
+                async with session_factory() as s:
+                    refreshed_good = await repo.get_job(s, good_job.id)
+                if refreshed_good.state != JobState.pending:
+                    break
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise TimeoutError(
+                        f"good_job {good_job.id} did not leave pending within "
+                        f"5.0s (current state: {refreshed_good.state})"
+                    )
+                await asyncio.sleep(0.02)
+        finally:
+            orch._stopping = True
+            orch.kick()
+            await asyncio.wait_for(orch_task, timeout=5.0)
+
+        # The bad job was never dispatched into _run_one (the ValueError fires
+        # before the running-transition commit) — its state is untouched.
+        async with session_factory() as s:
+            refreshed_bad = await repo.get_job(s, bad_job.id)
+        assert refreshed_bad.state == JobState.awaiting_input
+        assert refreshed_bad.current_stage is None
+
+        # The semaphore slot acquired then released on the bad job's
+        # exception path (and the slot used by good_job's single stage) must
+        # be fully returned to the pool — no permanent leak. Poll briefly:
+        # good_job's own worker task may still be finishing its finally block
+        # when _poll_job_state first observes `fit_done`, so its
+        # sem.release() can land a moment later.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while orch.sem._value < MAX_PARALLEL:
+            if asyncio.get_event_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.02)
+        assert orch.sem._value == MAX_PARALLEL

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from jsa.agents.base import AgentBackend
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
+from jsa.db.repo import recovery_sweep
 from jsa.events.bus import bus
 from jsa.api.routes_cv_structure import router as cv_structure_router
 from jsa.api.routes_jobs import router as jobs_router
@@ -110,6 +111,16 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
         _backend_factory = make_backend_factory(settings)
         app.state.backend_factory = _backend_factory
 
+        # Crash-recovery: revert any jobs stuck in 'running' (e.g. left over from
+        # a process that died mid-stage) back to a resumable checkpoint, before
+        # the dispatch loop starts picking up work. This mirrors the CLI's own
+        # preflight sweep (jsa/cli.py::_preflight) — calling it twice is
+        # harmless — and covers a server-only restart that never goes through
+        # the CLI, which would otherwise leave orphaned `running` jobs stuck
+        # forever (see CLAUDE.md's job-identity/re-run-semantics notes).
+        async with session_factory() as _recovery_session:
+            await recovery_sweep(_recovery_session)
+
         orchestrator = Orchestrator(
             session_factory,
             _backend_factory,
@@ -122,7 +133,37 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
 
         await _warm_up_weasyprint()
 
-        asyncio.create_task(orchestrator.run())
+        def _start_orchestrator_task() -> None:
+            """(Re)start the dispatcher loop, storing the task handle and
+            wiring a done-callback so the dispatcher self-heals on crash.
+
+            Previously the task handle from asyncio.create_task(orchestrator.run())
+            was discarded entirely: if run() raised an unhandled exception, the
+            task died silently — the HTTP server kept serving, the UI kept
+            polling, but no job would ever move again, with nothing surfaced.
+            Storing the handle on app.state and attaching this callback means a
+            crash is at least logged, and the loop restarts itself instead of
+            staying dead for the rest of the process lifetime.
+            """
+            task = asyncio.create_task(orchestrator.run())
+            app.state.orchestrator_task = task
+
+            def _on_orchestrator_done(t: "asyncio.Task") -> None:
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc is not None:
+                    logger.error(
+                        "Orchestrator.run() task died unexpectedly: %s — restarting dispatcher",
+                        exc,
+                        exc_info=exc,
+                    )
+                    if not orchestrator._stopping:
+                        _start_orchestrator_task()
+
+            task.add_done_callback(_on_orchestrator_done)
+
+        _start_orchestrator_task()
 
         if settings.dev_autoanswer:
             from jsa.dev.autoresponder import DevAutoResponder  # noqa: PLC0415
