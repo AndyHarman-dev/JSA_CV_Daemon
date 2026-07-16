@@ -476,7 +476,11 @@ class TestRunResearchCommandConstruction:
         return _run_killable_ok(stdout_text)
 
     async def test_run_research_command_args(self):
-        """run_research builds: claude --agent <name> --output-format text -p <query>."""
+        """run_research builds: claude --agent <name> --output-format text -p,
+        with the query delivered via stdin (input_data) rather than as a
+        trailing argv element — U5: argv is subject to the OS ARG_MAX limit,
+        so query text (which can be long — JD excerpts etc.) must not land
+        there."""
         backend = ClaudeCliBackend()
         agent_name = "cv-research"
         query = "Company: Acme\nRole: Engineer"
@@ -488,7 +492,8 @@ class TestRunResearchCommandConstruction:
 
         assert mock_run.call_count == 1
         cmd = mock_run.call_args.args[0]
-        assert cmd == ["claude", "--agent", agent_name, "--output-format", "text", "-p", query]
+        assert cmd == ["claude", "--agent", agent_name, "--output-format", "text", "-p"]
+        assert mock_run.call_args.kwargs["input_data"] == query.encode("utf-8")
 
     async def test_run_research_cwd_is_project_root(self):
         """run_research passes cwd=str(_PROJECT_ROOT) to run_killable."""

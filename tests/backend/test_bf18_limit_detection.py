@@ -65,7 +65,7 @@ class ScriptedClaudeBackend(ClaudeCliBackend):
         self._run_responses: list[str] = list(run_responses)
         self.run_call_count: int = 0
 
-    async def _run(self, cmd: list[str], context: str = "", cwd=None, timeout=None) -> str:
+    async def _run(self, cmd: list[str], context: str = "", cwd=None, timeout=None, *, stdin=None) -> str:
         self.run_call_count += 1
         if not self._run_responses:
             raise IndexError("ScriptedClaudeBackend: no more scripted _run responses")

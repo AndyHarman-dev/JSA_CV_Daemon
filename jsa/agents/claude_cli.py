@@ -1,8 +1,19 @@
 """ClaudeCliBackend: subprocess -p implementation of AgentBackend for the Claude CLI.
 
 Drives `claude` via non-interactive print mode (`-p`):
-  - Fresh session:  claude --output-format text --system-prompt <sys> --session-id <uuid> -p <msg>
-  - Subsequent msg: claude --output-format text --resume <uuid> -p <msg>
+  - Fresh session:  claude --output-format text --system-prompt <sys> --session-id <uuid> -p   (msg on stdin)
+  - Subsequent msg: claude --output-format text --resume <uuid> -p                              (msg on stdin)
+
+The prompt text (`-p`'s payload) is delivered via the subprocess's stdin,
+not as a trailing argv element: `claude -p` with no following argument reads
+the prompt from stdin when stdin is not a TTY (verified against `claude
+--help` and a live smoke test). Argv is subject to the OS ARG_MAX limit
+(1MB on macOS) — a large paste (base CV JSON, JD, or interactive revision
+text) could trip a hard `OSError: [Errno 7] Argument list too long` before
+the model ever saw the prompt. `--system-prompt` remains an argv element:
+system prompts here are template-sized, not data-sized, so the residual
+ARG_MAX risk is theoretical (see also `--system-prompt-file`, which exists
+on this CLI if that ever needs closing).
 
 Session state is stored by the Claude CLI daemon/filesystem; JSA only needs to
 remember the session UUID (stored in job.session_external_id).
@@ -59,8 +70,21 @@ class ClaudeCliBackend(AgentBackend):
     # jsa/agents/_subprocess.py for why the whole process group is killed)
     # ------------------------------------------------------------------
 
-    async def _run(self, cmd: list[str], context: str = "", cwd: Path | None = None, timeout: float | None = None) -> str:
+    async def _run(
+        self,
+        cmd: list[str],
+        context: str = "",
+        cwd: Path | None = None,
+        timeout: float | None = None,
+        *,
+        stdin: str | None = None,
+    ) -> str:
         """Run a claude CLI command and return its stdout.
+
+        `stdin`, when given, is encoded as UTF-8 and fed to the subprocess's
+        stdin (see run_killable's `input_data`) instead of being embedded in
+        `cmd` as an argv element — this is how the `-p` prompt payload avoids
+        the OS ARG_MAX limit.
 
         Raises AgentTimeout if the process exceeds the effective timeout.
         Raises ClaudeSessionExpiredError if the subprocess exits non-zero with
@@ -75,6 +99,7 @@ class ClaudeCliBackend(AgentBackend):
             timeout=eff_timeout,
             cwd=str(cwd) if cwd is not None else None,
             label="claude CLI",
+            input_data=stdin.encode("utf-8") if stdin is not None else None,
         )
 
         stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
@@ -143,9 +168,9 @@ class ClaudeCliBackend(AgentBackend):
                 "--output-format", "text",
                 "--resume", session_id,
                 "--tools", "",
-                "-p", nudge,
+                "-p",
             ]
-            raw2 = await self._run(nudge_cmd, session_id)
+            raw2 = await self._run(nudge_cmd, session_id, stdin=nudge)
             return parse_reply(raw2)  # Propagate on second failure
 
     # ------------------------------------------------------------------
@@ -160,7 +185,7 @@ class ClaudeCliBackend(AgentBackend):
         """Open a fresh claude CLI session and return the handle + first reply.
 
         Spawns: claude --output-format text --system-prompt <sys>
-                        --session-id <uuid> -p <initial_user_msg>
+                        --session-id <uuid> -p   (initial_user_msg fed via stdin)
         """
         session_id = str(uuid.uuid4())
         cmd = [
@@ -170,9 +195,9 @@ class ClaudeCliBackend(AgentBackend):
             "--system-prompt", system_prompt,
             "--session-id", session_id,
             "--tools", "",
-            "-p", initial_user_msg,
+            "-p",
         ]
-        raw = await self._run(cmd, session_id)
+        raw = await self._run(cmd, session_id, stdin=initial_user_msg)
         handle = ClaudeSessionHandle(id=str(uuid.uuid4()), external_id=session_id)
         reply = await self._parse_with_nudge(session_id, raw)
         return handle, reply
@@ -207,7 +232,7 @@ class ClaudeCliBackend(AgentBackend):
     async def send_message(self, handle: SessionHandle, text: str) -> AgentReply:
         """Send a message to an existing session using --resume mode.
 
-        Spawns: claude --output-format text --resume <session_id> -p <text>
+        Spawns: claude --output-format text --resume <session_id> -p   (text fed via stdin)
         """
         if not isinstance(handle, ClaudeSessionHandle):
             raise TypeError(
@@ -223,9 +248,9 @@ class ClaudeCliBackend(AgentBackend):
             "--output-format", "text",
             "--resume", handle.external_id,
             "--tools", "",
-            "-p", text,
+            "-p",
         ]
-        raw = await self._run(cmd, handle.external_id)
+        raw = await self._run(cmd, handle.external_id, stdin=text)
         return await self._parse_with_nudge(handle.external_id, raw)
 
     async def end_session(self, handle: SessionHandle) -> None:
@@ -245,8 +270,8 @@ class ClaudeCliBackend(AgentBackend):
             "claude",
             "--agent", agent_name,
             "--output-format", "text",
-            "-p", query,
+            "-p",
         ]
         return await self._run(
-            cmd, f"research:{agent_name}", _PROJECT_ROOT, self.RESEARCH_TIMEOUT
+            cmd, f"research:{agent_name}", _PROJECT_ROOT, self.RESEARCH_TIMEOUT, stdin=query
         )

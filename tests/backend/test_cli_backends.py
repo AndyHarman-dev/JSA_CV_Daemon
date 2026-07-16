@@ -122,6 +122,10 @@ class TestClaudeStartSession:
         assert "my cv" in reply.content
 
     async def test_subprocess_called_with_p_flag(self):
+        """U5: the user-message payload is delivered via stdin (input_data), not
+        as a trailing argv element after -p — argv is subject to the OS ARG_MAX
+        limit, so large pastes must never land there. `-p` stays in cmd with no
+        following value, signalling the CLI to read the prompt from stdin."""
         mock_run = AsyncMock(return_value=_ok())
         with patch("jsa.agents.claude_cli.run_killable", new=mock_run):
             backend = ClaudeCliBackend(timeout=5.0)
@@ -129,7 +133,9 @@ class TestClaudeStartSession:
 
         cmd = mock_run.call_args.args[0]
         assert "-p" in cmd
-        assert "user message" in cmd
+        assert cmd[-1] == "-p"
+        assert "user message" not in cmd
+        assert mock_run.call_args.kwargs["input_data"] == b"user message"
 
     async def test_subprocess_called_with_session_id_flag(self):
         mock_run = AsyncMock(return_value=_ok())
@@ -239,6 +245,8 @@ class TestClaudeSendMessage:
         assert "sess-uuid" in cmd
 
     async def test_subprocess_called_with_p_flag_and_message(self):
+        """U5: send_message's text is delivered via stdin (input_data), not argv —
+        see test_subprocess_called_with_p_flag's docstring for why."""
         handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
         mock_run = AsyncMock(return_value=_ok())
 
@@ -248,7 +256,9 @@ class TestClaudeSendMessage:
 
         cmd = mock_run.call_args.args[0]
         assert "-p" in cmd
-        assert "my message" in cmd
+        assert cmd[-1] == "-p"
+        assert "my message" not in cmd
+        assert mock_run.call_args.kwargs["input_data"] == b"my message"
 
     async def test_no_system_prompt_on_resume(self):
         """send_message must NOT pass --system-prompt (Claude CLI preserves it via session)."""

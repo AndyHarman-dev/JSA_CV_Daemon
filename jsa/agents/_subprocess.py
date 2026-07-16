@@ -33,6 +33,7 @@ async def run_killable(
     timeout: float,
     cwd: str | None = None,
     label: str = "subprocess",
+    input_data: bytes | None = None,
 ) -> KillableResult:
     """Spawn `cmd` as an async subprocess and return (returncode, stdout, stderr).
 
@@ -42,17 +43,25 @@ async def run_killable(
     from Orchestrator.cancel_task), the group is killed in `finally` and the
     CancelledError continues to propagate — no orphaned process survives to
     keep consuming quota.
+
+    `input_data`, when given, is written to the child's stdin (via
+    `proc.communicate(input=...)`, which already handles the write/drain/close
+    loop) instead of the default `DEVNULL`. This lets callers pass large
+    payloads (e.g. a CLI prompt) without putting them on argv, where they'd be
+    subject to the OS ARG_MAX limit. `communicate()` is still wrapped in the
+    same `wait_for`/timeout/killpg machinery below, so a child that never
+    drains its stdin (or hangs) is killed exactly as before.
     """
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        stdin=asyncio.subprocess.DEVNULL,
+        stdin=asyncio.subprocess.PIPE if input_data is not None else asyncio.subprocess.DEVNULL,
         cwd=cwd,
         start_new_session=True,  # own process group -> os.killpg works
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+        out, err = await asyncio.wait_for(proc.communicate(input_data), timeout)
     except asyncio.TimeoutError:
         raise AgentTimeout(f"{label} timed out after {timeout}s") from None
     finally:

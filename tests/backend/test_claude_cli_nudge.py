@@ -46,6 +46,9 @@ class ScriptedClaudeBackend(ClaudeCliBackend):
     _run pops the next entry. An IndexError is raised if the list is exhausted.
     `run_call_count` tracks how many times _run was invoked.
     `run_call_args` records the cmd argument for each call.
+    `run_call_stdin` records the stdin kwarg for each call (U5: prompt payload
+    is now delivered via stdin, not as a trailing argv element — see
+    jsa/agents/claude_cli.py).
     """
 
     def __init__(self, run_responses: list[str]) -> None:
@@ -53,12 +56,22 @@ class ScriptedClaudeBackend(ClaudeCliBackend):
         self._run_responses: list[str] = list(run_responses)
         self.run_call_count: int = 0
         self.run_call_args: list[list[str]] = []
+        self.run_call_stdin: list[str | None] = []
 
     # _run must be async: ClaudeCliBackend calls it via `await self._run(cmd)`
     # (jsa/agents/_subprocess.py's killable async subprocess seam).
-    async def _run(self, cmd: list[str], context: str = "") -> str:
+    async def _run(
+        self,
+        cmd: list[str],
+        context: str = "",
+        cwd=None,
+        timeout: float | None = None,
+        *,
+        stdin: str | None = None,
+    ) -> str:
         self.run_call_count += 1
         self.run_call_args.append(cmd)
+        self.run_call_stdin.append(stdin)
         if not self._run_responses:
             raise IndexError("ScriptedClaudeBackend: no more scripted _run responses")
         return self._run_responses.pop(0)
@@ -324,7 +337,15 @@ class FailingClaudeBackend(ClaudeCliBackend):
         self._stdout = stdout
         self._invocation_count: int = 0
 
-    async def _run(self, cmd: list[str], context: str = "") -> str:
+    async def _run(
+        self,
+        cmd: list[str],
+        context: str = "",
+        cwd=None,
+        timeout: float | None = None,
+        *,
+        stdin: str | None = None,
+    ) -> str:
         self._invocation_count += 1
         # Replicate the exact condition from production _run:
         if self._returncode != 0 and not self._stdout.strip():
@@ -409,3 +430,110 @@ class TestClaudeCliErrorRaising:
         )
         with pytest.raises(ClaudeSessionExpiredError):
             await backend.start_session("system prompt", "user msg")
+
+
+# ---------------------------------------------------------------------------
+# Tests 12+: U5 — prompt payload delivered via stdin, never as an argv element
+# ---------------------------------------------------------------------------
+#
+# Bug: start_session/send_message/run_research/_parse_with_nudge's nudge_cmd
+# all appended the prompt text as a trailing `-p <text>` argv element. The
+# whole argv goes through a single execve() subject to the OS ARG_MAX limit
+# (1MB on macOS) — a large paste (base CV JSON, JD, or free-text revision)
+# could trip a hard `OSError: [Errno 7] Argument list too long` before the
+# model ever saw the prompt. Fix: `-p` is now the terminal cmd element (no
+# following value) and the payload is passed via `_run`'s `stdin` kwarg,
+# which `run_killable` feeds to the subprocess's stdin instead of argv.
+#
+# These tests use ScriptedClaudeBackend/FailingClaudeBackend's recording of
+# the `stdin` kwarg (see run_call_stdin above) to prove the wiring without a
+# real subprocess; test_subprocess_killable.py separately proves the
+# underlying run_killable/communicate(input=...) plumbing survives an
+# actual >ARG_MAX payload with a real child process.
+
+
+class TestStartSessionUsesStdinNotArgv:
+    async def test_large_initial_msg_not_in_cmd(self):
+        """A large user-message payload never appears anywhere in argv."""
+        large_payload = "X" * (2 * 1024 * 1024)  # 2MB, over macOS ARG_MAX (1MB)
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend.start_session("system prompt", large_payload)
+        first_cmd = backend.run_call_args[0]
+        assert large_payload not in first_cmd
+        assert all(large_payload not in part for part in first_cmd)
+
+    async def test_initial_msg_passed_via_stdin_kwarg(self):
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend.start_session("system prompt", "initial message")
+        assert backend.run_call_stdin[0] == "initial message"
+
+    async def test_p_flag_is_terminal_cmd_element(self):
+        """`-p` must be the last argv element (no trailing value) so the CLI
+        falls back to reading the prompt from stdin."""
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend.start_session("system prompt", "initial message")
+        first_cmd = backend.run_call_args[0]
+        assert first_cmd[-1] == "-p"
+
+    async def test_system_prompt_remains_argv_element(self):
+        """--system-prompt is documented as staying argv-based (template-sized,
+        not data-sized) — this pins that intentional scope boundary."""
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend.start_session("a system prompt", "initial message")
+        first_cmd = backend.run_call_args[0]
+        assert "--system-prompt" in first_cmd
+        assert first_cmd[first_cmd.index("--system-prompt") + 1] == "a system prompt"
+
+
+class TestSendMessageUsesStdinNotArgv:
+    async def test_large_text_not_in_cmd(self):
+        large_payload = "Y" * (2 * 1024 * 1024)
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend.send_message(handle, large_payload)
+        first_cmd = backend.run_call_args[0]
+        assert all(large_payload not in part for part in first_cmd)
+
+    async def test_text_passed_via_stdin_kwarg(self):
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend.send_message(handle, "user message")
+        assert backend.run_call_stdin[0] == "user message"
+
+    async def test_p_flag_is_terminal_cmd_element(self):
+        handle = ClaudeSessionHandle(id="h1", external_id="sess-uuid")
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        await backend.send_message(handle, "user message")
+        first_cmd = backend.run_call_args[0]
+        assert first_cmd[-1] == "-p"
+
+
+class TestNudgeUsesStdinNotArgv:
+    async def test_nudge_text_passed_via_stdin_not_argv(self):
+        backend = ScriptedClaudeBackend(run_responses=[VALID_FINAL])
+        reply = await backend._parse_with_nudge("sess-xyz", BARE_TEXT)
+        assert reply.kind == "final"
+        nudge_cmd = backend.run_call_args[0]
+        assert nudge_cmd[-1] == "-p"
+        assert backend.run_call_stdin[0] is not None
+        assert "sentinel block" in backend.run_call_stdin[0]
+
+
+class TestRunResearchUsesStdinNotArgv:
+    async def test_large_query_not_in_cmd(self):
+        large_query = "Z" * (2 * 1024 * 1024)
+        backend = ScriptedClaudeBackend(run_responses=["research output"])
+        await backend.run_research("some-agent", large_query)
+        first_cmd = backend.run_call_args[0]
+        assert all(large_query not in part for part in first_cmd)
+
+    async def test_query_passed_via_stdin_kwarg(self):
+        backend = ScriptedClaudeBackend(run_responses=["research output"])
+        await backend.run_research("some-agent", "a research query")
+        assert backend.run_call_stdin[0] == "a research query"
+
+    async def test_p_flag_is_terminal_cmd_element(self):
+        backend = ScriptedClaudeBackend(run_responses=["research output"])
+        await backend.run_research("some-agent", "a research query")
+        first_cmd = backend.run_call_args[0]
+        assert first_cmd[-1] == "-p"

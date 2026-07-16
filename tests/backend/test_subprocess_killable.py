@@ -97,3 +97,76 @@ class TestRunKillableCancellation:
         assert rc == 2
         assert out == b""
         assert err.strip() == b"boom"
+
+
+class TestRunKillableInputData:
+    """Regression tests for U5: stdin payload delivery (input_data param).
+
+    Bug: CLI backends (jsa/agents/claude_cli.py) passed large prompt text as
+    a trailing argv element to `claude -p <text>`. The full argv goes through
+    a single execve() call subject to the OS ARG_MAX limit (1MB on macOS) —
+    a large paste could trip a hard `OSError: [Errno 7] Argument list too
+    long` before the model ever saw the prompt. Fix: run_killable gained an
+    `input_data` kwarg that is written to the child's stdin via
+    `proc.communicate(input=...)` (already the transport `run_killable` used
+    for stdout/stderr collection, so the timeout/kill-group wrapping below is
+    unchanged) instead of being embedded in argv.
+    """
+
+    async def test_input_data_is_delivered_to_stdin(self):
+        """A small payload written to stdin is read back correctly by the child."""
+        payload = b"hello from stdin\n"
+        rc, out, err = await run_killable(
+            ["python3", "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+            timeout=10,
+            label="test stdin echo",
+            input_data=payload,
+        )
+        assert rc == 0
+        assert out == payload
+        assert err == b""
+
+    async def test_large_input_data_does_not_trip_arg_max(self):
+        """A 2MB payload — well over macOS's 1MB ARG_MAX — must be delivered
+        via stdin without ever raising OSError('Argument list too long'),
+        because it never touches argv."""
+        payload = ("A" * (2 * 1024 * 1024)).encode()
+        rc, out, err = await run_killable(
+            ["python3", "-c", "import sys; n = len(sys.stdin.buffer.read()); print(n)"],
+            timeout=20,
+            label="test large stdin",
+            input_data=payload,
+        )
+        assert rc == 0
+        assert out.strip() == str(len(payload)).encode()
+
+    async def test_no_input_data_keeps_devnull_default(self):
+        """When input_data is omitted, stdin behaves as before (DEVNULL) —
+        a child that reads stdin sees immediate EOF, not a hang."""
+        rc, out, err = await run_killable(
+            ["python3", "-c", "import sys; data = sys.stdin.read(); print(repr(data))"],
+            timeout=10,
+            label="test no stdin",
+        )
+        assert rc == 0
+        assert out.strip() == b"''"
+
+    async def test_timeout_with_blocked_stdin_writer_still_kills_group(self, captured_pid):
+        """Kill-semantics regression guard: a child that never reads stdin (so
+        the internal communicate() writer blocks once the pipe buffer fills)
+        must still be killed — the whole process group — on timeout, exactly
+        like the no-input path. Payload is >64KB (typical pipe buffer size)
+        so the writer actually blocks instead of trivially draining."""
+        payload = ("B" * (200 * 1024)).encode()
+        with pytest.raises(AgentTimeout):
+            await run_killable(
+                ["python3", "-c", "import time; time.sleep(30)"],
+                timeout=0.5,
+                label="test blocked stdin writer",
+                input_data=payload,
+            )
+        assert "pid" in captured_pid
+        assert not _pgid_is_alive(captured_pid["pid"]), (
+            "process group must be dead after a timeout even when the child "
+            "never drained stdin (communicate()'s writer was mid-write)"
+        )
