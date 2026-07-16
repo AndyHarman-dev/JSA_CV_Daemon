@@ -2,17 +2,46 @@
 
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from jsa.db.models import Base
 
+# Applied to every new raw DBAPI connection (sync connect-event handler — SQLAlchemy
+# expects this hook to be synchronous, even on an async engine's underlying sync_engine).
+#   - WAL: readers no longer block the single writer (and vice versa).
+#   - busy_timeout: a writer that finds the DB locked waits up to 5s and retries instead
+#     of raising SQLITE_BUSY -> OperationalError immediately (the failure mode under
+#     concurrent orchestrator writers otherwise marks a perfectly good job `failed`).
+#   - synchronous=NORMAL: the standard safe setting once WAL is enabled.
+_SQLITE_PRAGMAS = (
+    "PRAGMA journal_mode=WAL",
+    "PRAGMA busy_timeout=5000",
+    "PRAGMA synchronous=NORMAL",
+)
+
+
+def _apply_sqlite_pragmas(engine: AsyncEngine) -> None:
+    """Register a connect-event listener that sets durability PRAGMAs on every
+    new raw connection (aiosqlite's underlying sqlite3 connection)."""
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _on_connect(dbapi_connection, connection_record):  # noqa: ANN001, ARG001
+        cursor = dbapi_connection.cursor()
+        try:
+            for pragma in _SQLITE_PRAGMAS:
+                cursor.execute(pragma)
+        finally:
+            cursor.close()
+
 
 def make_engine(db_path: str):
     """Create an async SQLAlchemy engine. db_path may be ':memory:' for tests."""
     url = f"sqlite+aiosqlite:///{db_path}"
-    return create_async_engine(url, echo=False)
+    engine = create_async_engine(url, echo=False)
+    _apply_sqlite_pragmas(engine)
+    return engine
 
 
 def make_session_factory(engine):
@@ -65,7 +94,9 @@ async def init_db(engine) -> None:
 def create_engine(db_path: Path) -> AsyncEngine:
     """Create an async SQLAlchemy engine from a Path."""
     url = f"sqlite+aiosqlite:///{db_path}"
-    return create_async_engine(url, echo=False)
+    engine = create_async_engine(url, echo=False)
+    _apply_sqlite_pragmas(engine)
+    return engine
 
 
 def create_session_factory(engine: AsyncEngine):
