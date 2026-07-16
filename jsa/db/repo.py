@@ -91,7 +91,8 @@ async def upsert_job(session: AsyncSession, job_data: dict) -> Job:
 
 
 async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
-    """Return jobs that are ready to be worked on, FIFO by updated_at.
+    """Return jobs that are ready to be worked on, ordered by tier (A before B before C),
+    then FIFO by updated_at within a tier.
 
     Runnable conditions:
     1. state == pending
@@ -146,7 +147,7 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
                 (Job.state == JobState.review) & unconsumed_revision,
             )
         )
-        .order_by(Job.updated_at.asc())
+        .order_by(Job.tier.asc(), Job.updated_at.asc())
     )
 
     result = await session.execute(stmt)

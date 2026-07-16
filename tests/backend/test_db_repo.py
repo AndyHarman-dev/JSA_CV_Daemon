@@ -332,6 +332,21 @@ class TestListRunnableJobs:
         ids = [j.id for j in runnable]
         assert ids == [job1.id, job2.id, job3.id]
 
+    async def test_results_ordered_by_tier_before_fifo(self, session):
+        """Tier A must be scheduled ahead of tier B/C even when it was updated more
+        recently — pure FIFO-by-updated_at would return the tier-C job first here."""
+        # job_c is created/updated FIRST (oldest updated_at) but is lowest priority.
+        job_c = await _insert_job(session, job_id="aaaa000000000001", tier="C")
+        await asyncio.sleep(0.01)
+        job_b = await _insert_job(session, job_id="aaaa000000000002", tier="B")
+        await asyncio.sleep(0.01)
+        # job_a is the MOST recently updated job, so pure FIFO would rank it last.
+        job_a = await _insert_job(session, job_id="aaaa000000000003", tier="A")
+
+        runnable = await repo.list_runnable_jobs(session)
+        ids = [j.id for j in runnable]
+        assert ids == [job_a.id, job_b.id, job_c.id]
+
     async def test_running_job_not_returned(self, session):
         job = await _insert_job(session, job_id="aaaa000000000001")
         job.state = JobState.running

@@ -37,6 +37,39 @@ def test_settings_env_override(monkeypatch):
     assert s.port == 9000
 
 
+def test_settings_max_parallel_default(monkeypatch):
+    """Settings() without JSA_MAX_PARALLEL must default to 5 (matching the
+    Orchestrator constructor's own hardcoded default)."""
+    monkeypatch.delenv("JSA_MAX_PARALLEL", raising=False)
+    s = Settings()
+    assert s.max_parallel == 5
+
+
+def test_settings_max_parallel_env_override(monkeypatch):
+    """JSA_MAX_PARALLEL env var must override the default max_parallel value."""
+    monkeypatch.setenv("JSA_MAX_PARALLEL", "2")
+    s = Settings()
+    assert s.max_parallel == 2
+
+
+def test_settings_max_parallel_threads_into_orchestrator_semaphore(monkeypatch):
+    """The configured max_parallel must actually reach the Orchestrator's semaphore —
+    this is the crux of the U8 fix: jsa/server.py must pass settings.max_parallel
+    through to Orchestrator(max_parallel=...) instead of silently using the
+    constructor's hardcoded default of 5."""
+    from jsa.pipeline.orchestrator import Orchestrator  # noqa: PLC0415
+
+    monkeypatch.setenv("JSA_MAX_PARALLEL", "2")
+    s = Settings()
+
+    orch = Orchestrator(
+        db_session_factory=lambda: None,
+        backend_factory=lambda: None,
+        max_parallel=s.max_parallel,
+    )
+    assert orch.sem._value == 2
+
+
 # ---------------------------------------------------------------------------
 # CLI tests
 # ---------------------------------------------------------------------------
