@@ -51,6 +51,25 @@ New backends are registered in `jsa/agents/registry.py` by adding an entry to th
 
 ---
 
+## Backend fallback chain (BF-19)
+
+`Settings.backends` (`jsa/config.py`) is an **ordered list**, not a single value —
+`backends[0]` is the primary and the rest form a fallback chain. CLI: `--backends a,b,c`
+sets the ordered chain; `--backend x` is a **backward-compat alias** for a single-item
+chain, and `--backends` takes precedence when both are given (`jsa/cli.py`). Each `Job`
+tracks its active backend in the `Job.backend_name` column; the orchestrator assigns
+`backends[0]` on first dispatch.
+
+When a backend raises `AgentLimitReached` (e.g. `jsa/agents/claude_cli.py` on a quota/rate
+signal), `Orchestrator._handle_limit_reached` (`jsa/pipeline/orchestrator.py`) **advances
+the job to the next backend in the chain** via `repo.backend_switch_reset` (resets to the
+failed stage, preserving the checkpoint), emitting a `BackendSwitchedEvent`. Only when the
+chain is **exhausted** is the job `mark_failed`'d with "Backend limit reached — switch
+backends or wait for quota reset". Do not treat a limit signal as a hard job failure; that
+is the chain's job.
+
+---
+
 ## Prompt files
 
 - Location: `jsa/prompts/PROMPT_CDADJUST.md`, `jsa/prompts/CVL_PROMPT.md`, and `jsa/prompts/PROMPT_FIT_ASSESSMENT.md`
