@@ -1,5 +1,6 @@
 """FakeAgentBackend — scripted, deterministic AgentBackend for testing."""
 
+import asyncio
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -30,9 +31,17 @@ class FakeAgentBackend(AgentBackend):
 
     name = "fake"
 
-    def __init__(self, replies: list[AgentReply]) -> None:
-        """replies: scripted sequence. Each start_session and send_message pops the next."""
+    def __init__(self, replies: list[AgentReply], *, delay: float = 0.0) -> None:
+        """replies: scripted sequence. Each start_session and send_message pops the next.
+
+        ``delay``: seconds to ``asyncio.sleep`` before returning each reply — lets a test
+        simulate a slow/hanging agent call (e.g. to exercise a caller's overall wall-clock
+        timeout, such as U11's per-stage budget in jsa/pipeline/stages.py::run_stage)
+        without any real network I/O. 0.0 (default) preserves the old instant-return
+        behavior for all existing tests.
+        """
         self._replies: list[AgentReply] = list(replies)
+        self._delay = delay
 
     def _pop_reply(self) -> AgentReply:
         if not self._replies:
@@ -45,6 +54,8 @@ class FakeAgentBackend(AgentBackend):
         initial_user_msg: str,
     ) -> tuple[FakeSessionHandle, AgentReply]:
         """Consume the first reply and return (handle, reply)."""
+        if self._delay:
+            await asyncio.sleep(self._delay)
         handle = FakeSessionHandle(id=str(uuid4()), external_id=None)
         reply = self._pop_reply()
         return handle, reply
@@ -60,6 +71,8 @@ class FakeAgentBackend(AgentBackend):
 
     async def send_message(self, handle: SessionHandle, text: str) -> AgentReply:
         """Consume and return the next scripted reply."""
+        if self._delay:
+            await asyncio.sleep(self._delay)
         return self._pop_reply()
 
     async def end_session(self, handle: SessionHandle) -> None:

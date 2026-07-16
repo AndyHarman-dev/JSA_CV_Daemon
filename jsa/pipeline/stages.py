@@ -57,6 +57,24 @@ class PausedForInput(Exception):
     """
 
 
+class StageTimeoutError(RuntimeError):
+    """Raised when a stage's total agent-call work (research pre-step + main generation
+    + all self-heal re-prompts, combined) exceeds the overall per-stage wall-clock budget
+    (see ``DEFAULT_STAGE_TIMEOUT`` / ``run_stage``'s ``stage_timeout`` param).
+
+    Deliberately a plain Exception (not ``asyncio.CancelledError``): it propagates out of
+    ``run_stage`` to the orchestrator's generic ``except Exception`` handler in
+    ``_run_one`` (jsa/pipeline/orchestrator.py), which marks the job ``failed`` via the
+    existing ``repo.mark_failed(...)`` path — the SAME mechanism used for every other
+    agent/backend failure. No novel failure state is introduced.
+
+    Only ever raised from the "talk to the LLM" phase (research / start_session /
+    restore_session / send_message / self-heal re-prompts) — never while a
+    ``checkpoint()``/``mark_failed()`` DB write is in flight, so a timeout can never
+    interrupt an in-progress commit and leave torn state (see ``run_stage``'s docstring).
+    """
+
+
 class StaleJobResult(Exception):
     """Raised when the job's DB state changed (dismiss/cancel/delete) while the
     agent was working, so the just-produced reply is stale and must be
@@ -224,6 +242,21 @@ def _validate_final_content(
 # validation before giving up and letting the job fail.
 MAX_FINAL_CORRECTIONS = 2
 
+# Overall wall-clock budget (seconds) for ONE stage invocation's TOTAL agent-call work:
+# the research pre-step + the main generation call + all self-heal re-prompts, combined.
+# Per-call timeouts already exist (agent_timeout=600s for CLI backends,
+# anthropic_timeout=180s for the API backend, RESEARCH_TIMEOUT=300s for research) but
+# nothing previously bounded their sum — a pathological job chaining research (300s) +
+# main (600s) + MAX_FINAL_CORRECTIONS self-heals (2 * 600s) could hold one of the
+# (default 5) concurrency slots for ~2100s (~35 min), starving throughput for the whole
+# batch. 1500s (25 min) is meaningfully larger than any single per-call timeout — so a
+# legitimately-slow-but-fine job doing a full round of research + main + 2 self-heals
+# well within their own per-call timeouts still comfortably fits — while being well
+# below that ~35-minute worst case, so it still catches genuinely stuck/looping jobs.
+# Overridable via ``run_stage``'s ``stage_timeout`` param (tests inject a short budget
+# to exercise the timeout path without waiting real minutes).
+DEFAULT_STAGE_TIMEOUT = 1500.0
+
 _CV_CORRECTION = (
     "Your previous <<<FINAL>>> block was not a valid CV JSON object. Re-emit now: put ONLY "
     "a single JSON object conforming to the CV schema inside one <<<FINAL>>>...<<<END>>> "
@@ -361,6 +394,7 @@ async def run_stage(
     output_dir: Path | None = None,
     cv_structure_path: Path | None = None,
     preferences_path: Path | None = None,
+    stage_timeout: float = DEFAULT_STAGE_TIMEOUT,
 ) -> None:
     """Run one pipeline stage to completion or park.
 
@@ -371,6 +405,17 @@ async def run_stage(
 
     On FINAL: writes Document + Messages + transitions to next state atomically.
     On NEED_INPUT: writes FollowUp + Messages + transitions to awaiting_input, raises PausedForInput.
+
+    ``stage_timeout`` (default ``DEFAULT_STAGE_TIMEOUT``, 1500s / 25min) is the OVERALL
+    wall-clock budget for this invocation's total agent-call work — the dispatch call
+    (research + start_session/restore_session + send_message) AND all self-heal
+    re-prompts, combined (see ``StageTimeoutError``). It wraps ONLY that "talk to the
+    LLM" phase via ``asyncio.wait_for`` — never the stale-result check or the
+    checkpoint()/mark_failed() DB write that follows, so a timeout can never fire
+    mid-commit and leave torn state. Not applied to ``fit_assessment`` (a single one-shot
+    call with its own per-call timeout and no self-heal loop, handled entirely by
+    ``_run_fit_assessment`` before this budget is ever reached). Overridable so tests can
+    inject a short budget to exercise the timeout path deterministically.
     """
     system_prompt = _get_system_prompt(stage)
 
@@ -401,131 +446,160 @@ async def run_stage(
         await _run_fit_assessment(job, backend, session, system_prompt, language_code, base_structure)
         return
 
-    if stage in (Stage.revising_cv, Stage.revising_cl):
-        original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
-        revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
-        # revision_session_id may be None after a backend switch (BF-19): the new backend
-        # will restore from history only (AnthropicAPIBackend ignores external_id; CLI
-        # backends receive None and start a new session backed by the history array).
-        # Only raise if both session ID and Message history are absent, which indicates
-        # a job that predates BF-9 (not a backend switch).
-        if revision_session_id is None:
-            original_stage_check = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
-            history_check = await _load_history(session, job.id, original_stage_check)
-            if not history_check:
-                raise ValueError(
-                    f"Cannot resume revision for {stage.value}: per-stage session ID was not "
-                    f"recorded and no history available (job predates BF-9 fix). "
-                    f"Reset the job to re-run from scratch."
-                )
+    async def _run_agent_phase() -> tuple[SessionHandle, AgentReply, list[dict]]:
+        """The entire "talk to the LLM" phase for this stage invocation: session
+        dispatch (fresh start_session + research, or restore_session + send_message
+        resume) followed by all self-heal re-prompts. Wrapped by the overall
+        ``stage_timeout`` budget in the caller (see ``StageTimeoutError``).
 
-        # Fetch the unconsumed RevisionRequest — needed for its instruction (fresh path)
-        # and its created_at (discriminator).
-        rev_req = await _get_revision_request(session, job.id)
+        Deliberately does NOT include the stale-result DB check or the subsequent
+        checkpoint()/mark_failed() write — those always run to completion once
+        reached, so a timeout here can never tear a DB write mid-flight.
+        """
+        if stage in (Stage.revising_cv, Stage.revising_cl):
+            original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
+            revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
+            # revision_session_id may be None after a backend switch (BF-19): the new backend
+            # will restore from history only (AnthropicAPIBackend ignores external_id; CLI
+            # backends receive None and start a new session backed by the history array).
+            # Only raise if both session ID and Message history are absent, which indicates
+            # a job that predates BF-9 (not a backend switch).
+            if revision_session_id is None:
+                original_stage_check = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
+                history_check = await _load_history(session, job.id, original_stage_check)
+                if not history_check:
+                    raise ValueError(
+                        f"Cannot resume revision for {stage.value}: per-stage session ID was not "
+                        f"recorded and no history available (job predates BF-9 fix). "
+                        f"Reset the job to re-run from scratch."
+                    )
 
-        # Discriminate fresh revision vs resume after awaiting_input.
-        #
-        # The spec's original discriminator (_load_history non-empty) is insufficient
-        # because Message rows from prior completed revisions persist under the same
-        # stage enum value. The correct discriminator is:
-        #
-        #   Resume iff a FollowUp for this revision stage was answered AFTER the
-        #   current (unconsumed) RevisionRequest was created.
-        #
-        # This handles all cases correctly:
-        #   - Fresh 1st revision: no FollowUp at all → fresh
-        #   - Mid-revision park then resume: FollowUp.answered_at > RevReq.created_at → resume
-        #   - Fresh 2nd revision: any old FollowUp.answered_at < RevReq.created_at → fresh
-        #   - 2nd revision parks then resumes: new FollowUp.answered_at > new RevReq.created_at → resume
-        is_resume = await _is_revision_resume(session, job.id, stage, rev_req.created_at)
+            # Fetch the unconsumed RevisionRequest — needed for its instruction (fresh path)
+            # and its created_at (discriminator).
+            rev_req = await _get_revision_request(session, job.id)
 
-        if is_resume:
-            # Resume: the user answered a follow-up question mid-revision.
-            # The CLI session already has the full context; just send the answer.
-            # For AnthropicAPIBackend (history-based), pass combined history so
-            # the model has the original cover-letter/CV context AND the revision turns.
-            revision_turns = await _load_history(session, job.id, stage)
-            answer_text = await _get_latest_answer(session, job.id, stage)
-            original_history = await _load_history(session, job.id, original_stage)
-            combined_history = original_history + revision_turns
-            handle = await backend.restore_session(system_prompt, combined_history, revision_session_id)
-            reply = await backend.send_message(handle, answer_text)
-            accumulated_messages = [
-                {"role": "user", "content": answer_text},
-                {"role": "assistant", "content": reply.raw},
-            ]
+            # Discriminate fresh revision vs resume after awaiting_input.
+            #
+            # The spec's original discriminator (_load_history non-empty) is insufficient
+            # because Message rows from prior completed revisions persist under the same
+            # stage enum value. The correct discriminator is:
+            #
+            #   Resume iff a FollowUp for this revision stage was answered AFTER the
+            #   current (unconsumed) RevisionRequest was created.
+            #
+            # This handles all cases correctly:
+            #   - Fresh 1st revision: no FollowUp at all → fresh
+            #   - Mid-revision park then resume: FollowUp.answered_at > RevReq.created_at → resume
+            #   - Fresh 2nd revision: any old FollowUp.answered_at < RevReq.created_at → fresh
+            #   - 2nd revision parks then resumes: new FollowUp.answered_at > new RevReq.created_at → resume
+            is_resume = await _is_revision_resume(session, job.id, stage, rev_req.created_at)
+
+            if is_resume:
+                # Resume: the user answered a follow-up question mid-revision.
+                # The CLI session already has the full context; just send the answer.
+                # For AnthropicAPIBackend (history-based), pass combined history so
+                # the model has the original cover-letter/CV context AND the revision turns.
+                revision_turns = await _load_history(session, job.id, stage)
+                answer_text = await _get_latest_answer(session, job.id, stage)
+                original_history = await _load_history(session, job.id, original_stage)
+                combined_history = original_history + revision_turns
+                handle = await backend.restore_session(system_prompt, combined_history, revision_session_id)
+                reply = await backend.send_message(handle, answer_text)
+                accumulated_messages = [
+                    {"role": "user", "content": answer_text},
+                    {"role": "assistant", "content": reply.raw},
+                ]
+            else:
+                # Fresh revision: restore the original stage's session and send the
+                # revision instruction.
+                history = await _load_history(session, job.id, original_stage)
+                instruction = rev_req.instruction
+                handle = await backend.restore_session(system_prompt, history, revision_session_id)
+                reply = await backend.send_message(handle, instruction)
+                accumulated_messages = [
+                    {"role": "user", "content": instruction},
+                    {"role": "assistant", "content": reply.raw},
+                ]
+        elif stage in (Stage.cv_adjust, Stage.cover_letter):
+            # Determine fresh vs resume by checking whether Message rows exist for
+            # this job+stage.  The orchestrator already transitioned the job to
+            # `running` before calling us, so we cannot discriminate on job.state.
+            history = await _load_history(session, job.id, stage)
+            if history:
+                # Resume after awaiting_input — send the user's answer as the next turn.
+                answer_text = await _get_latest_answer(session, job.id, stage)
+                handle = await backend.restore_session(system_prompt, history, job.session_external_id)
+                reply = await backend.send_message(handle, answer_text)
+                # Only the new turns are new; prior messages already persisted.
+                accumulated_messages = [
+                    {"role": "user", "content": answer_text},
+                    {"role": "assistant", "content": reply.raw},
+                ]
+            else:
+                # Fresh session — run research pre-step (claude-cli only; best-effort)
+                brief = await _gather_research(job, backend, stage)
+                # Read the standalone base-CV structure — it IS the base CV, the only CV
+                # content either stage's agent sees. Only needed here (fresh session), not on
+                # the resume branch above, so the read is deferred to this branch. cv_adjust
+                # treats it as the authoritative skeleton to preserve (see PROMPT_CDADJUST.md);
+                # cover_letter draws on it for background/achievements (see CVL_PROMPT.md).
+                base_structure = await _read_base_structure(cv_structure_path)
+                initial_user_msg = _build_initial_user_msg(job, brief, base_structure)
+                fresh_system_prompt = _with_language_directive(system_prompt, language_code)
+                handle, reply = await backend.start_session(fresh_system_prompt, initial_user_msg)
+                # Accumulate all messages for this session (system, user, assistant reply)
+                accumulated_messages = [
+                    {"role": "system", "content": fresh_system_prompt},
+                    {"role": "user", "content": initial_user_msg},
+                    {"role": "assistant", "content": reply.raw},
+                ]
         else:
-            # Fresh revision: restore the original stage's session and send the
-            # revision instruction.
-            history = await _load_history(session, job.id, original_stage)
-            instruction = rev_req.instruction
-            handle = await backend.restore_session(system_prompt, history, revision_session_id)
-            reply = await backend.send_message(handle, instruction)
-            accumulated_messages = [
-                {"role": "user", "content": instruction},
-                {"role": "assistant", "content": reply.raw},
-            ]
-    elif stage in (Stage.cv_adjust, Stage.cover_letter):
-        # Determine fresh vs resume by checking whether Message rows exist for
-        # this job+stage.  The orchestrator already transitioned the job to
-        # `running` before calling us, so we cannot discriminate on job.state.
-        history = await _load_history(session, job.id, stage)
-        if history:
-            # Resume after awaiting_input — send the user's answer as the next turn.
-            answer_text = await _get_latest_answer(session, job.id, stage)
-            handle = await backend.restore_session(system_prompt, history, job.session_external_id)
-            reply = await backend.send_message(handle, answer_text)
-            # Only the new turns are new; prior messages already persisted.
-            accumulated_messages = [
-                {"role": "user", "content": answer_text},
-                {"role": "assistant", "content": reply.raw},
-            ]
-        else:
-            # Fresh session — run research pre-step (claude-cli only; best-effort)
-            brief = await _gather_research(job, backend, stage)
-            # Read the standalone base-CV structure — it IS the base CV, the only CV
-            # content either stage's agent sees. Only needed here (fresh session), not on
-            # the resume branch above, so the read is deferred to this branch. cv_adjust
-            # treats it as the authoritative skeleton to preserve (see PROMPT_CDADJUST.md);
-            # cover_letter draws on it for background/achievements (see CVL_PROMPT.md).
-            base_structure = await _read_base_structure(cv_structure_path)
-            initial_user_msg = _build_initial_user_msg(job, brief, base_structure)
-            fresh_system_prompt = _with_language_directive(system_prompt, language_code)
-            handle, reply = await backend.start_session(fresh_system_prompt, initial_user_msg)
-            # Accumulate all messages for this session (system, user, assistant reply)
-            accumulated_messages = [
-                {"role": "system", "content": fresh_system_prompt},
-                {"role": "user", "content": initial_user_msg},
-                {"role": "assistant", "content": reply.raw},
-            ]
-    else:
-        raise ValueError(f"Unexpected stage: {stage}")
+            raise ValueError(f"Unexpected stage: {stage}")
 
-    # Persist session_external_id while we have the handle in case we need to park
-    job.session_external_id = handle.external_id
+        # Persist session_external_id while we have the handle in case we need to park.
+        # In-memory attribute writes only (no flush/commit happens here) — safe even if
+        # this whole phase gets timeout-cancelled right after this point.
+        job.session_external_id = handle.external_id
 
-    # Keep per-stage session IDs so revision can resume the correct conversation.
-    # Only set for the primary stages; do NOT overwrite during revising_* branches
-    # (revisions continue the original session, so the UUID stays the same).
-    if stage == Stage.cv_adjust:
-        job.cv_session_id = handle.external_id
-    elif stage == Stage.cover_letter:
-        job.cl_session_id = handle.external_id
+        # Keep per-stage session IDs so revision can resume the correct conversation.
+        # Only set for the primary stages; do NOT overwrite during revising_* branches
+        # (revisions continue the original session, so the UUID stays the same).
+        if stage == Stage.cv_adjust:
+            job.cv_session_id = handle.external_id
+        elif stage == Stage.cover_letter:
+            job.cl_session_id = handle.external_id
 
-    # Self-heal: if a FINAL block fails content validation (e.g. the agent emitted a
-    # change-log or "done" summary instead of the artifact), re-prompt the SAME session
-    # to re-emit a clean artifact before the reply is dispatched below. Recovered →
-    # proceeds as FINAL; turned into NEED_INPUT → parks; still invalid → _handle_final
-    # raises and fails the job.
-    reply, accumulated_messages = await _self_heal_final(
-        backend=backend,
-        handle=handle,
-        stage=stage,
-        job=job,
-        reply=reply,
-        accumulated_messages=accumulated_messages,
-        language=language_code,
-    )
+        # Self-heal: if a FINAL block fails content validation (e.g. the agent emitted a
+        # change-log or "done" summary instead of the artifact), re-prompt the SAME session
+        # to re-emit a clean artifact before the reply is dispatched below. Recovered →
+        # proceeds as FINAL; turned into NEED_INPUT → parks; still invalid → _handle_final
+        # raises and fails the job.
+        reply, accumulated_messages = await _self_heal_final(
+            backend=backend,
+            handle=handle,
+            stage=stage,
+            job=job,
+            reply=reply,
+            accumulated_messages=accumulated_messages,
+            language=language_code,
+        )
+
+        return handle, reply, accumulated_messages
+
+    # Overall wall-clock budget wrapping the dispatch call AND all self-heal retries
+    # combined (see StageTimeoutError / DEFAULT_STAGE_TIMEOUT). Only this "talk to the
+    # LLM" phase is subject to cancellation on timeout — everything after (the
+    # stale-result check, checkpoint()/mark_failed()) is unconditional once reached.
+    try:
+        handle, reply, accumulated_messages = await asyncio.wait_for(
+            _run_agent_phase(), timeout=stage_timeout
+        )
+    except asyncio.TimeoutError as exc:
+        raise StageTimeoutError(
+            f"Stage {stage.value} exceeded its {stage_timeout:.0f}s overall wall-clock "
+            "budget for agent calls (research + generation + self-heal retries combined); "
+            "aborting so the job fails cleanly rather than starving a concurrency slot."
+        ) from exc
 
     # Guard against a stale result: the agent turn above may have run for a long
     # time, during which the job could have been dismissed/cancelled/deleted on

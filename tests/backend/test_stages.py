@@ -30,9 +30,11 @@ from jsa.db.models import (
     Stage,
 )
 from jsa.pipeline.stages import (
+    DEFAULT_STAGE_TIMEOUT,
     FinalContentError,
     MAX_FINAL_CORRECTIONS,
     PausedForInput,
+    StageTimeoutError,
     _validate_final_content,
     run_stage,
 )
@@ -1010,3 +1012,77 @@ class TestCvAdjustConsumesBaseStructure:
         assert msg is not None
         assert "BASE CV STRUCTURE" in msg
         assert "Open Source Leadership" in msg
+
+
+# ---------------------------------------------------------------------------
+# U11: overall per-stage wall-clock budget (research + main + all self-heal retries)
+# ---------------------------------------------------------------------------
+
+
+class TestStageOverallTimeout:
+    """``run_stage``'s ``stage_timeout`` param bounds the TOTAL agent-call work for one
+    stage invocation (dispatch call + all self-heal re-prompts combined) — see
+    ``StageTimeoutError`` / ``DEFAULT_STAGE_TIMEOUT`` in jsa/pipeline/stages.py. Uses
+    ``FakeAgentBackend``'s ``delay`` param plus a deliberately-shortened ``stage_timeout``
+    to exercise the real timeout code path without waiting real minutes.
+    """
+
+    async def test_exceeding_budget_raises_cleanly_without_touching_job_state(self, session):
+        """A backend slow enough to blow the (test-shortened) budget raises
+        StageTimeoutError — not a bare asyncio.TimeoutError, and not an infinite hang.
+        No checkpoint ever ran (the timeout wraps only the agent-call phase, never the
+        DB write), so the job's state is untouched — left exactly where the existing
+        mark_failed mechanism (orchestrator._run_one's generic exception handler) expects
+        to find a `running` job it can cleanly fail, with no torn/partial state."""
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        # Each backend call sleeps 0.2s; the budget is 0.05s, so the very first call
+        # (start_session, since FakeAgentBackend has no run_research) already blows it.
+        backend = FakeAgentBackend([_final_reply()], delay=0.2)
+
+        with pytest.raises(StageTimeoutError, match="exceeded its"):
+            await run_stage(job, backend, Stage.cv_adjust, session, stage_timeout=0.05)
+
+        # No DB write happened: job is still exactly where the orchestrator left it.
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.running
+        docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+        assert docs == []
+
+        # Reusing the SAME mechanism the orchestrator's generic exception handler uses
+        # for every other agent/backend failure: repo.mark_failed cleanly lands the job
+        # in the normal, resumable `failed` state — no novel failure path introduced.
+        await repo.mark_failed(session, job.id, "Stage cv_adjust exceeded its 0s budget")
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.failed
+        assert refreshed.error is not None
+
+    async def test_within_budget_completes_normally_with_self_heal_retries(self, session):
+        """Regression guard: a couple of self-heal retries, each cheap, still finish well
+        inside a generous overall budget — the new wrapping doesn't break the normal
+        (fast) path, including its self-heal loop."""
+        job = await _insert_job(session, cv_text=_REAL_CV)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        # Two bad FINALs trigger two self-heal re-prompts before a good one lands.
+        backend = FakeAgentBackend(
+            [_raw_final(_SUMMARY_NOT_A_CV), _raw_final(_SUMMARY_NOT_A_CV), _final_reply("Adjusted CV")],
+            delay=0.01,
+        )
+        await run_stage(job, backend, Stage.cv_adjust, session, stage_timeout=5.0)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_done
+        docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+        assert len(docs) == 1
+
+    async def test_default_budget_sits_between_a_single_call_timeout_and_the_worst_case(self):
+        """Sanity-check the production default: meaningfully larger than any single
+        per-call timeout (600s agent_timeout / 180s anthropic_timeout / 300s
+        RESEARCH_TIMEOUT) yet well below the ~2100s pathological worst-case chain
+        (research + main + MAX_FINAL_CORRECTIONS self-heals) described in the
+        reliability review."""
+        assert 600.0 < DEFAULT_STAGE_TIMEOUT < 2100.0
