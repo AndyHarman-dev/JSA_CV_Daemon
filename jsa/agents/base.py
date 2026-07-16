@@ -17,6 +17,27 @@ class AgentLimitReached(RuntimeError):
     """
 
 
+class AgentOutputTruncated(RuntimeError):
+    """Raised when a backend's response was truncated before completion.
+
+    Typically caused by ``stop_reason == "max_tokens"``: the response hit the
+    output token cap before the model finished, so the raw text is not a
+    complete sentinel-terminated reply. Retrying the same request unchanged
+    will truncate again — the fix is to raise ``max_tokens`` (see
+    ``Settings.max_tokens`` / ``JSA_MAX_TOKENS``) or shorten the input.
+    """
+
+
+class AgentRequestError(RuntimeError):
+    """Raised for non-retryable request/response problems.
+
+    Covers two cases: the backend rejected the request as malformed (e.g.
+    ``anthropic.BadRequestError``) — retrying the identical request will fail
+    the same way — and a response whose shape can't be parsed into a reply
+    (an empty content list, or a content block with no text).
+    """
+
+
 @dataclass(frozen=True)
 class AgentReply:
     raw: str                                    # full text returned by the model

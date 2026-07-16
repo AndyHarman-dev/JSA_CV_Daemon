@@ -3,11 +3,42 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
-from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents.base import (
+    AgentBackend,
+    AgentLimitReached,
+    AgentOutputTruncated,
+    AgentReply,
+    AgentRequestError,
+    AgentTimeout,
+    HistoryTurn,
+    SessionHandle,
+)
 from jsa.agents.protocol import parse_reply
+
+
+def require_api_key() -> None:
+    """Raise a clear, actionable error if ``ANTHROPIC_API_KEY`` is not set.
+
+    Called from ``jsa.server.make_backend_factory`` before constructing the
+    anthropic backend, so a missing key is reported once, up front, with an
+    actionable message — instead of surfacing as an opaque error from deep
+    inside the Anthropic SDK's client constructor in the middle of a job run.
+
+    Deliberately NOT called from ``AnthropicAPIBackend.__init__``: unit tests
+    construct the backend directly (mocking ``anthropic.AsyncAnthropic``) and
+    must keep working without the env var set.
+    """
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY environment variable is not set — required "
+            "for the anthropic backend. Set it before starting jsa, or "
+            "choose a different backend (e.g. --backend claude-cli)."
+        )
 
 
 @dataclass(kw_only=True)
@@ -24,9 +55,27 @@ class AnthropicAPIBackend(AgentBackend):
 
     name = "anthropic"
 
-    def __init__(self, model: str = "claude-haiku-4-5", timeout: float = 180.0) -> None:
+    def __init__(
+        self,
+        model: str = "claude-haiku-4-5",
+        timeout: float = 180.0,
+        max_tokens: int = 16384,
+    ) -> None:
         self._model = model
         self._timeout = timeout
+        self._max_tokens = max_tokens
+        # Lazily constructed, then reused for the lifetime of this backend
+        # instance — one httpx connection pool shared across every turn of
+        # every session, instead of a fresh pool per API call.
+        self._client: Any | None = None
+
+    def _get_client(self) -> Any:
+        """Return the shared AsyncAnthropic client, constructing it on first use."""
+        if self._client is None:
+            import anthropic
+
+            self._client = anthropic.AsyncAnthropic()
+        return self._client
 
     async def start_session(
         self,
@@ -84,7 +133,12 @@ class AnthropicAPIBackend(AgentBackend):
         return reply
 
     async def end_session(self, handle: SessionHandle) -> None:
-        """No-op for stateless REST API — just clear in-memory history."""
+        """No-op for stateless REST API — just clear in-memory history.
+
+        The shared httpx client is intentionally NOT closed here: it is
+        reused across sessions and jobs for the lifetime of this backend
+        instance (a typical long-lived pattern for an async httpx client).
+        """
         if not isinstance(handle, AnthropicSessionHandle):
             raise TypeError(
                 f"expected AnthropicSessionHandle, got {type(handle).__name__}"
@@ -94,25 +148,34 @@ class AnthropicAPIBackend(AgentBackend):
     async def _call_api(self, system_prompt: str, messages: list[dict]) -> str:
         """Call the Anthropic messages API and return the raw text response.
 
-        The client is created per-call and explicitly closed in a finally block
-        so the httpx connection pool is released on both normal exit and
-        timeout cancellation.
+        Uses the shared client from ``_get_client()`` (see class docstring on
+        connection reuse). Unlike ClaudeCliBackend/GoogleCliBackend (see
+        jsa/agents/_subprocess.py), this backend has no killable-subprocess
+        problem to solve: `await client.messages.create(...)` is a real async
+        operation, so Orchestrator.cancel_task()'s task.cancel() can interrupt
+        it directly at this await point — no process to leak, nothing to kill.
 
-        Unlike ClaudeCliBackend/GoogleCliBackend (see jsa/agents/_subprocess.py),
-        this backend has no killable-subprocess problem to solve: `await
-        client.messages.create(...)` is a real async operation, so
-        Orchestrator.cancel_task()'s task.cancel() can interrupt it directly at
-        this await point — no process to leak, nothing to kill.
+        The system prompt is sent as a content-block list with a
+        ``cache_control`` breakpoint so its (large, turn-invariant) text is
+        served from Anthropic's prompt cache on every turn after the first,
+        instead of being re-billed at full input price each time.
         """
         import anthropic
 
-        client = anthropic.AsyncAnthropic()
+        client = self._get_client()
+        system_param = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
         try:
             response = await asyncio.wait_for(
                 client.messages.create(
                     model=self._model,
-                    max_tokens=8192,
-                    system=system_prompt,
+                    max_tokens=self._max_tokens,
+                    system=system_param,
                     messages=messages,
                 ),
                 timeout=self._timeout,
@@ -121,10 +184,55 @@ class AnthropicAPIBackend(AgentBackend):
             raise AgentTimeout(
                 f"Anthropic API timed out after {self._timeout}s"
             ) from None
+        except anthropic.BadRequestError as exc:
+            # Non-retryable: the request itself is malformed (e.g. an invalid
+            # max_tokens value, or a schema violation). Retrying the same
+            # request unchanged will fail the same way.
+            raise AgentRequestError(
+                f"Anthropic API rejected the request as invalid: {exc}"
+            ) from exc
         except anthropic.RateLimitError as exc:
             raise AgentLimitReached(
                 f"Anthropic API rate limit reached: {exc}"
             ) from exc
-        finally:
-            await client.close()
-        return response.content[0].text
+        except anthropic.APITimeoutError as exc:
+            # Subclass of APIConnectionError — must be caught before it.
+            raise AgentTimeout(
+                f"Anthropic API request timed out: {exc}"
+            ) from exc
+        except anthropic.APIConnectionError as exc:
+            raise AgentTimeout(
+                f"Anthropic API connection error: {exc}"
+            ) from exc
+        except anthropic.APIStatusError as exc:
+            # Catches BadRequestError/RateLimitError subclasses too, but both
+            # are handled above; this is the remaining 4xx/5xx fallback
+            # (AuthenticationError, PermissionDeniedError, NotFoundError,
+            # InternalServerError, OverloadedError, ServiceUnavailableError...).
+            if exc.status_code >= 500:
+                # Server-side error — transient, worth retrying.
+                raise AgentTimeout(
+                    f"Anthropic API server error ({exc.status_code}): {exc}"
+                ) from exc
+            raise AgentRequestError(
+                f"Anthropic API error ({exc.status_code}): {exc}"
+            ) from exc
+
+        if response.stop_reason == "max_tokens":
+            raise AgentOutputTruncated(
+                "Anthropic response was truncated at max_tokens="
+                f"{self._max_tokens} before the model finished — increase "
+                "max_tokens (Settings.max_tokens / JSA_MAX_TOKENS) or "
+                "shorten the input."
+            )
+        if not response.content:
+            raise AgentRequestError(
+                "Anthropic API returned an empty content list — nothing to parse."
+            )
+        block = response.content[0]
+        if not hasattr(block, "text"):
+            block_type = getattr(block, "type", type(block).__name__)
+            raise AgentRequestError(
+                f"Anthropic API's first content block has no text (type={block_type!r})."
+            )
+        return block.text

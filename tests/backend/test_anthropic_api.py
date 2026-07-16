@@ -11,10 +11,18 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 
-from jsa.agents.anthropic_api import AnthropicAPIBackend, AnthropicSessionHandle
-from jsa.agents.base import AgentTimeout, HistoryTurn
+from jsa.agents.anthropic_api import AnthropicAPIBackend, AnthropicSessionHandle, require_api_key
+from jsa.agents.base import (
+    AgentLimitReached,
+    AgentOutputTruncated,
+    AgentRequestError,
+    AgentTimeout,
+    HistoryTurn,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +45,40 @@ def _make_mock_client(text: str) -> MagicMock:
     mock_client.messages.create = AsyncMock(return_value=mock_response)
     mock_client.close = AsyncMock()
     return mock_client
+
+
+class _FakeTextBlock:
+    """Plain (non-MagicMock) content block with a .text attribute.
+
+    Used instead of MagicMock for the content-guard tests below, since a bare
+    MagicMock auto-vivifies any attribute accessed on it (hasattr(mock, "text")
+    is always True), which would silently defeat the guard we're testing.
+    """
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _FakeNonTextBlock:
+    """Content block with no .text attribute — e.g. a non-text block type."""
+
+    def __init__(self, block_type: str = "thinking") -> None:
+        self.type = block_type
+
+
+class _FakeResponse:
+    """Plain response stub carrying only what _call_api reads: .content and .stop_reason."""
+
+    def __init__(self, *, content: list, stop_reason: str = "end_turn") -> None:
+        self.content = content
+        self.stop_reason = stop_reason
+
+
+def _api_status_error(cls: type, status_code: int, message: str = "error") -> Exception:
+    """Construct a real anthropic.APIStatusError subclass instance for exception-mapping tests."""
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status_code, request=request)
+    return cls(message, response=response, body=None)
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +311,8 @@ class TestSendMessageAppendsTurns:
 
 class TestSendMessageSystemPrompt:
     async def test_api_called_with_system_prompt_kwarg(self):
+        """system is now a content-block list (prompt caching, U4) rather than
+        a bare string — see TestPromptCaching below for the dedicated checks."""
         handle = AnthropicSessionHandle(
             id="test-id",
             external_id=None,
@@ -281,7 +325,13 @@ class TestSendMessageSystemPrompt:
             await backend.send_message(handle, "user text")
 
         call_kwargs = mock_client.messages.create.call_args.kwargs
-        assert call_kwargs["system"] == "my system prompt"
+        assert call_kwargs["system"] == [
+            {
+                "type": "text",
+                "text": "my system prompt",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
     async def test_api_called_with_model_kwarg(self):
         handle = AnthropicSessionHandle(
@@ -449,3 +499,319 @@ class TestTypeErrorOnWrongHandle:
         backend = AnthropicAPIBackend()
         with pytest.raises(TypeError, match="AnthropicSessionHandle"):
             await backend.end_session(wrong_handle)
+
+
+# ---------------------------------------------------------------------------
+# 11 — U4: connection reuse (single shared client across calls)
+# ---------------------------------------------------------------------------
+
+class TestConnectionReuse:
+    async def test_client_constructed_once_across_two_calls(self):
+        """AsyncAnthropic() must be constructed at most once per backend
+        instance, not once per _call_api invocation."""
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client) as ctor:
+            backend = AnthropicAPIBackend()
+            handle, _ = await backend.start_session("sys", "first message")
+            await backend.send_message(handle, "second message")
+
+        assert ctor.call_count == 1
+
+    async def test_client_not_closed_after_call(self):
+        """The shared client must survive past a single _call_api — no more
+        per-call `await client.close()` in a finally block."""
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            await backend.start_session("sys", "message")
+
+        mock_client.close.assert_not_called()
+
+    async def test_same_client_instance_reused(self):
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            client_a = backend._get_client()
+            client_b = backend._get_client()
+        assert client_a is client_b
+
+
+# ---------------------------------------------------------------------------
+# 12 — U4: max_tokens wiring
+# ---------------------------------------------------------------------------
+
+class TestMaxTokensWiring:
+    async def test_default_max_tokens_sent_to_create(self):
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            await backend.start_session("sys", "msg")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["max_tokens"] == 16384
+
+    async def test_custom_max_tokens_sent_to_create(self):
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend(max_tokens=32000)
+            await backend.start_session("sys", "msg")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["max_tokens"] == 32000
+
+    def test_config_default(self, monkeypatch):
+        monkeypatch.delenv("JSA_MAX_TOKENS", raising=False)
+        from jsa.config import Settings
+        s = Settings()
+        assert s.max_tokens == 16384
+
+    def test_config_overridable_via_env(self, monkeypatch):
+        monkeypatch.setenv("JSA_MAX_TOKENS", "32000")
+        from jsa.config import Settings
+        s = Settings()
+        assert s.max_tokens == 32000
+
+
+# ---------------------------------------------------------------------------
+# 13 — U4: prompt caching — system content-block structure
+# ---------------------------------------------------------------------------
+
+class TestPromptCaching:
+    async def test_system_is_content_block_list_with_cache_control(self):
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            await backend.start_session("my large stable system prompt", "msg")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        system = call_kwargs["system"]
+        assert isinstance(system, list)
+        assert len(system) == 1
+        assert system[0]["type"] == "text"
+        assert system[0]["text"] == "my large stable system prompt"
+        assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+    async def test_cache_breakpoint_present_on_every_turn(self):
+        """The cache_control breakpoint must be on the system block for every
+        turn (start_session AND send_message), not just the first call —
+        otherwise resumed/follow-up turns never hit the cache."""
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle, _ = await backend.start_session("sys prompt", "first")
+            await backend.send_message(handle, "second")
+
+        second_call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert second_call_kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+# ---------------------------------------------------------------------------
+# 14 — U4: stop_reason == "max_tokens" handling
+# ---------------------------------------------------------------------------
+
+class TestStopReasonMaxTokens:
+    async def test_truncated_output_raises_agent_output_truncated(self):
+        fake_response = _FakeResponse(
+            content=[_FakeTextBlock("partial, truncated content")],
+            stop_reason="max_tokens",
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentOutputTruncated):
+                await backend.start_session("sys", "msg")
+
+    async def test_truncated_error_message_mentions_max_tokens(self):
+        fake_response = _FakeResponse(
+            content=[_FakeTextBlock("partial")], stop_reason="max_tokens"
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend(max_tokens=4096)
+            with pytest.raises(AgentOutputTruncated, match="4096"):
+                await backend.start_session("sys", "msg")
+
+    async def test_non_truncated_stop_reason_does_not_raise(self):
+        fake_response = _FakeResponse(
+            content=[_FakeTextBlock(FINAL_RAW)], stop_reason="end_turn"
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle, reply = await backend.start_session("sys", "msg")
+        assert reply.kind == "final"
+
+
+# ---------------------------------------------------------------------------
+# 15 — U4: content guard (empty content list / missing .text)
+# ---------------------------------------------------------------------------
+
+class TestContentGuard:
+    async def test_empty_content_list_raises_agent_request_error(self):
+        fake_response = _FakeResponse(content=[], stop_reason="end_turn")
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentRequestError):
+                await backend.start_session("sys", "msg")
+
+    async def test_block_without_text_raises_agent_request_error(self):
+        fake_response = _FakeResponse(
+            content=[_FakeNonTextBlock("thinking")], stop_reason="end_turn"
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=fake_response)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentRequestError, match="thinking"):
+                await backend.start_session("sys", "msg")
+
+
+# ---------------------------------------------------------------------------
+# 16 — U4: exception mapping
+# ---------------------------------------------------------------------------
+
+class TestExceptionMapping:
+    async def test_bad_request_error_maps_to_agent_request_error(self):
+        exc = _api_status_error(anthropic.BadRequestError, 400, "bad max_tokens")
+
+        async def raise_bad_request(*args, **kwargs):
+            raise exc
+
+        mock_client = MagicMock()
+        mock_client.messages.create = raise_bad_request
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentRequestError):
+                await backend.start_session("sys", "msg")
+
+    async def test_rate_limit_error_maps_to_agent_limit_reached(self):
+        exc = _api_status_error(anthropic.RateLimitError, 429, "rate limited")
+
+        async def raise_rate_limit(*args, **kwargs):
+            raise exc
+
+        mock_client = MagicMock()
+        mock_client.messages.create = raise_rate_limit
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentLimitReached):
+                await backend.start_session("sys", "msg")
+
+    async def test_api_timeout_error_maps_to_agent_timeout(self):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        exc = anthropic.APITimeoutError(request=request)
+
+        async def raise_timeout(*args, **kwargs):
+            raise exc
+
+        mock_client = MagicMock()
+        mock_client.messages.create = raise_timeout
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentTimeout):
+                await backend.start_session("sys", "msg")
+
+    async def test_api_connection_error_maps_to_agent_timeout(self):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        exc = anthropic.APIConnectionError(request=request)
+
+        async def raise_connection_error(*args, **kwargs):
+            raise exc
+
+        mock_client = MagicMock()
+        mock_client.messages.create = raise_connection_error
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentTimeout):
+                await backend.start_session("sys", "msg")
+
+    async def test_internal_server_error_maps_to_agent_timeout(self):
+        exc = _api_status_error(anthropic.InternalServerError, 500, "server error")
+
+        async def raise_server_error(*args, **kwargs):
+            raise exc
+
+        mock_client = MagicMock()
+        mock_client.messages.create = raise_server_error
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentTimeout):
+                await backend.start_session("sys", "msg")
+
+    async def test_overloaded_error_maps_to_agent_timeout(self):
+        """529 overloaded_error — a real 5xx APIStatusError subclass, reached
+        via the generic status_code >= 500 branch rather than a specific
+        `except` clause (the class isn't part of anthropic's public API)."""
+        exc = _api_status_error(anthropic.APIStatusError, 529, "overloaded")
+
+        async def raise_overloaded(*args, **kwargs):
+            raise exc
+
+        mock_client = MagicMock()
+        mock_client.messages.create = raise_overloaded
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentTimeout):
+                await backend.start_session("sys", "msg")
+
+    async def test_permission_denied_error_maps_to_agent_request_error(self):
+        """A non-retryable 4xx that isn't BadRequestError/RateLimitError still
+        falls into the non-retryable bucket via the generic APIStatusError
+        branch, not AgentTimeout."""
+        exc = _api_status_error(anthropic.PermissionDeniedError, 403, "forbidden")
+
+        async def raise_permission_denied(*args, **kwargs):
+            raise exc
+
+        mock_client = MagicMock()
+        mock_client.messages.create = raise_permission_denied
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentRequestError):
+                await backend.start_session("sys", "msg")
+
+
+# ---------------------------------------------------------------------------
+# 17 — U4: require_api_key() startup validation
+# ---------------------------------------------------------------------------
+
+class TestRequireApiKey:
+    def test_raises_when_key_missing(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            require_api_key()
+
+    def test_no_raise_when_key_present(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        require_api_key()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# 18 — U4: server.make_backend_factory wires max_tokens and gates on the key
+# ---------------------------------------------------------------------------
+
+class TestServerFactoryAnthropicWiring:
+    def test_missing_key_raises_before_constructing_backend(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        from jsa.config import Settings
+        from jsa.server import make_backend_factory
+
+        factory = make_backend_factory(Settings())
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            factory("anthropic")
+
+    def test_max_tokens_threaded_from_settings(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        monkeypatch.setenv("JSA_MAX_TOKENS", "5000")
+        from jsa.config import Settings
+        from jsa.server import make_backend_factory
+
+        factory = make_backend_factory(Settings())
+        backend = factory("anthropic")
+        assert isinstance(backend, AnthropicAPIBackend)
+        assert backend._max_tokens == 5000

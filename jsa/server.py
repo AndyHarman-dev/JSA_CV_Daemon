@@ -37,10 +37,14 @@ def make_backend_factory(settings: Settings) -> Callable[[str], AgentBackend]:
 
     def _backend_factory(name: str) -> AgentBackend:
         if name == "anthropic":
+            from jsa.agents.anthropic_api import require_api_key
+
+            require_api_key()
             return backend_for(
                 "anthropic",
                 model=settings.model,
                 timeout=settings.anthropic_timeout,
+                max_tokens=settings.max_tokens,
             )
         if name == "claude-cli":
             return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
