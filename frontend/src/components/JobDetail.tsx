@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useStore } from "../store";
 import { api } from "../api";
 import { StatusBadge } from "./StatusBadge";
@@ -70,7 +70,29 @@ export function JobDetail() {
   const [retryError, setRetryError] = useState<string | null>(null);
   const [showNuclearConfirm, setShowNuclearConfirm] = useState(false);
   const [jdOpen, setJdOpen] = useState(false);
+  // The job summary (from GET /api/jobs, the polled list endpoint) intentionally omits
+  // the (potentially large) `jd` field for bandwidth reasons — see CLAUDE.md → "API
+  // request hardening". Fetch it separately from the detail endpoint (same pattern as
+  // ReviewPane/FollowUpPane's api.getJob calls) rather than reading job.jd off the store.
+  const [jd, setJd] = useState<string | undefined>(undefined);
   const t = useT();
+
+  useEffect(() => {
+    let cancelled = false;
+    setJd(undefined);
+    if (selectedId === undefined) return;
+    api
+      .getJob(selectedId)
+      .then((full) => {
+        if (!cancelled && full) setJd(full.jd);
+      })
+      .catch((err: unknown) => {
+        console.error("JobDetail: failed to fetch job description:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
 
   if (selectedId === undefined || job === undefined) {
     return (
@@ -394,7 +416,7 @@ export function JobDetail() {
               overflow: "auto",
             }}
           >
-            {job.jd}
+            {jd ?? t("jobDetail.jdLoading")}
           </pre>
         )}
       </div>

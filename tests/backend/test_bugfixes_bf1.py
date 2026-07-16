@@ -248,15 +248,20 @@ class TestResetDismissed:
 
 
 class TestJDInAPIResponse:
-    async def test_list_jobs_includes_jd(self, client, db):
-        """GET /api/jobs should include a 'jd' key on each job summary."""
+    async def test_list_jobs_excludes_jd(self, client, db):
+        """GET /api/jobs (summary) must NOT include the 'jd' key.
+
+        Superseded by the U7 API-hardening pass: shipping every job's full JD
+        text on every poll of the list endpoint does not scale (megabytes per
+        poll with 100+ large JDs). The JD is still available via the detail
+        endpoint below.
+        """
         await _insert_job(db)
         resp = await client.get("/api/jobs")
         assert resp.status_code == 200
         jobs = resp.json()
         assert len(jobs) == 1
-        assert "jd" in jobs[0]
-        assert jobs[0]["jd"] == "Job description text"
+        assert "jd" not in jobs[0]
 
     async def test_get_job_includes_jd(self, client, db):
         """GET /api/jobs/{id} should include a 'jd' key in the full job."""

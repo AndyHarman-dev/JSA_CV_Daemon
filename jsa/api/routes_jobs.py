@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -65,7 +65,6 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "role": job.role,
         "link": job.link,
         "tier": job.tier,
-        "jd": job.jd,
         "state": job.state.value if job.state is not None else None,
         "current_stage": job.current_stage.value if job.current_stage is not None else None,
         "language": job.language,
@@ -76,6 +75,9 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
     }
     if full:
+        # jd is large free text — only ship it on the detail view (GET /api/jobs/{id}),
+        # never on the list/summary endpoint, which is polled regularly by the frontend.
+        d["jd"] = job.jd
         d["documents"] = [_doc_to_dict(doc) for doc in job.documents]
         d["follow_ups"] = [_follow_up_to_dict(fu) for fu in job.follow_ups]
     return d
@@ -96,14 +98,20 @@ async def _fetch_job_with_relations(session, job_id: str) -> Job | None:
 # ---------------------------------------------------------------------------
 
 
+# 50_000 chars comfortably covers any human-typed answer/revision instruction
+# (tens of pages of prose) while rejecting an accidental multi-megabyte paste
+# before it gets persisted and replayed into every subsequent LLM turn.
+_MAX_TEXT_LENGTH = 50_000
+
+
 class AnswerBody(BaseModel):
     follow_up_id: int
-    text: str
+    text: str = Field(max_length=_MAX_TEXT_LENGTH)
 
 
 class ReviseBody(BaseModel):
     target: str  # "cv" | "cl"
-    text: str
+    text: str = Field(max_length=_MAX_TEXT_LENGTH)
 
 
 class ExportBody(BaseModel):

@@ -236,6 +236,15 @@ class TestListJobs:
         assert len(jobs) == 1
         assert jobs[0]["company"] == "Acme"
 
+    async def test_list_jobs_excludes_jd(self, client, db):
+        """Summary view must not ship the full JD text (large-payload regression)."""
+        await _insert_job(db)
+        resp = await client.get("/api/jobs")
+        assert resp.status_code == 200
+        jobs = resp.json()
+        assert len(jobs) == 1
+        assert "jd" not in jobs[0]
+
 
 class TestGetJob:
     async def test_get_job_not_found(self, client):
@@ -250,6 +259,15 @@ class TestGetJob:
         assert "documents" in data
         assert isinstance(data["documents"], list)
 
+    async def test_get_job_includes_jd(self, client, db):
+        """Detail view must still ship the full JD text (regression for the
+        list-view jd exclusion above)."""
+        await _insert_job(db, jd="Job description text")
+        resp = await client.get("/api/jobs/aabbccdd00112233")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["jd"] == "Job description text"
+
 
 class TestAnswerFollowUp:
     async def test_answer_bad_job_404(self, client):
@@ -258,6 +276,16 @@ class TestAnswerFollowUp:
             json={"follow_up_id": 1, "text": "hello"},
         )
         assert resp.status_code == 404
+
+    async def test_answer_text_over_max_length_returns_422(self, client):
+        """An oversized pasted answer must be rejected at the API boundary with a
+        clean 422, not reach the job/pipeline layer (never a 500)."""
+        oversized = "x" * 50_001
+        resp = await client.post(
+            "/api/jobs/doesnotexist00/answer",
+            json={"follow_up_id": 1, "text": oversized},
+        )
+        assert resp.status_code == 422
 
 
 class TestApproveJob:
@@ -312,6 +340,17 @@ class TestReviseJob:
             json={"target": "cv", "text": "Make it shorter"},
         )
         assert resp.status_code == 400
+
+    async def test_revise_text_over_max_length_returns_422(self, client, db):
+        """An oversized revision instruction must be rejected at the API boundary
+        with a clean 422, not reach the job/pipeline layer (never a 500)."""
+        await _insert_job(db)
+        oversized = "x" * 50_001
+        resp = await client.post(
+            "/api/jobs/aabbccdd00112233/revise",
+            json={"target": "cv", "text": oversized},
+        )
+        assert resp.status_code == 422
 
 
 class TestResetJob:

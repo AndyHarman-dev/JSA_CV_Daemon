@@ -5,6 +5,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { JobList } from "../components/JobList";
 import { JobDetail } from "../components/JobDetail";
 import { StageTimeline } from "../components/StageTimeline";
+import { api } from "../api";
 import type { JobDTO } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -234,6 +235,28 @@ describe('JobDetail — Re-queue button', () => {
 // 5. JobDetail — JD collapsible section
 // ===========================================================================
 describe('JobDetail — JD collapsible', () => {
+  // The list/summary job (from the store) no longer carries `jd` — see CLAUDE.md →
+  // "API request hardening". JobDetail now fetches it lazily via api.getJob (same
+  // pattern as ReviewPane/FollowUpPane), so these tests mock that per-test and wait
+  // for the effect to resolve before asserting.
+  function mockJdFetch(jd: string) {
+    (api.getJob as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: "j1",
+      company: "Acme",
+      role: "Engineer",
+      link: "https://example.com",
+      tier: "A",
+      jd,
+      state: "pending",
+      current_stage: null,
+      error: null,
+      updated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+      follow_ups: [],
+      documents: [],
+    });
+  }
+
   it('shows the "Job Description" section header button on initial render', () => {
     const job = makeJob({ id: "j1", state: "pending" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
@@ -243,44 +266,38 @@ describe('JobDetail — JD collapsible', () => {
     expect(screen.getByRole("button", { name: /JOB_DESCRIPTION/ })).toBeInTheDocument();
   });
 
-  it('does NOT show JD text initially (collapsed)', () => {
-    const job = makeJob({
-      id: "j1",
-      state: "pending",
-      jd: "UNIQUE_JD_BODY_TEXT for this test job",
-    });
+  it('does NOT show JD text initially (collapsed)', async () => {
+    const job = makeJob({ id: "j1", state: "pending" });
+    mockJdFetch("UNIQUE_JD_BODY_TEXT for this test job");
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
+    await waitFor(() => expect(api.getJob).toHaveBeenCalledWith("j1"));
 
     expect(screen.queryByText("UNIQUE_JD_BODY_TEXT for this test job")).toBeNull();
   });
 
-  it('shows JD text after clicking the "Job Description" toggle button', () => {
-    const job = makeJob({
-      id: "j1",
-      state: "pending",
-      jd: "UNIQUE_JD_BODY_TEXT for this test job",
-    });
+  it('shows JD text after clicking the "Job Description" toggle button', async () => {
+    const job = makeJob({ id: "j1", state: "pending" });
+    mockJdFetch("UNIQUE_JD_BODY_TEXT for this test job");
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
+    await waitFor(() => expect(api.getJob).toHaveBeenCalledWith("j1"));
 
     const toggleBtn = screen.getByRole("button", { name: /JOB_DESCRIPTION/ });
     fireEvent.click(toggleBtn);
 
-    expect(screen.getByText("UNIQUE_JD_BODY_TEXT for this test job")).toBeInTheDocument();
+    expect(await screen.findByText("UNIQUE_JD_BODY_TEXT for this test job")).toBeInTheDocument();
   });
 
-  it('hides JD text again after clicking the toggle twice (toggle off)', () => {
-    const job = makeJob({
-      id: "j1",
-      state: "pending",
-      jd: "UNIQUE_JD_BODY_TEXT for this test job",
-    });
+  it('hides JD text again after clicking the toggle twice (toggle off)', async () => {
+    const job = makeJob({ id: "j1", state: "pending" });
+    mockJdFetch("UNIQUE_JD_BODY_TEXT for this test job");
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
 
     render(<JobDetail />);
+    await waitFor(() => expect(api.getJob).toHaveBeenCalledWith("j1"));
 
     const toggleBtn = screen.getByRole("button", { name: /JOB_DESCRIPTION/ });
     fireEvent.click(toggleBtn); // open

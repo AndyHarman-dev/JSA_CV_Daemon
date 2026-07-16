@@ -89,6 +89,7 @@
   "jobDetail.cancel": "Cancel",
   "jobDetail.exceptionLabel": "EXCEPTION",
   "jobDetail.unknownError": "An unknown error occurred.",
+  "jobDetail.jdLoading": "Loading job description…",
   "followUpPane.loading": "Loading follow-up…",
   "followUpPane.waiting": "Waiting for follow-up data…",
   "chatBox.answerPlaceholder": "Type your answer…",

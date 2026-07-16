@@ -11,7 +11,9 @@ export interface JobDTO {
   role: string;
   link: string;
   tier: "A" | "B" | "C";
-  jd: string;
+  // NOTE: `jd` is intentionally NOT here — GET /api/jobs (the polled list/summary
+  // endpoint) omits it for bandwidth reasons (see CLAUDE.md → "API request
+  // hardening"). It only appears on the detail response — see FullJobDTO below.
   state: JobState;
   current_stage: Stage | null;
   language: string | null;
@@ -124,6 +126,7 @@ export interface EditorCV {
 }
 
 export interface FullJobDTO extends JobDTO {
+  jd: string;
   follow_ups: FollowUpDTO[];
   documents: DocumentDTO[];
 }
