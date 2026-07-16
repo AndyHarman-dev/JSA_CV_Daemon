@@ -170,6 +170,50 @@ class TestEventBus:
         await bus.publish({"type": "log", "job_id": "xyz"})
 
 
+class TestEventBusBounding:
+    """U9: subscriber queues are bounded (maxsize) so a stalled-but-connected
+    WebSocket consumer (slow reader loop in jsa/api/ws.py) can't grow memory
+    unbounded. Publishing past the bound drops the NEWEST event for that
+    subscriber (drop-newest) rather than blocking the publisher.
+    """
+
+    async def test_publish_past_maxsize_does_not_raise_or_hang(self):
+        bus = EventBus(maxsize=5)
+        q = bus.subscribe()
+        # Publish far more events than maxsize, without ever draining q
+        # (simulates a stalled consumer). Must complete quickly, not hang.
+        await asyncio.wait_for(
+            asyncio.gather(*[bus.publish({"i": i}) for i in range(50)]),
+            timeout=1.0,
+        )
+        # Queue size stays bounded at maxsize, never grows past it.
+        assert q.qsize() == 5
+
+    async def test_publish_past_maxsize_drops_newest(self):
+        bus = EventBus(maxsize=5)
+        q = bus.subscribe()
+        for i in range(10):
+            await bus.publish({"i": i})
+        assert q.qsize() == 5
+        remaining = []
+        while not q.empty():
+            remaining.append(q.get_nowait()["i"])
+        # The first 5 events (oldest) survive; the later 5 (newest) were
+        # dropped because the queue was already full when they arrived.
+        assert remaining == [0, 1, 2, 3, 4]
+
+    async def test_publish_past_maxsize_only_affects_stalled_subscriber(self):
+        bus = EventBus(maxsize=2)
+        stalled = bus.subscribe()
+        draining = bus.subscribe()
+        for i in range(5):
+            await bus.publish({"i": i})
+            # A well-behaved consumer keeps draining and never fills up.
+            draining.get_nowait()
+        assert stalled.qsize() == 2
+        assert draining.qsize() == 0
+
+
 # ===========================================================================
 # Event schema tests (no HTTP)
 # ===========================================================================

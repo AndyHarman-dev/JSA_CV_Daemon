@@ -132,10 +132,35 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        if hasattr(app.state, "orchestrator"):
-            app.state.orchestrator._stopping = True
+        orchestrator = getattr(app.state, "orchestrator", None)
+        if orchestrator is not None:
+            orchestrator._stopping = True
         if hasattr(app.state, "dev_autoresponder"):
             app.state.dev_autoresponder._stopping = True
+
+        # Drain in-flight worker tasks (Orchestrator._run_one, keyed by job_id)
+        # before disposing the engine. _stopping=True (set above) stops NEW
+        # jobs from being dispatched, but does nothing for tasks already
+        # spawned — without this, a task mid-checkpoint() commit could have
+        # the engine yanked out from under it, breaking the checkpoint
+        # atomicity guarantee. Bounded by a safety-net timeout so a stuck
+        # task can't hang shutdown forever; on timeout we log and proceed
+        # with dispose anyway.
+        if orchestrator is not None and orchestrator._tasks:
+            in_flight = list(orchestrator._tasks.values())
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*in_flight, return_exceptions=True),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                still_running = sum(1 for t in in_flight if not t.done())
+                logger.warning(
+                    "Shutdown: %d in-flight job task(s) did not finish within "
+                    "30s; proceeding to dispose the engine anyway",
+                    still_running,
+                )
+
         if hasattr(app.state, "engine"):
             await app.state.engine.dispose()
 
