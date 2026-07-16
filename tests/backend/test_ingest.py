@@ -476,16 +476,19 @@ class TestCsvLoaderOversizedField:
                 [
                     "company,role,link,tier,JD",
                     "Acme,Engineer,https://acme.com/1,A,Good JD.",
-                    f"BigCo,Analyst,https://bigco.com/2,B,{too_big}",
+                    f"BigCo,Analyst,https://bigco.com/2,B,{too_big}",   # blows the 1024 cap
+                    "Gamma,PM,https://gamma.com/3,C,After the bad row.",  # proves recovery
                 ],
             )
 
             jobs, errors = load_csv(csv_file)  # must not raise
 
             assert len(errors) >= 1
-            # The valid row must still come through even though a later (or same)
-            # row blew the configured field-size cap.
-            assert any(j["company"] == "Acme" for j in jobs)
+            # Both the row before AND the row after the offending one must come
+            # through — proving the manual next()-in-a-loop iteration recovers
+            # and keeps reading the rest of the file, not just that it doesn't
+            # crash before reaching the bad row.
+            assert {j["company"] for j in jobs} == {"Acme", "Gamma"}
         finally:
             csv_module.field_size_limit(original_limit)
 
