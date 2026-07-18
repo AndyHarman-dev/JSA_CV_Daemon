@@ -59,3 +59,17 @@ class Settings(BaseSettings):
                 f"Unknown backend(s): {invalid}. Available: {available}"
             )
         return v
+
+    @field_validator("max_parallel")
+    @classmethod
+    def _validate_max_parallel(cls, v: int) -> int:
+        """Reject non-positive values: 0 would size the Orchestrator's semaphore to
+        asyncio.Semaphore(0), which deadlocks dispatch forever with no error surfaced
+        (jobs just stay pending); negative values raise an unlabeled ValueError from
+        asyncio.Semaphore itself. Fail fast with a clear message instead."""
+        if v < 1:
+            raise ValueError(
+                f"max_parallel must be >= 1 (got {v}); JSA_MAX_PARALLEL=0 or negative "
+                "would deadlock the orchestrator's dispatch loop"
+            )
+        return v
