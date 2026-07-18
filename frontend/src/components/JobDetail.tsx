@@ -75,11 +75,13 @@ export function JobDetail() {
   // request hardening". Fetch it separately from the detail endpoint (same pattern as
   // ReviewPane/FollowUpPane's api.getJob calls) rather than reading job.jd off the store.
   const [jd, setJd] = useState<string | undefined>(undefined);
+  const [jdError, setJdError] = useState(false);
   const t = useT();
 
   useEffect(() => {
     let cancelled = false;
     setJd(undefined);
+    setJdError(false);
     if (selectedId === undefined) return;
     api
       .getJob(selectedId)
@@ -88,6 +90,7 @@ export function JobDetail() {
       })
       .catch((err: unknown) => {
         console.error("JobDetail: failed to fetch job description:", err);
+        if (!cancelled) setJdError(true);
       });
     return () => {
       cancelled = true;
@@ -416,7 +419,7 @@ export function JobDetail() {
               overflow: "auto",
             }}
           >
-            {jd ?? t("jobDetail.jdLoading")}
+            {jdError ? t("jobDetail.unknownError") : jd ?? t("jobDetail.jdLoading")}
           </pre>
         )}
       </div>
