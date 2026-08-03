@@ -145,7 +145,7 @@ class TestFreshSessionGetsDirective:
         await session.commit()
 
         backend = _CapturingBackend([_fit_reply()])
-        await run_stage(job, backend, Stage.fit_assessment, session, preferences_path=prefs_path)
+        await run_stage(job, backend, Stage.fit_assessment, session, preferences_path=prefs_path, fit_assessment_backend=backend)
 
         prompt = backend.start_session_prompt
         assert prompt is not None

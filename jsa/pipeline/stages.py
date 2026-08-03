@@ -355,12 +355,13 @@ async def _read_base_structure(cv_structure_path: Path | None) -> CVDocument | N
 
 async def run_stage(
     job: Job,
-    backend: AgentBackend,
+    general_purpose_backend: AgentBackend,
     stage: Stage,
     session: AsyncSession,
     output_dir: Path | None = None,
     cv_structure_path: Path | None = None,
     preferences_path: Path | None = None,
+    fit_assessment_backend: AgentBackend = None
 ) -> None:
     """Run one pipeline stage to completion or park.
 
@@ -398,9 +399,9 @@ async def run_stage(
         # One-shot pre-check: no resume path, no NEED_INPUT, no research. Handled
         # entirely here (FIT → fit_done, anything else → unfit) and returns early.
         base_structure = await _read_base_structure(cv_structure_path)
-        await _run_fit_assessment(job, backend, session, system_prompt, language_code, base_structure)
+        await _run_fit_assessment(job, fit_assessment_backend, session, system_prompt, language_code, base_structure)
         return
-
+    
     if stage in (Stage.revising_cv, Stage.revising_cl):
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
         revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
@@ -448,8 +449,8 @@ async def run_stage(
             answer_text = await _get_latest_answer(session, job.id, stage)
             original_history = await _load_history(session, job.id, original_stage)
             combined_history = original_history + revision_turns
-            handle = await backend.restore_session(system_prompt, combined_history, revision_session_id)
-            reply = await backend.send_message(handle, answer_text)
+            handle = await general_purpose_backend.restore_session(system_prompt, combined_history, revision_session_id)
+            reply = await general_purpose_backend.send_message(handle, answer_text)
             accumulated_messages = [
                 {"role": "user", "content": answer_text},
                 {"role": "assistant", "content": reply.raw},
@@ -459,8 +460,8 @@ async def run_stage(
             # revision instruction.
             history = await _load_history(session, job.id, original_stage)
             instruction = rev_req.instruction
-            handle = await backend.restore_session(system_prompt, history, revision_session_id)
-            reply = await backend.send_message(handle, instruction)
+            handle = await general_purpose_backend.restore_session(system_prompt, history, revision_session_id)
+            reply = await general_purpose_backend.send_message(handle, instruction)
             accumulated_messages = [
                 {"role": "user", "content": instruction},
                 {"role": "assistant", "content": reply.raw},
@@ -473,8 +474,8 @@ async def run_stage(
         if history:
             # Resume after awaiting_input — send the user's answer as the next turn.
             answer_text = await _get_latest_answer(session, job.id, stage)
-            handle = await backend.restore_session(system_prompt, history, job.session_external_id)
-            reply = await backend.send_message(handle, answer_text)
+            handle = await general_purpose_backend.restore_session(system_prompt, history, job.session_external_id)
+            reply = await general_purpose_backend.send_message(handle, answer_text)
             # Only the new turns are new; prior messages already persisted.
             accumulated_messages = [
                 {"role": "user", "content": answer_text},
@@ -482,7 +483,7 @@ async def run_stage(
             ]
         else:
             # Fresh session — run research pre-step (claude-cli only; best-effort)
-            brief = await _gather_research(job, backend, stage)
+            brief = await _gather_research(job, general_purpose_backend, stage)
             # Read the standalone base-CV structure — it IS the base CV, the only CV
             # content either stage's agent sees. Only needed here (fresh session), not on
             # the resume branch above, so the read is deferred to this branch. cv_adjust
@@ -491,7 +492,7 @@ async def run_stage(
             base_structure = await _read_base_structure(cv_structure_path)
             initial_user_msg = _build_initial_user_msg(job, brief, base_structure)
             fresh_system_prompt = _with_language_directive(system_prompt, language_code)
-            handle, reply = await backend.start_session(fresh_system_prompt, initial_user_msg)
+            handle, reply = await general_purpose_backend.start_session(fresh_system_prompt, initial_user_msg)
             # Accumulate all messages for this session (system, user, assistant reply)
             accumulated_messages = [
                 {"role": "system", "content": fresh_system_prompt},
@@ -518,7 +519,7 @@ async def run_stage(
     # proceeds as FINAL; turned into NEED_INPUT → parks; still invalid → _handle_final
     # raises and fails the job.
     reply, accumulated_messages = await _self_heal_final(
-        backend=backend,
+        backend=general_purpose_backend,
         handle=handle,
         stage=stage,
         job=job,
@@ -578,7 +579,7 @@ async def run_stage(
     await _handle_final(
         session=session,
         job=job,
-        backend=backend,
+        backend=general_purpose_backend,
         handle=handle,
         stage=stage,
         reply=reply,

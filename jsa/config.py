@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     db_path: Path = Path.home() / ".jsa" / "jsa.sqlite"
     port: int = 8765
     no_browser: bool = False
+    fit_assessment_model: str = "claude-haiku-4-5"  # Model for fit assessment backend
     model: str = "claude-haiku-4-5"       # Claude model ID for claude-cli and anthropic backends; overridable via JSA_MODEL
     anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT
     agent_timeout: float = 600.0         # Timeout for CLI backends (claude-cli, google-cli), via JSA_AGENT_TIMEOUT

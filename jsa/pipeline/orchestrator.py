@@ -292,6 +292,8 @@ class Orchestrator:
                     )
                     return
 
+                fit_assesment_backend = self._backend_factory("fit-assessment")
+
                 # Per-job backend selection (BF-19):
                 # Use job.backend_name if already set; otherwise assign backends[0].
                 if job.backend_name is None:
@@ -307,6 +309,7 @@ class Orchestrator:
                     output_dir=self._output_dir,
                     cv_structure_path=self._cv_structure_path,
                     preferences_path=self._preferences_path,
+                    fit_assessment_backend=fit_assesment_backend
                 )
 
         except PausedForInput:

@@ -44,6 +44,10 @@ def make_backend_factory(settings: Settings) -> Callable[[str], AgentBackend]:
             )
         if name == "claude-cli":
             return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
+
+        if name == "fit-assessment":
+            return backend_for(name, model=settings.fit_assessment_model, timeout=settings.agent_timeout)
+
         return backend_for(name, timeout=settings.agent_timeout)
 
     return _backend_factory

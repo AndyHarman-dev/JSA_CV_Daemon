@@ -89,7 +89,7 @@ async def _run_fit(session: AsyncSession, job: Job, reply: AgentReply) -> Job:
     transition(job, JobState.running, Stage.fit_assessment)
     await session.commit()
     backend = FakeAgentBackend([reply])
-    await run_stage(job, backend, Stage.fit_assessment, session)
+    await run_stage(job, backend, Stage.fit_assessment, session, fit_assessment_backend=backend)
     return await repo.get_job(session, job.id)
 
 
@@ -113,7 +113,9 @@ class TestFitAssessmentConsumesBaseStructure:
 
         backend = _CapturingBackend([_final("FIT")])
         await run_stage(
-            job, backend, Stage.fit_assessment, session, cv_structure_path=structure_path
+            job, backend, Stage.fit_assessment, session, 
+            cv_structure_path=structure_path, 
+            fit_assessment_backend=backend
         )
 
         msg = backend.captured_initial_msg
@@ -130,7 +132,7 @@ class TestFitAssessmentConsumesBaseStructure:
         await session.commit()
 
         backend = _CapturingBackend([_final("FIT")])
-        await run_stage(job, backend, Stage.fit_assessment, session, cv_structure_path=missing)
+        await run_stage(job, backend, Stage.fit_assessment, session, cv_structure_path=missing, fit_assessment_backend=backend)
 
         msg = backend.captured_initial_msg
         assert msg is not None
@@ -234,7 +236,7 @@ class TestFitAssessmentStage:
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.fit_assessment)
         await session.commit()
-        await run_stage(job, NoSentinelBackend([]), Stage.fit_assessment, session)
+        await run_stage(job, NoSentinelBackend([]), Stage.fit_assessment, session, fit_assessment_backend=NoSentinelBackend([]))
 
         refreshed = await repo.get_job(session, job.id)
         assert refreshed.state == JobState.unfit
