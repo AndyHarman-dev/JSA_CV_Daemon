@@ -1,0 +1,183 @@
+{
+  "review": {
+    "title": "Code review — separate configurable model for the fit_assessment stage",
+    "date": "2026-08-04",
+    "effort": "medium",
+    "reviewer": "Claude Opus 5 (claude-opus-5)",
+    "branch": "feature/separate_configs",
+    "head_commit": "208ccaf",
+    "verdict": "Approve. No correctness defects found. All findings are documentation, hardening, or style.",
+    "summary": "The feature adds two optional settings (fit_model, fit_timeout) that let the one-shot fit gate run on a cheaper/faster model than the rest of the pipeline. Both default to None, which makes the feature fully inert. The mechanism — model_override / timeout_override on the existing make_backend_factory — is the right seam: it keeps the non-obvious per-backend argument mapping in one place instead of duplicating it at a second call site. Wiring is injection-based (server -> orchestrator -> run_stage), which correctly avoids the jsa.pipeline -> jsa.server circular import. Test coverage is unusually good for the risky edges."
+  },
+
+  "scope": {
+    "diff_range": "main...HEAD",
+    "paths_reviewed": ["jsa/", "tests/", "CLAUDE.md"],
+    "files_in_scope": [
+      "jsa/config.py",
+      "jsa/cli.py",
+      "jsa/server.py",
+      "jsa/pipeline/orchestrator.py",
+      "jsa/pipeline/stages.py",
+      "CLAUDE.md",
+      "tests/backend/test_fit_assessment.py",
+      "tests/backend/test_make_backend_factory.py",
+      "tests/README.md"
+    ],
+    "excluded": "The branch also carries an unrelated bulk deletion of graphify-out/ (~400k lines of generated graph artifacts) and .claude/ command files. These were excluded from review as out of scope for the fit_model feature."
+  },
+
+  "verification": {
+    "targeted_tests": {
+      "command": "./venv/bin/python -m pytest tests/backend/test_fit_assessment.py tests/backend/test_make_backend_factory.py -q",
+      "result": "46 passed"
+    },
+    "full_backend_suite": {
+      "command": "./venv/bin/python -m pytest tests/backend -q -m \"not integration\"",
+      "result": "27 failed, 962 passed, 2 skipped in 100.96s",
+      "assessment": "The 27 failures match the known pre-existing baseline for this repo (fit-gate + JSON-fixture debt, mostly TimeoutError in test_orchestrator.py). This change introduces no test regressions."
+    },
+    "checks_performed": [
+      "Traced every run_stage() call site (jsa/ and tests/) — all pass the backend positionally, so the `backend` -> `general_purpose_backend` parameter rename breaks no caller.",
+      "Grepped for all Orchestrator( construction sites: jsa/server.py:126 is the only one, so there is no production path where fit_backend_factory is silently omitted.",
+      "Read the backend constructor signatures to confirm the factory's argument mapping is correct: AnthropicAPIBackend(model, timeout), ClaudeCliBackend(model, timeout), GoogleCliBackend(timeout) — no model parameter.",
+      "Confirmed AgentTimeout is caught only in jsa/pipeline/infer_structure.py, not in stages.py or orchestrator.py.",
+      "Confirmed no __bool__ / __len__ is defined on any AgentBackend or on FakeAgentBackend."
+    ]
+  },
+
+  "strengths": [
+    "The override is threaded through the single existing factory rather than re-derived at a new call site. The docstring names the exact prior bug this prevents (anthropic silently getting a 600s timeout instead of its 180s one), and a regression test pins it.",
+    "The fit backend is constructed from job.backend_name rather than backends[0], so the gate correctly follows a job after a BF-19 limit-triggered backend switch. Directly tested.",
+    "AgentLimitReached from the fit backend propagates to _handle_limit_reached instead of being swallowed into an `unfit` verdict — a genuinely easy mistake to make here, and it is explicitly tested.",
+    "test_no_override_is_indistinguishable_from_the_main_factory pins the inertness claim rather than asserting it in prose only.",
+    "Injection over construction keeps stages.py free of any jsa.server import, avoiding the server -> orchestrator -> stages cycle. The reasoning is recorded in both the docstring and CLAUDE.md.",
+    "test_fit_backend_is_ignored_by_non_fit_stages pins the negative case: passing fit_backend must not leak into cv_adjust."
+  ],
+
+  "findings": [
+    {
+      "id": 1,
+      "severity": "low",
+      "category": "documentation",
+      "verdict": "CONFIRMED",
+      "file": "README.md",
+      "line": 207,
+      "summary": "The new --fit-model / --fit-timeout flags and their JSA_FIT_MODEL / JSA_FIT_TIMEOUT env vars are absent from README's CLI-flag table (~line 206) and env-var table (~line 248), which document every other flag and setting.",
+      "failure_scenario": "A user reads the README flag table to discover available configuration, does not see --fit-model, and never learns the feature exists. The feature is inert by default, so an undocumented flag is an unused flag.",
+      "evidence": "grep for '--fit' across README.md and COMMANDS.md returns no hits, while --backend, --backends, JSA_MODEL, JSA_AGENT_TIMEOUT all appear in those tables. Only CLAUDE.md was updated.",
+      "recommendation": "Add two rows to the CLI-flag table and two to the env-var table, mirroring the existing JSA_MODEL / JSA_AGENT_TIMEOUT entries. Note in the --fit-model row that it has no effect on google-cli."
+    },
+    {
+      "id": 2,
+      "severity": "low",
+      "category": "error-handling",
+      "verdict": "CONFIRMED",
+      "file": "jsa/pipeline/orchestrator.py",
+      "line": 352,
+      "summary": "A too-small --fit-timeout produces an AgentTimeout that no pipeline handler catches, so it reaches the orchestrator's generic `except Exception` and marks the job `failed` — a hard job failure now reachable purely by configuration.",
+      "failure_scenario": "User sets --fit-timeout 5 to keep the cheap pre-check snappy. The fit model takes 7s. AgentTimeout propagates out of _run_fit_assessment (which catches only ProtocolError), past run_stage, into the orchestrator's generic handler, and the job is marked `failed` rather than being retried, marked `unfit`, or falling back to the main backend. The user sees an opaque failure with no hint that the fit timeout caused it.",
+      "evidence": "AgentTimeout is imported and handled only in jsa/pipeline/infer_structure.py:99. It appears nowhere in stages.py or orchestrator.py. _run_fit_assessment's only except clause is ProtocolError (stages.py:765).",
+      "recommendation": "Either treat an AgentTimeout on the fit stage the same way ProtocolError is treated (fail to the modal with a reason, consistent with 'verdict parsing fails TO the modal, never silently past it'), or at minimum validate fit_timeout > 0 and surface the timeout value in the job's error text.",
+      "note": "This is a pre-existing gap in AgentTimeout handling, but the new flag makes it substantially easier to trigger."
+    },
+    {
+      "id": 3,
+      "severity": "low",
+      "category": "usability",
+      "verdict": "CONFIRMED",
+      "file": "jsa/server.py",
+      "line": 134,
+      "summary": "fit_model is applied blindly per backend name with no startup signal when it is inapplicable or wrong for the active chain, so a misconfigured value fails silently rather than loudly.",
+      "failure_scenario": "Two variants of the same silent-no-op. (a) Backend is google-cli: GoogleCliBackend takes no model argument, so fit_model is dropped on the floor. The user sets JSA_FIT_MODEL, observes no behavior change, and gets no log line explaining why. (b) Mixed chain such as --backends claude-cli,anthropic: a single fit_model string must be valid for whichever backend is currently active. After a BF-19 switch the fit gate is invoked with a model ID the new backend may not accept, surfacing as a runtime backend error rather than a startup validation error.",
+      "evidence": "make_backend_factory's google-cli branch calls backend_for(name, timeout=timeout) with no model kwarg — correct and necessary (the agy CLI has no model flag), and pinned by test_google_cli_never_receives_a_model_kwarg — but silent. Settings has two validators for `backends` and none for `fit_model`.",
+      "recommendation": "Log one INFO line at startup when fit_model is set: either 'fit gate will use model X' or 'fit_model ignored for backend google-cli (no model flag)'. Cheap, and it converts a silent no-op into a visible one."
+    },
+    {
+      "id": 4,
+      "severity": "info",
+      "category": "design-note",
+      "verdict": "CONFIRMED",
+      "file": "jsa/pipeline/orchestrator.py",
+      "line": 376,
+      "summary": "A quota signal from the fit model walks job.backend_name down the BF-19 chain, migrating the entire job off a primary backend that may be perfectly healthy for the main pipeline.",
+      "failure_scenario": "fit_model points at a cheap model that exhausts its own quota first. AgentLimitReached fires on the fit gate, _handle_limit_reached advances the job to the next backend in the chain, and the cv_adjust / cover_letter stages now run on the fallback backend even though the primary's main model was never rate-limited.",
+      "evidence": "_handle_limit_reached switches job.backend_name, which is what both self._backend_factory and self._fit_backend_factory are keyed on (orchestrator.py:310-315).",
+      "assessment": "This is intended behavior and is the safe default — the alternative (per-stage backend tracking) is materially more complex, and the current code is explicitly tested. Recorded as a design note so the coupling is not rediscovered later as a surprise, NOT as a defect. No change recommended."
+    },
+    {
+      "id": 5,
+      "severity": "nit",
+      "category": "style",
+      "verdict": "CONFIRMED",
+      "file": "jsa/pipeline/stages.py",
+      "line": 412,
+      "summary": "Stray double blank line left inside run_stage's body between the fit_assessment early-return and the revising_cv branch.",
+      "failure_scenario": "None — cosmetic only. PEP 8 reserves two blank lines for top-level definitions; inside a function body it reads as an accidental leftover from the edit.",
+      "evidence": "stages.py lines 412 and 413 are both empty, following `return` at 411 and preceding `if stage in (...)` at 414.",
+      "recommendation": "Delete one blank line."
+    },
+    {
+      "id": 6,
+      "severity": "nit",
+      "category": "validation",
+      "verdict": "CONFIRMED",
+      "file": "jsa/config.py",
+      "line": 22,
+      "summary": "fit_model and fit_timeout have no pydantic validators, so an empty-string model or a zero/negative timeout is accepted and pushed down to the backend constructor.",
+      "failure_scenario": "`--fit-model \"\"` yields model_override = \"\" which is not None, so the empty string is forwarded as the model ID and the backend fails at call time rather than at startup. `--fit-timeout 0` or a negative value is likewise accepted and guarantees an immediate timeout on every fit call (see finding 2).",
+      "evidence": "Settings defines two field_validators for `backends` and none for the new fields. jsa/cli.py:152-155 forwards both values with an explicit `is not None` check and a comment stating the pass-through is deliberate because there is no model registry to validate against.",
+      "assessment": "The pass-through for fit_model is a reasonable deliberate choice — model IDs genuinely change outside this codebase. A positivity check on fit_timeout is cheap and unambiguous, though.",
+      "recommendation": "Add a field_validator asserting fit_timeout > 0. Optionally coerce an empty fit_model to None."
+    },
+    {
+      "id": 7,
+      "severity": "nit",
+      "category": "robustness",
+      "verdict": "CONFIRMED",
+      "file": "jsa/pipeline/stages.py",
+      "line": 409,
+      "summary": "`fit_backend or general_purpose_backend` selects on truthiness rather than on `is not None`, so a future backend defining __bool__ or __len__ would silently fall back to the main backend.",
+      "failure_scenario": "No current failure — verified that no AgentBackend subclass and no test fake defines __bool__ or __len__, so every backend instance is truthy today. The risk is latent: a backend that later grows a __len__ (e.g. exposing a message count) would evaluate falsy when empty, and an explicitly injected fit backend would be silently discarded in favor of the main one. That failure is invisible — the stage still succeeds, just on the wrong model.",
+      "evidence": "grep for __bool__ / __len__ across jsa/agents/ and tests/backend/fakes/ returns no matches. The orchestrator already guards with an explicit `is not None` at orchestrator.py:115 and 314, so the codebase is inconsistent with itself here.",
+      "recommendation": "Use `fit_backend if fit_backend is not None else general_purpose_backend`, matching the explicit None checks used everywhere else in this feature."
+    }
+  ],
+
+  "checked_and_cleared": [
+    {
+      "item": "Parameter rename backend -> general_purpose_backend in run_stage",
+      "conclusion": "Safe. Every call site in jsa/ and tests/ passes the backend positionally; no keyword caller exists."
+    },
+    {
+      "item": "Circular import risk (stages.py reaching into server.py for a factory)",
+      "conclusion": "Correctly avoided. The fit backend is injected by the orchestrator; stages.py imports nothing from jsa.server."
+    },
+    {
+      "item": "Feature silently inert on some production path",
+      "conclusion": "Not possible. jsa/server.py:126 is the only Orchestrator( construction site in jsa/."
+    },
+    {
+      "item": "make_backend_factory refactor changing behavior for existing callers (CV-structure infer endpoint, CLI bootstrap)",
+      "conclusion": "Behavior-preserving. With both overrides None, every branch resolves to the identical arguments as before; pinned by test_no_override_is_indistinguishable_from_the_main_factory."
+    },
+    {
+      "item": "The fit stage stamping job.session_external_id with the fit model's session ID (stages.py:792)",
+      "conclusion": "Harmless. Fit messages checkpoint under the fit_assessment stage, so cv_adjust's _load_history(cv_adjust) is empty, it takes the fresh-session branch, and overwrites session_external_id at stages.py:515 before any restore_session could use the stale value."
+    },
+    {
+      "item": "Unconditional construction of the second factory in create_app even when the feature is unconfigured",
+      "conclusion": "Acceptable. Backends are stateless apart from model/timeout, so the extra instance per fit dispatch is negligible and the code path stays uniform."
+    }
+  ],
+
+  "test_coverage_assessment": {
+    "verdict": "Strong",
+    "notes": "11 new tests covering injection, fallback when not injected, the UNFIT path through the injected backend, non-fit stages ignoring fit_backend, inertness when fit_model is None, anthropic retaining its 180s timeout when only the model is overridden, google-cli never receiving a model kwarg, the fit factory being keyed on job.backend_name after a BF-19 switch, and AgentLimitReached walking the chain rather than collapsing into `unfit`. Follows the project's fakes-over-mocks convention (FakeAgentBackend / CapturingBackend, no patching).",
+    "minor": "TestBackendFactoryOverrides asserts on private attributes (_model, _timeout). Acceptable here — those are the only observable evidence that the constructor mapping is right — but it couples the tests to backend internals.",
+    "gaps": [
+      "No test that a fit-stage AgentTimeout is handled sensibly (see finding 2).",
+      "No CLI-level test that --fit-model / --fit-timeout actually land in Settings overrides; the wiring in jsa/cli.py:152-155 is covered only by inspection."
+    ]
+  }
+}
