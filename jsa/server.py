@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse as _FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from jsa.agents.base import AgentBackend
+from jsa.agents.fit_assessment import FitAssessmentBackend
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.events.bus import bus
@@ -46,7 +47,7 @@ def make_backend_factory(settings: Settings) -> Callable[[str], AgentBackend]:
             return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
 
         if name == "fit-assessment":
-            return backend_for(name, model=settings.fit_assessment_model, timeout=settings.agent_timeout)
+            return FitAssessmentBackend(model=settings.fit_assessment_model, timeout=settings.agent_timeout)
 
         return backend_for(name, timeout=settings.agent_timeout)
 
