@@ -92,6 +92,33 @@ it.** The modal's buttons map to `POST /api/jobs/{id}/dismiss` (→ dismissed) a
 exactly like `cv_done` in `list_runnable_jobs` and `_next_stage_for`. See ARCH.md →
 "Fit-assessment gate".
 
+### Separate fit-assessment model
+
+The fit gate may run on a **different model** than the rest of the pipeline — it is a
+cheap one-shot pre-check, so a smaller/faster model is usually enough. Two optional
+settings drive it (`jsa/config.py`), both `None` by default, which makes the whole
+feature **inert**: `fit_model` (`JSA_FIT_MODEL` / `--fit-model`) and `fit_timeout`
+(`JSA_FIT_TIMEOUT` / `--fit-timeout`). When unset, the fit stage uses exactly the same
+backend configuration as every other stage.
+
+The mechanism is `make_backend_factory`'s (`jsa/server.py`) `model_override` /
+`timeout_override` kwargs. **Do not derive the constructor arguments yourself at a new
+call site** — the per-backend mapping is non-obvious (`anthropic` takes
+`anthropic_timeout`, CLI backends take `agent_timeout`, and `google-cli` takes no
+`model` at all because the `agy` CLI has no model flag, so `fit_model` is silently
+inapplicable there). Overriding without going through the factory is what previously
+gave `anthropic` a 600s timeout instead of its 180s one.
+
+Wiring: `server.py` builds a second factory and passes it to `Orchestrator` as
+`fit_backend_factory`; the orchestrator instantiates it **from `job.backend_name`**
+(not `backends[0]`, so the fit gate follows a BF-19 backend switch) and only for the
+`fit_assessment` stage, handing the result to `run_stage(..., fit_backend=...)`.
+`run_stage` falls back to `backend` when it is `None`, which is what every test that
+omits it gets. **`jsa/pipeline/stages.py` must never import `jsa/server.py`** — server
+imports the orchestrator, which imports stages, so that direction is a circular import
+that breaks every entrypoint. The fit backend is *injected*, never constructed inside
+the pipeline.
+
 ---
 
 ## CV structure — single source of truth

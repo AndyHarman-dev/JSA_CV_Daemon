@@ -358,12 +358,18 @@ async def run_stage(
     general_purpose_backend: AgentBackend,
     stage: Stage,
     session: AsyncSession,
+    fit_backend: AgentBackend | None = None,
     output_dir: Path | None = None,
     cv_structure_path: Path | None = None,
     preferences_path: Path | None = None,
-    fit_assessment_backend: AgentBackend = None
 ) -> None:
     """Run one pipeline stage to completion or park.
+
+    `fit_backend` is an optional pre-built backend used *only* for the
+    `fit_assessment` stage, so the cheap one-shot fit gate can run on a different
+    model than the rest of the pipeline (see Settings.fit_model). It is injected by
+    the caller rather than constructed here — the pipeline must not reach back into
+    `jsa.server` for a factory. When None, `general_purpose_backend` runs every stage.
 
     Handles:
     - Fresh sessions: cv_adjust (from pending) and cover_letter (from cv_done)
@@ -399,9 +405,12 @@ async def run_stage(
         # One-shot pre-check: no resume path, no NEED_INPUT, no research. Handled
         # entirely here (FIT → fit_done, anything else → unfit) and returns early.
         base_structure = await _read_base_structure(cv_structure_path)
-        await _run_fit_assessment(job, fit_assessment_backend, session, system_prompt, language_code, base_structure)
+        await _run_fit_assessment(
+            job, fit_backend or general_purpose_backend, session, system_prompt, language_code, base_structure
+        )
         return
-    
+
+
     if stage in (Stage.revising_cv, Stage.revising_cl):
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
         revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id

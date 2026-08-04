@@ -16,10 +16,13 @@ class Settings(BaseSettings):
     db_path: Path = Path.home() / ".jsa" / "jsa.sqlite"
     port: int = 8765
     no_browser: bool = False
-    fit_assessment_model: str = "claude-haiku-4-5"  # Model for fit assessment backend
     model: str = "claude-haiku-4-5"       # Claude model ID for claude-cli and anthropic backends; overridable via JSA_MODEL
     anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT
     agent_timeout: float = 600.0         # Timeout for CLI backends (claude-cli, google-cli), via JSA_AGENT_TIMEOUT
+    fit_model: str | None = None         # Model for the fit_assessment stage only, via JSA_FIT_MODEL / --fit-model.
+                                         # None → the fit stage uses the same model as every other stage (`model`).
+    fit_timeout: float | None = None     # Per-reply timeout for the fit_assessment stage only, via JSA_FIT_TIMEOUT.
+                                         # None → the backend's normal timeout (anthropic_timeout / agent_timeout).
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
     dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
     select_language: bool = False          # --select-language: show the full-screen boot gate (language picker + boot log) before the dashboard on first run

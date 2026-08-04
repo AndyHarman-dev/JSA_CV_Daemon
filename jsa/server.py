@@ -14,7 +14,6 @@ from fastapi.responses import FileResponse as _FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from jsa.agents.base import AgentBackend
-from jsa.agents.fit_assessment import FitAssessmentBackend
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.events.bus import bus
@@ -29,27 +28,36 @@ from jsa.agents.registry import backend_for
 logger = logging.getLogger(__name__)
 
 
-def make_backend_factory(settings: Settings) -> Callable[[str], AgentBackend]:
+def make_backend_factory(
+    settings: Settings,
+    *,
+    model_override: str | None = None,
+    timeout_override: float | None = None,
+) -> Callable[[str], AgentBackend]:
     """Instantiate a backend by name, forwarding the appropriate settings.
 
     Shared by the app's startup (orchestrator + the CV-structure infer endpoint) and
     the CLI's one-shot bootstrap infer call, so both construct backends identically.
+
+    The two overrides exist so a caller can swap the model and/or timeout *without*
+    re-deriving the per-backend argument mapping (anthropic takes `anthropic_timeout`,
+    CLI backends take `agent_timeout`, and `google-cli` takes no model at all). Both
+    default to None, meaning "use the settings value". The `fit_assessment` stage is
+    the one caller that passes them — see `Settings.fit_model` / `Settings.fit_timeout`.
     """
 
     def _backend_factory(name: str) -> AgentBackend:
+        model = settings.model if model_override is None else model_override
         if name == "anthropic":
-            return backend_for(
-                "anthropic",
-                model=settings.model,
-                timeout=settings.anthropic_timeout,
-            )
+            timeout = settings.anthropic_timeout if timeout_override is None else timeout_override
+            return backend_for("anthropic", model=model, timeout=timeout)
+
+        timeout = settings.agent_timeout if timeout_override is None else timeout_override
         if name == "claude-cli":
-            return backend_for(name, model=settings.model, timeout=settings.agent_timeout)
-
-        if name == "fit-assessment":
-            return FitAssessmentBackend(model=settings.fit_assessment_model, timeout=settings.agent_timeout)
-
-        return backend_for(name, timeout=settings.agent_timeout)
+            return backend_for(name, model=model, timeout=timeout)
+        # google-cli: GoogleCliBackend.__init__ takes no `model` — the agy CLI has no
+        # model flag — so a model override is silently inapplicable to that backend.
+        return backend_for(name, timeout=timeout)
 
     return _backend_factory
 
@@ -119,6 +127,13 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
             session_factory,
             _backend_factory,
             settings.backends,
+            # Separate model/timeout for the one-shot fit gate only. Inert (identical to
+            # _backend_factory) unless JSA_FIT_MODEL / JSA_FIT_TIMEOUT is set.
+            fit_backend_factory=make_backend_factory(
+                settings,
+                model_override=settings.fit_model,
+                timeout_override=settings.fit_timeout,
+            ),
             output_dir=settings.output_dir,
             cv_structure_path=settings.cv_structure_path,
             preferences_path=settings.preferences_path,

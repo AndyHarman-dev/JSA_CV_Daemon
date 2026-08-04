@@ -99,6 +99,8 @@ def main(
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory for generated PDFs"),
     backend: Optional[str] = typer.Option(None, "--backend", help="AI backend (single): claude-cli | google-cli | anthropic (backward-compat alias for --backends)"),
     backends: Optional[str] = typer.Option(None, "--backends", help="Comma-separated ordered backend chain, e.g. claude-cli,google-cli"),
+    fit_model: Optional[str] = typer.Option(None, "--fit-model", help="Model for the fit-assessment stage only (e.g. a cheaper/faster one). Defaults to the same model as every other stage. No effect on google-cli, which has no model flag."),
+    fit_timeout: Optional[float] = typer.Option(None, "--fit-timeout", help="Per-reply timeout in seconds for the fit-assessment stage only. Defaults to the backend's normal timeout."),
     db: Optional[Path] = typer.Option(None, "--db", help="SQLite database path"),
     port: Optional[int] = typer.Option(None, "--port", help="Port for the local web server"),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser on start", is_flag=True),
@@ -144,6 +146,13 @@ def main(
             raise typer.Exit(code=1)
         overrides["backend"] = backend
         overrides["backends"] = [backend]
+
+    # Pass-through, unvalidated: unlike backends there is no model registry to check
+    # against, and the set of valid model IDs changes outside this codebase.
+    if fit_model is not None:
+        overrides["fit_model"] = fit_model
+    if fit_timeout is not None:
+        overrides["fit_timeout"] = fit_timeout
 
     if db is not None:
         overrides["db_path"] = db

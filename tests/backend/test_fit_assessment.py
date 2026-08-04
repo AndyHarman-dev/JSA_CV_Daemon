@@ -12,6 +12,7 @@ Uses FakeAgentBackend (scripted replies) + in-memory SQLite, mirroring test_stag
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -19,11 +20,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from jsa.agents.base import AgentReply
+from jsa.agents.base import AgentLimitReached, AgentReply
+from jsa.config import Settings
 from jsa.db import repo
 from jsa.db.models import Base, Document, Job, JobState, Message, Stage
-from jsa.pipeline.orchestrator import _next_stage_for
-from jsa.pipeline.stages import _parse_fit_verdict, run_stage
+from jsa.pipeline.orchestrator import Orchestrator, _next_stage_for
+from jsa.pipeline.stages import PausedForInput, _parse_fit_verdict, run_stage
+from jsa.server import make_backend_factory
 from jsa.pipeline.state_machine import InvalidTransition, transition
 from tests.backend.fakes.fake_backend import CapturingBackend, FakeAgentBackend
 
@@ -89,7 +92,7 @@ async def _run_fit(session: AsyncSession, job: Job, reply: AgentReply) -> Job:
     transition(job, JobState.running, Stage.fit_assessment)
     await session.commit()
     backend = FakeAgentBackend([reply])
-    await run_stage(job, backend, Stage.fit_assessment, session, fit_assessment_backend=backend)
+    await run_stage(job, backend, Stage.fit_assessment, session)
     return await repo.get_job(session, job.id)
 
 
@@ -114,8 +117,7 @@ class TestFitAssessmentConsumesBaseStructure:
         backend = _CapturingBackend([_final("FIT")])
         await run_stage(
             job, backend, Stage.fit_assessment, session, 
-            cv_structure_path=structure_path, 
-            fit_assessment_backend=backend
+            cv_structure_path=structure_path,
         )
 
         msg = backend.captured_initial_msg
@@ -132,7 +134,7 @@ class TestFitAssessmentConsumesBaseStructure:
         await session.commit()
 
         backend = _CapturingBackend([_final("FIT")])
-        await run_stage(job, backend, Stage.fit_assessment, session, cv_structure_path=missing, fit_assessment_backend=backend)
+        await run_stage(job, backend, Stage.fit_assessment, session, cv_structure_path=missing)
 
         msg = backend.captured_initial_msg
         assert msg is not None
@@ -236,7 +238,7 @@ class TestFitAssessmentStage:
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.fit_assessment)
         await session.commit()
-        await run_stage(job, NoSentinelBackend([]), Stage.fit_assessment, session, fit_assessment_backend=NoSentinelBackend([]))
+        await run_stage(job, NoSentinelBackend([]), Stage.fit_assessment, session)
 
         refreshed = await repo.get_job(session, job.id)
         assert refreshed.state == JobState.unfit
@@ -333,3 +335,214 @@ class TestRunnable:
 
         runnable = await repo.list_runnable_jobs(session)
         assert job.id not in {j.id for j in runnable}
+
+
+# ---------------------------------------------------------------------------
+# Separate fit-assessment model (Settings.fit_model / --fit-model)
+# ---------------------------------------------------------------------------
+
+
+class TestFitBackendInjection:
+    """run_stage's `fit_backend` param: the fit gate may run on a different backend
+    instance (different model) than the rest of the pipeline. Injected by the caller —
+    stages.py must never construct it, or jsa.pipeline <-> jsa.server goes circular."""
+
+    async def test_injected_fit_backend_runs_the_stage(self, session):
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+
+        main = CapturingBackend([_final("FIT\nmain backend should not be used")])
+        fit = CapturingBackend([_final("FIT\ngood match")])
+
+        await run_stage(job, main, Stage.fit_assessment, session, fit_backend=fit)
+
+        assert fit.captured_initial_msg is not None, "fit_backend should have run the stage"
+        assert main.captured_initial_msg is None, "main backend must not be touched"
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.fit_done
+
+    async def test_falls_back_to_main_backend_when_not_injected(self, session):
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+
+        main = CapturingBackend([_final("FIT\ngood match")])
+        await run_stage(job, main, Stage.fit_assessment, session)
+
+        assert main.captured_initial_msg is not None
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.fit_done
+
+    async def test_unfit_verdict_from_injected_backend_is_honoured(self, session):
+        """The substituted model's verdict drives the gate — including the UNFIT path
+        and its reason, which is what surfaces in the frontend modal."""
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+
+        fit = FakeAgentBackend([_final("UNFIT\nno Kubernetes experience")])
+        await run_stage(
+            job, FakeAgentBackend([]), Stage.fit_assessment, session, fit_backend=fit
+        )
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.unfit
+        assert "Kubernetes" in (refreshed.fit_reason or "")
+
+    async def test_fit_backend_is_ignored_by_non_fit_stages(self, session):
+        """`fit_backend` is read only in the fit_assessment branch; cv_adjust must still
+        use the main backend even when one is passed."""
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+        await repo.checkpoint(session, job, JobState.fit_done, None)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        main = CapturingBackend([_needs_input("Which team?")])
+        never = CapturingBackend([_final("should never run")])
+
+        with pytest.raises(PausedForInput):
+            await run_stage(job, main, Stage.cv_adjust, session, fit_backend=never)
+
+        assert main.captured_initial_msg is not None
+        assert never.captured_initial_msg is None
+
+
+class TestBackendFactoryOverrides:
+    """make_backend_factory's model_override / timeout_override — the mechanism behind
+    Settings.fit_model. Critically, overriding must NOT flatten the per-backend timeout
+    mapping (anthropic uses anthropic_timeout, CLI backends use agent_timeout)."""
+
+    @staticmethod
+    def _settings(**overrides) -> Settings:
+        base = dict(
+            model="claude-opus-4-5",
+            anthropic_timeout=180.0,
+            agent_timeout=600.0,
+            fit_model=None,
+            fit_timeout=None,
+        )
+        base.update(overrides)
+        return Settings(**base)
+
+    def _fit_factory(self, settings: Settings):
+        """Mirrors server.py's orchestrator wiring."""
+        return make_backend_factory(
+            settings,
+            model_override=settings.fit_model,
+            timeout_override=settings.fit_timeout,
+        )
+
+    def test_no_override_is_indistinguishable_from_the_main_factory(self):
+        """Feature is inert until configured: fit_model=None must not change anything."""
+        settings = self._settings()
+        for name in ("anthropic", "claude-cli"):
+            main = make_backend_factory(settings)(name)
+            fit = self._fit_factory(settings)(name)
+            assert fit._model == main._model == "claude-opus-4-5"
+            assert fit._timeout == main._timeout
+
+    def test_fit_model_overrides_only_the_model(self):
+        settings = self._settings(fit_model="claude-haiku-4-5")
+        fit = self._fit_factory(settings)("anthropic")
+        assert fit._model == "claude-haiku-4-5"
+        assert make_backend_factory(settings)("anthropic")._model == "claude-opus-4-5"
+
+    def test_anthropic_keeps_anthropic_timeout_when_fit_timeout_unset(self):
+        """Regression: a single shared fit timeout silently gave anthropic 600s
+        instead of its 180s anthropic_timeout."""
+        settings = self._settings(fit_model="claude-haiku-4-5")
+        assert self._fit_factory(settings)("anthropic")._timeout == 180.0
+        assert self._fit_factory(settings)("claude-cli")._timeout == 600.0
+
+    def test_fit_timeout_applies_to_every_backend_when_set(self):
+        settings = self._settings(fit_timeout=45.0)
+        for name in ("anthropic", "claude-cli", "google-cli"):
+            assert self._fit_factory(settings)(name)._timeout == 45.0
+
+    def test_google_cli_never_receives_a_model_kwarg(self):
+        """GoogleCliBackend.__init__ takes no `model` — passing one is a TypeError."""
+        settings = self._settings(fit_model="gemini-2.5-flash-lite")
+        backend = self._fit_factory(settings)("google-cli")
+        assert backend.name == "google-cli"
+        assert not hasattr(backend, "_model")
+
+
+async def _run_orch_until(orch, factory, job_id: str, target: JobState, timeout: float = 10.0) -> None:
+    """Run the orchestrator until `job_id` reaches `target`, then stop it."""
+    task = asyncio.create_task(orch.run())
+    try:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            async with factory() as s:
+                job = await repo.get_job(s, job_id)
+            if job is not None and job.state == target:
+                return
+            if asyncio.get_event_loop().time() >= deadline:
+                raise TimeoutError(f"Job {job_id} did not reach {target} within {timeout}s")
+            await asyncio.sleep(0.05)
+    finally:
+        orch._stopping = True
+        orch.kick()
+        await asyncio.wait_for(task, timeout=5.0)
+
+
+class TestOrchestratorFitBackendWiring:
+    """The orchestrator half of the wiring: which name the fit factory is called with,
+    and that a limit signal from the fit backend still reaches the BF-19 chain."""
+
+    async def test_fit_factory_is_built_from_the_jobs_active_backend(self, session_factory):
+        """BF-19: after a limit-triggered switch, job.backend_name has moved down the
+        chain — the fit gate must follow it rather than pinning to backends[0]."""
+        async with session_factory() as s:
+            job = await _insert_job(s)
+            job.backend_name = "google-cli"  # chain[1], i.e. post-switch
+            await s.commit()
+            job_id = job.id
+
+        seen: list[str] = []
+
+        def fit_factory(name: str):
+            seen.append(name)
+            return FakeAgentBackend([_final("UNFIT\nnot a match")])
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: FakeAgentBackend([]),
+            backends=["claude-cli", "google-cli"],
+            fit_backend_factory=fit_factory,
+        )
+        await _run_orch_until(orch, session_factory, job_id, JobState.unfit)
+
+        assert seen == ["google-cli"], f"fit factory should follow job.backend_name, got {seen}"
+
+    async def test_limit_from_fit_backend_walks_the_chain_instead_of_unfit(self, session_factory):
+        """A quota signal on the fit gate is the chain's job, not a verdict.
+        _run_fit_assessment catches only ProtocolError, so AgentLimitReached must
+        propagate to _handle_limit_reached — never get swallowed into `unfit`."""
+        async with session_factory() as s:
+            job = await _insert_job(s)
+            job_id = job.id
+
+        class _LimitBackend(FakeAgentBackend):
+            def __init__(self) -> None:
+                super().__init__([])
+
+            async def start_session(self, system_prompt, initial_user_msg):
+                raise AgentLimitReached("429 Too Many Requests")
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: FakeAgentBackend([]),
+            backends=["claude-cli", "google-cli"],
+            fit_backend_factory=lambda name: _LimitBackend(),
+        )
+        # Both chain entries raise → chain exhausted → failed (not unfit).
+        await _run_orch_until(orch, session_factory, job_id, JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job_id)
+        assert refreshed.state == JobState.failed
+        assert "Backend limit reached" in (refreshed.error or "")

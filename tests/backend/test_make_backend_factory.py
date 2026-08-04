@@ -2,7 +2,6 @@ import pytest
 
 from jsa.agents.anthropic_api import AnthropicAPIBackend
 from jsa.agents.claude_cli import ClaudeCliBackend
-from jsa.agents.fit_assessment import FitAssessmentBackend
 from jsa.agents.google_cli import GoogleCliBackend
 from jsa.config import Settings
 from jsa.server import make_backend_factory
@@ -29,13 +28,6 @@ def test_make_backend_factory_google_cli():
     agent = backend("google-cli")
     assert isinstance(agent, GoogleCliBackend)
 
-
-def test_make_backend_factory_fit_assessment():
-    settings = Settings()
-    backend = make_backend_factory(settings)
-
-    agent = backend("fit-assessment")
-    assert isinstance(agent, FitAssessmentBackend)
 
 def test_make_backend_factory_not_a_backend():
     settings = Settings()

@@ -231,7 +231,7 @@ class TestStaleFitAssessmentDiscarded:
             backend = FakeAgentBackend([_fit_reply()])
 
             with pytest.raises(stages.StaleJobResult):
-                await stages.run_stage(job_a, backend, Stage.fit_assessment, session_a, fit_assessment_backend=backend)
+                await stages.run_stage(job_a, backend, Stage.fit_assessment, session_a)
         finally:
             await session_a.close()
 

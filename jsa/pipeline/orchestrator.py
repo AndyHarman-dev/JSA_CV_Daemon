@@ -90,6 +90,9 @@ class Orchestrator:
         wakeup: Event set by kick() to wake the run() loop.
         _db_session_factory: Callable that returns a new async SQLAlchemy session.
         _backend_factory: Callable(name: str) -> AgentBackend — instantiates a backend by name.
+        _fit_backend_factory: Same, but for the fit_assessment stage only (separate
+            model/timeout — see Settings.fit_model). None → fit_assessment reuses
+            _backend_factory, which is what every test that omits it gets.
         _backends: Ordered list of backend names forming the fallback chain (BF-19).
         _stopping: Flag to signal graceful shutdown.
     """
@@ -100,6 +103,7 @@ class Orchestrator:
         backend_factory: Callable,
         backends: list[str] | None = None,
         max_parallel: int = 5,
+        fit_backend_factory: Callable | None = None,
         output_dir: Path | None = None,
         cv_structure_path: Path | None = None,
         preferences_path: Path | None = None,
@@ -108,6 +112,9 @@ class Orchestrator:
         self.wakeup = asyncio.Event()
         self._db_session_factory = db_session_factory
         self._backend_factory = _wrap_factory(backend_factory)
+        self._fit_backend_factory = (
+            _wrap_factory(fit_backend_factory) if fit_backend_factory is not None else None
+        )
         self._backends = backends if backends is not None else ["claude-cli"]
         self._output_dir = output_dir
         self._cv_structure_path = cv_structure_path
@@ -292,8 +299,6 @@ class Orchestrator:
                     )
                     return
 
-                fit_assesment_backend = self._backend_factory("fit-assessment")
-
                 # Per-job backend selection (BF-19):
                 # Use job.backend_name if already set; otherwise assign backends[0].
                 if job.backend_name is None:
@@ -304,12 +309,18 @@ class Orchestrator:
 
                 active_backend_name = job.backend_name
                 backend = self._backend_factory(active_backend_name)
+                # Built from active_backend_name, not backends[0], so the fit gate
+                # follows the job after a BF-19 limit-triggered backend switch. Only
+                # constructed for the stage that uses it.
+                fit_backend = None
+                if stage == Stage.fit_assessment and self._fit_backend_factory is not None:
+                    fit_backend = self._fit_backend_factory(active_backend_name)
                 await stages.run_stage(
                     job, backend, stage, session,
+                    fit_backend=fit_backend,
                     output_dir=self._output_dir,
                     cv_structure_path=self._cv_structure_path,
                     preferences_path=self._preferences_path,
-                    fit_assessment_backend=fit_assesment_backend
                 )
 
         except PausedForInput:
