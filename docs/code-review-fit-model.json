@@ -21,10 +21,9 @@
       "jsa/pipeline/stages.py",
       "CLAUDE.md",
       "tests/backend/test_fit_assessment.py",
-      "tests/backend/test_make_backend_factory.py",
-      "tests/README.md"
+      "tests/backend/test_make_backend_factory.py"
     ],
-    "excluded": "The branch also carries an unrelated bulk deletion of graphify-out/ (~400k lines of generated graph artifacts) and .claude/ command files. These were excluded from review as out of scope for the fit_model feature."
+    "excluded": "The branch also carries an unrelated bulk deletion of graphify-out/ (~400k lines of generated graph artifacts) and .claude/ command files. These were excluded from review as out of scope for the fit_model feature. tests/README.md (+313 lines, from the separate commit aae5885 'add readme for tests') is a general testing-conventions guide rather than fit_model code; it was skimmed for contradictions with the project's fakes-over-mocks convention and found consistent, but was not reviewed in depth."
   },
 
   "verification": {
@@ -77,7 +76,7 @@
       "line": 352,
       "summary": "A too-small --fit-timeout produces an AgentTimeout that no pipeline handler catches, so it reaches the orchestrator's generic `except Exception` and marks the job `failed` — a hard job failure now reachable purely by configuration.",
       "failure_scenario": "User sets --fit-timeout 5 to keep the cheap pre-check snappy. The fit model takes 7s. AgentTimeout propagates out of _run_fit_assessment (which catches only ProtocolError), past run_stage, into the orchestrator's generic handler, and the job is marked `failed` rather than being retried, marked `unfit`, or falling back to the main backend. The user sees an opaque failure with no hint that the fit timeout caused it.",
-      "evidence": "AgentTimeout is imported and handled only in jsa/pipeline/infer_structure.py:99. It appears nowhere in stages.py or orchestrator.py. _run_fit_assessment's only except clause is ProtocolError (stages.py:765).",
+      "evidence": "AgentTimeout is imported and handled only in jsa/pipeline/infer_structure.py:99. It appears nowhere in stages.py or orchestrator.py. _run_fit_assessment's only except clause is ProtocolError (stages.py:765). The terminal behavior was read directly rather than inferred: _run_one's handler chain (orchestrator.py:336-370) catches CancelledError, AgentLimitReached, and GoogleCliSessionExpiredError specifically, then `except Exception` at 352 calls repo.mark_failed(err_session, job_id, str(exc)) at 357 and publishes an ErrorEvent. There is no retry interception on this path — BF-15 smart retry lives in stages.py's _self_heal_final, which handles malformed FINAL content and is never reached because _run_fit_assessment returns before it.",
       "recommendation": "Either treat an AgentTimeout on the fit stage the same way ProtocolError is treated (fail to the modal with a reason, consistent with 'verdict parsing fails TO the modal, never silently past it'), or at minimum validate fit_timeout > 0 and surface the timeout value in the job's error text.",
       "note": "This is a pre-existing gap in AgentTimeout handling, but the new flag makes it substantially easier to trigger."
     },
@@ -168,6 +167,10 @@
     {
       "item": "Unconditional construction of the second factory in create_app even when the feature is unconfigured",
       "conclusion": "Acceptable. Backends are stateless apart from model/timeout, so the extra instance per fit dispatch is negligible and the code path stays uniform."
+    },
+    {
+      "item": "_run_fit_assessment's ProtocolError path returns without calling end_session(handle), leaking the session",
+      "conclusion": "Out of scope — pre-existing and untouched by this diff. Noted here so it is not mistaken for something the fit_model change introduced. Worth a separate follow-up: with fit_model set, the leaked session belongs to the substituted model rather than the main one."
     }
   ],
 
