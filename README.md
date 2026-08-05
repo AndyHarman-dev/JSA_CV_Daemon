@@ -209,6 +209,8 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | `--port` | `8765` | `JSA_PORT` | Port for the local web server |
 | `--no-browser` | false | — | Skip opening the browser automatically |
 | `--select-language` | false | — | Show a full-screen language picker + boot sequence before the dashboard on launch — see [Language preference](#language-preference) |
+| `--fit-model` | none | `JSA_FIT_MODEL` | Model for the fit-assessment stage only (e.g. a cheaper/faster one). Defaults to the same model as every other stage. No effect on `google-cli`, which has no model flag |
+| `--fit-timeout` | none | `JSA_FIT_TIMEOUT` | Per-reply timeout in seconds for the fit-assessment stage only. Defaults to the backend's normal timeout |
 
 ---
 
@@ -248,6 +250,8 @@ Optional environment variables for this backend:
 | `JSA_MODEL` | `claude-haiku-4-5` | Model name to use (also applies to `claude-cli`) |
 | `JSA_ANTHROPIC_TIMEOUT` | `180` | Per-request timeout in seconds |
 | `JSA_AGENT_TIMEOUT` | `600` | Per-request timeout for CLI backends (`claude-cli`, `google-cli`) |
+| `JSA_FIT_MODEL` | none | Model for the fit-assessment stage only; see [CLI flags](#cli-flags) |
+| `JSA_FIT_TIMEOUT` | none | Per-reply timeout for the fit-assessment stage only; see [CLI flags](#cli-flags) |
 
 New backends register in `jsa/agents/registry.py` by adding an entry to `_REGISTRY`, keyed by the CLI-flag string, and subclassing `AgentBackend`.
 

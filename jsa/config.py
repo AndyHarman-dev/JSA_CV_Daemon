@@ -49,6 +49,22 @@ class Settings(BaseSettings):
             return [b.strip() for b in v.split(",") if b.strip()]
         return list(v)  # type: ignore[arg-type]
 
+    @field_validator("fit_model", mode="before")
+    @classmethod
+    def _blank_fit_model_to_none(cls, v: object) -> object:
+        """An empty ``--fit-model ""`` should mean "unset", not a literal empty model ID
+        forwarded to the backend constructor."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("fit_timeout")
+    @classmethod
+    def _validate_fit_timeout(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"fit_timeout must be > 0, got {v}")
+        return v
+
     @field_validator("backends")
     @classmethod
     def _validate_backends(cls, v: list[str]) -> list[str]:

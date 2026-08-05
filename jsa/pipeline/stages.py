@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError
 from jsa.render.registry import renderer_for
 from jsa.render.serialize import cover_letter_to_markdown, cv_to_markdown
@@ -406,10 +406,14 @@ async def run_stage(
         # entirely here (FIT → fit_done, anything else → unfit) and returns early.
         base_structure = await _read_base_structure(cv_structure_path)
         await _run_fit_assessment(
-            job, fit_backend or general_purpose_backend, session, system_prompt, language_code, base_structure
+            job,
+            fit_backend if fit_backend is not None else general_purpose_backend,
+            session,
+            system_prompt,
+            language_code,
+            base_structure,
         )
         return
-
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
@@ -686,6 +690,13 @@ _FIT_FALLBACK_REASON = (
     "before continuing."
 )
 
+# Shown in the modal when the fit-assessment backend times out (fail-to-modal,
+# same contract as _FIT_FALLBACK_REASON — see AgentTimeout handling below).
+_FIT_TIMEOUT_REASON = (
+    "The fit assessment timed out before returning a verdict. Review this job "
+    "manually before continuing."
+)
+
 
 def _build_fit_user_msg(job: Job, base_structure: CVDocument | None) -> str:
     """Build the (single) user message for the fit-assessment stage.
@@ -762,9 +773,12 @@ async def _run_fit_assessment(
 
     try:
         handle, reply = await backend.start_session(system_prompt, initial_user_msg)
-    except ProtocolError:
-        # A malformed / sentinel-less reply is "unparseable" → fail to the modal
-        # (closed), consistent with the verdict contract, rather than failing the job.
+    except (ProtocolError, AgentTimeout) as exc:
+        # A malformed / sentinel-less reply, or a fit-backend timeout (e.g. an
+        # aggressively low --fit-timeout), is "unparseable" → fail to the modal
+        # (closed), consistent with the verdict contract, rather than failing the
+        # job outright. Without this, AgentTimeout would propagate past run_stage
+        # into the orchestrator's generic handler and hard-fail the job.
         #
         # Same stale-result guard as run_stage's post-reply check (see StaleJobResult):
         # fit_assessment is the FIRST stage and runs before run_stage's guard is ever
@@ -774,7 +788,7 @@ async def _run_fit_assessment(
         current_state = await repo.get_state_fresh(session, job.id)
         if current_state != JobState.running:
             raise StaleJobResult(job.id, current_state)
-        job.fit_reason = _FIT_FALLBACK_REASON
+        job.fit_reason = _FIT_TIMEOUT_REASON if isinstance(exc, AgentTimeout) else _FIT_FALLBACK_REASON
         await checkpoint(session, job, JobState.unfit, None)
         await _publish_fit_outcome(job, is_fit=False)
         return

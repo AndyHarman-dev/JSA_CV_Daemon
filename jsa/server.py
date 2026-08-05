@@ -123,6 +123,23 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
         _backend_factory = make_backend_factory(settings)
         app.state.backend_factory = _backend_factory
 
+        if settings.fit_model is not None:
+            # Applies per active backend at dispatch time (make_backend_factory), so log
+            # once here rather than silently no-op'ing. google-cli is the only backend
+            # where fit_model has no effect (GoogleCliBackend takes no model kwarg) — for
+            # a mixed chain, report both facts rather than picking one (a chain with any
+            # non-google-cli member still gets the override on that member).
+            applicable = [b for b in settings.backends if b != "google-cli"]
+            if applicable:
+                logger.info(
+                    "fit gate will use model %s on %s", settings.fit_model, ", ".join(applicable)
+                )
+            if "google-cli" in settings.backends:
+                logger.info(
+                    "fit_model=%s does not apply to google-cli (no model flag)",
+                    settings.fit_model,
+                )
+
         orchestrator = Orchestrator(
             session_factory,
             _backend_factory,

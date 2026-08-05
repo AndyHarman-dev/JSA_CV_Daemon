@@ -16,6 +16,7 @@ import asyncio
 import json
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -244,6 +245,25 @@ class TestFitAssessmentStage:
         assert refreshed.state == JobState.unfit
         assert refreshed.fit_reason
 
+    async def test_agent_timeout_parks_as_unfit_not_failed(self, session):
+        """A fit-backend timeout (e.g. an aggressively low --fit-timeout) -> unfit,
+        not a hard job failure — same fail-to-modal contract as ProtocolError."""
+        from jsa.agents.base import AgentTimeout
+        from jsa.pipeline.stages import _FIT_TIMEOUT_REASON
+
+        class TimingOutBackend(FakeAgentBackend):
+            async def start_session(self, system_prompt, initial_user_msg):
+                raise AgentTimeout("fit backend timed out")
+
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+        await run_stage(job, TimingOutBackend([]), Stage.fit_assessment, session)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.unfit
+        assert refreshed.fit_reason == _FIT_TIMEOUT_REASON
+
     async def test_no_document_is_written(self, session):
         """The assessment stores its reason in a column, not a Document."""
         job = await _insert_job(session)
@@ -468,6 +488,24 @@ class TestBackendFactoryOverrides:
         backend = self._fit_factory(settings)("google-cli")
         assert backend.name == "google-cli"
         assert not hasattr(backend, "_model")
+
+
+class TestFitSettingsValidation:
+    """Settings-level guards on fit_model / fit_timeout (jsa/config.py)."""
+
+    def test_fit_timeout_zero_is_rejected(self):
+        with pytest.raises(ValidationError):
+            Settings(fit_timeout=0)
+
+    def test_fit_timeout_negative_is_rejected(self):
+        with pytest.raises(ValidationError):
+            Settings(fit_timeout=-5.0)
+
+    def test_fit_timeout_positive_is_accepted(self):
+        assert Settings(fit_timeout=45.0).fit_timeout == 45.0
+
+    def test_blank_fit_model_becomes_none(self):
+        assert Settings(fit_model="").fit_model is None
 
 
 async def _run_orch_until(orch, factory, job_id: str, target: JobState, timeout: float = 10.0) -> None:

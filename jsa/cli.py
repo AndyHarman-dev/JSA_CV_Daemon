@@ -16,6 +16,7 @@ from typing import Optional
 
 import typer
 import uvicorn
+from pydantic import ValidationError
 
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
@@ -165,7 +166,13 @@ def main(
     if select_language:
         overrides["select_language"] = True
 
-    settings = Settings(**overrides)
+    try:
+        settings = Settings(**overrides)
+    except ValidationError as exc:
+        # Catches validators pydantic itself must run (e.g. fit_timeout > 0) that have
+        # no CLI-level pre-check the way --backend/--backends do above.
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
     # Resolve to absolute path now so file-serving works regardless of where
     # the user's shell CWD is when they restart (e.g. after cd frontend && npm run build).
     settings.output_dir = settings.output_dir.resolve()
