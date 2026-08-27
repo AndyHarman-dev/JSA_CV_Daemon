@@ -267,18 +267,63 @@ class TestApproveJob:
         resp = await client.post("/api/jobs/aabbccdd00112233/approve")
         assert resp.status_code == 400
 
-    async def test_approve_with_documents_calls_renderer(self, client, db, tmp_path, monkeypatch):
-        """A review job with both documents should succeed when renderer is patched."""
+    async def test_approve_does_not_render(self, client, db, tmp_path, monkeypatch):
+        """Approve only transitions review -> approved; it reads pre-existing pdf_path
+        values and does not invoke the renderer at all (rendering happens on review-entry
+        — see CLAUDE.md -> "Renderer invocation")."""
         from tests.backend.fakes.fake_renderer import FakeRenderer
 
         fake_renderer = FakeRenderer()
         monkeypatch.setattr("jsa.api.routes_jobs.renderer_for", lambda name: fake_renderer)
 
-        # Insert job in review state with both documents
+        # Insert job in review state with both documents, pdf_path already set (as if
+        # pre-rendered on review-entry).
         async with db() as session:
             job_data = _job_data()
             job = await repo.upsert_job(session, job_data)
             job.state = JobState.review
+            cv_doc = Document(
+                job_id=job.id,
+                stage=Stage.cv_adjust,
+                version=1,
+                markdown="# Adjusted CV",
+                pdf_path=str(tmp_path / "cv.pdf"),
+            )
+            cl_doc = Document(
+                job_id=job.id,
+                stage=Stage.cover_letter,
+                version=1,
+                markdown="# Cover Letter",
+                pdf_path=str(tmp_path / "cover_letter.pdf"),
+            )
+            session.add(cv_doc)
+            session.add(cl_doc)
+            await session.commit()
+
+        resp = await client.post("/api/jobs/aabbccdd00112233/approve")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["cv_pdf_path"] == str(tmp_path / "cv.pdf")
+        assert data["cl_pdf_path"] == str(tmp_path / "cover_letter.pdf")
+        assert fake_renderer.calls == []
+
+        async with db() as session:
+            refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.approved
+
+
+class TestExportJob:
+    async def test_export_calls_renderer(self, client, db, tmp_path, monkeypatch):
+        """POST /api/jobs/{id}/export re-renders both documents via the renderer."""
+        from tests.backend.fakes.fake_renderer import FakeRenderer
+
+        fake_renderer = FakeRenderer()
+        monkeypatch.setattr("jsa.api.routes_jobs.renderer_for", lambda name: fake_renderer)
+
+        async with db() as session:
+            job_data = _job_data()
+            job = await repo.upsert_job(session, job_data)
+            job.state = JobState.approved
             cv_doc = Document(
                 job_id=job.id,
                 stage=Stage.cv_adjust,
@@ -295,11 +340,13 @@ class TestApproveJob:
             session.add(cl_doc)
             await session.commit()
 
-        resp = await client.post("/api/jobs/aabbccdd00112233/approve")
-        assert resp.status_code == 200
+        resp = await client.post(
+            f"/api/jobs/{job.id}/export", json={"format": "pdf"}
+        )
+        assert resp.status_code == 200, resp.text
         data = resp.json()
-        assert "cv_pdf_path" in data
-        assert "cl_pdf_path" in data
+        assert "cv_path" in data
+        assert "cl_path" in data
         assert len(fake_renderer.calls) == 2
 
 

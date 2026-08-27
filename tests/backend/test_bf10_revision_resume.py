@@ -50,6 +50,7 @@ from jsa.db.models import (
 from jsa.pipeline.stages import PausedForInput, run_stage
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
+from tests.backend.fakes.finals import cl_final, cv_final
 
 
 # ---------------------------------------------------------------------------
@@ -121,14 +122,6 @@ async def session(session_factory):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _final_reply(content: str) -> AgentReply:
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
-        content=content,
-        kind="final",
-    )
 
 
 def _needs_input_reply(question: str) -> AgentReply:
@@ -234,10 +227,13 @@ class TestRevisingClResumesSendAnswer:
         job = await _insert_job(session)
 
         backend = TrackingFakeBackend([
-            _final_reply("# CV v1"),                                          # cv_adjust
-            _final_reply("# Cover Letter v1"),                                # cover_letter
+            cv_final("CV v1"),                                                # cv_adjust
+            cl_final(),                                                       # cover_letter
             _needs_input_reply("Here is the draft. Type 'finalize' to approve."),  # revising_cl (1st call)
-            _final_reply("# REVISED_CL_CONTENT"),                            # revising_cl (2nd call / resume)
+            cl_final(
+                "REVISED_CL_CONTENT: rewritten per the revision instruction to remove "
+                "the closing phrase and tighten the overall tone throughout."
+            ),  # revising_cl (2nd call / resume)
         ])
 
         # Stage 1: cv_adjust
@@ -338,10 +334,10 @@ class TestRevisingCvResumesSendAnswer:
         job = await _insert_job(session, job_id="bf10cvtest0011aa")
 
         backend = TrackingFakeBackend([
-            _final_reply("# CV v1"),                                          # cv_adjust
-            _final_reply("# Cover Letter v1"),                                # cover_letter
+            cv_final("CV v1"),                                                # cv_adjust
+            cl_final(),                                                       # cover_letter
             _needs_input_reply("Draft ready. Does this look good?"),          # revising_cv (1st call)
-            _final_reply("# REVISED_CV_CONTENT"),                            # revising_cv (2nd call / resume)
+            cv_final("REVISED_CV_CONTENT"),                                   # revising_cv (2nd call / resume)
         ])
 
         # Stage 1: cv_adjust
@@ -446,10 +442,16 @@ class TestSecondRevisionAfterFirstCompletes:
         job = await _insert_job(session, job_id="bf10sec0011aabb")
 
         backend = TrackingFakeBackend([
-            _final_reply("# CV v1"),                        # cv_adjust
-            _final_reply("# Cover Letter v1"),              # cover_letter
-            _final_reply("# REVISED_CV_V2 (short)"),       # first revising_cl — completes immediately
-            _final_reply("# REVISED_CV_V3 (metrics)"),     # second revising_cl — must get second_instruction
+            cv_final("CV v1"),                              # cv_adjust
+            cl_final(),                                     # cover_letter
+            cl_final(
+                "REVISED_CV_V2 (short): the first revision, tightened per the "
+                "instruction to make the summary noticeably shorter and punchier."
+            ),  # first revising_cl — completes immediately
+            cl_final(
+                "REVISED_CV_V3 (metrics): the second revision, adding measurable "
+                "impact metrics to every bullet point across the experience section."
+            ),  # second revising_cl — must get second_instruction
         ])
 
         # Stage 1: cv_adjust
@@ -583,11 +585,17 @@ class TestSecondRevisionAfterFirstParked:
         #   send_message: revising_cl #1 resume → FINAL
         #   send_message: revising_cl #2 fresh → FINAL
         backend = TrackingFakeBackend([
-            _final_reply("# CV v1"),                                              # cv_adjust
-            _final_reply("# Cover Letter v1"),                                    # cover_letter
-            _needs_input_reply("Here is the draft, finalize?"),                   # revising_cl #1 fresh
-            _final_reply("# REVISED_CL_V2 (closing removed)"),                   # revising_cl #1 resume
-            _final_reply("# REVISED_CL_V3 (formal tone)"),                       # revising_cl #2 fresh
+            cv_final("CV v1"),                                                     # cv_adjust
+            cl_final(),                                                            # cover_letter
+            _needs_input_reply("Here is the draft, finalize?"),                    # revising_cl #1 fresh
+            cl_final(
+                "REVISED_CL_V2 (closing removed): the closing phrase has been "
+                "removed and the letter now ends directly after the final paragraph."
+            ),  # revising_cl #1 resume
+            cl_final(
+                "REVISED_CL_V3 (formal tone): the tone has been rewritten to be "
+                "more formal throughout, per the second revision instruction."
+            ),  # revising_cl #2 fresh
         ])
 
         # Stage 1: cv_adjust

@@ -140,6 +140,27 @@ class TestSchemaTolerance:
         md = cv_to_markdown(cv)
         assert "change_log" not in md and "metadata" not in md
 
+    def test_type_discriminator_used_as_name_fallback(self):
+        # A model that emits {"type": "summary", ...} instead of a name/title key must not
+        # lose the section's heading (see jsa/schema/cv.py `_NAME_FALLBACK_KEYS`).
+        cv = CVDocument.model_validate({
+            "contact": {"name": "A", "email": "a@x.com"},
+            "sections": [{"type": "summary", "text": "Seasoned engineer."}],
+        })
+        assert cv.sections[0].name == "Summary"
+        assert cv_has_summary(cv) is True
+        md = cv_to_markdown(cv)
+        assert "## Summary" in md and "Seasoned engineer." in md
+
+    def test_explicit_name_wins_over_type_fallback(self):
+        # An explicit name/title always takes precedence over the type/kind fallback.
+        cv = CVDocument.model_validate({
+            "contact": {"name": "A", "email": "a@x.com"},
+            "sections": [{"name": "Profile", "type": "summary", "text": "Engineer."}],
+        })
+        assert cv.sections[0].name == "Profile"
+        assert "## Profile" in cv_to_markdown(cv)
+
 
 class TestLayoutPolicies:
     """Program-owned layout decisions that don't depend on what the model emits."""

@@ -29,6 +29,7 @@ from jsa.db.models import (
 from jsa.pipeline.orchestrator import Orchestrator
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
+from tests.backend.fakes.finals import cl_final, cv_final, fit_reply
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +91,6 @@ async def _insert_job(factory, **overrides) -> Job:
     return job
 
 
-def _final_reply(content: str = "# Document\nContent here.") -> AgentReply:
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
-        content=content,
-        kind="final",
-    )
-
-
 def _needs_input_reply(question: str = "What is your target role?") -> AgentReply:
     return AgentReply(
         raw=f"<<<NEED_INPUT>>>\n{question}\n<<<END>>>",
@@ -105,11 +98,6 @@ def _needs_input_reply(question: str = "What is your target role?") -> AgentRepl
         kind="needs_input",
         question=question,
     )
-
-
-def _fit_reply() -> AgentReply:
-    """A passing fit-assessment verdict — pending jobs run fit_assessment first."""
-    return AgentReply(raw="<<<FINAL>>>\nFIT\n<<<END>>>", content="FIT", kind="final")
 
 
 async def _poll_job_state(
@@ -173,10 +161,12 @@ class TestPicksUpPendingJob:
         """
         job = await _insert_job(session_factory)
 
+        # A shared backend instance draws one reply per stage in order: fit_assessment,
+        # then cv_adjust, then cover_letter (fit_backend_factory=None → same backend).
+        backend = FakeAgentBackend([fit_reply(), cv_final(), cl_final()])
         orch = Orchestrator(
             db_session_factory=session_factory,
-            # Each factory call produces a fresh backend with one reply.
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Stage output")]),
+            backend_factory=lambda: backend,
         )
 
         # Wait for the full pipeline to reach review.
@@ -196,10 +186,10 @@ class TestPicksUpPendingJob:
         """Pending job goes through cv_adjust then cover_letter and reaches review."""
         job = await _insert_job(session_factory)
 
-        # Each backend factory call gets one fresh reply (one per stage).
+        backend = FakeAgentBackend([fit_reply(), cv_final(), cl_final()])
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Stage output")]),
+            backend_factory=lambda: backend,
         )
 
         await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
@@ -234,7 +224,7 @@ class TestSemaphoreConcurrencyLimit:
         class BlockingBackend(FakeAgentBackend):
             def __init__(self):
                 # One reply per backend instance (called once)
-                super().__init__([_final_reply("# CV")])
+                super().__init__([cv_final()])
 
             async def start_session(self, system_prompt, initial_user_msg):
                 concurrent_current[0] += 1
@@ -288,11 +278,12 @@ class TestSemaphoreConcurrencyLimit:
 class TestKickUnblocksLoop:
     async def test_kick_causes_newly_runnable_job_to_be_processed(self, session_factory):
         """Orchestrator is waiting; after kick() is called with a new job, it processes it."""
-        # Each factory call creates a fresh backend with one reply. The pipeline
-        # runs two stages (cv_adjust, cover_letter) before resting at review.
+        # A shared backend instance draws one reply per stage in order: fit_assessment,
+        # then cv_adjust, then cover_letter, before resting at review.
+        backend = FakeAgentBackend([fit_reply(), cv_final(), cl_final()])
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Output")]),
+            backend_factory=lambda: backend,
         )
         orch_task = asyncio.create_task(orch.run())
 
@@ -329,7 +320,7 @@ class TestPausedForInputSilent:
         job = await _insert_job(session_factory)
 
         # fit_assessment runs first (FIT), then cv_adjust parks on NEED_INPUT.
-        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What is your role?")])
+        backend = FakeAgentBackend([fit_reply(), _needs_input_reply("What is your role?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend,
@@ -349,7 +340,7 @@ class TestPausedForInputSilent:
         job = await _insert_job(session_factory)
 
         # fit_assessment runs first (FIT), then cv_adjust parks on NEED_INPUT.
-        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What is your role?")])
+        backend = FakeAgentBackend([fit_reply(), _needs_input_reply("What is your role?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend,
@@ -429,7 +420,7 @@ class TestAwaitingInputResume:
         # Step 1: Run the job until it parks on cv_adjust
         job = await _insert_job(session_factory)
 
-        backend_park = FakeAgentBackend([_needs_input_reply("What is your target role?")])
+        backend_park = FakeAgentBackend([fit_reply(), _needs_input_reply("What is your target role?")])
         orch_park = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend_park,
@@ -447,13 +438,12 @@ class TestAwaitingInputResume:
             fu.answered_at = datetime.utcnow()
             await s.commit()
 
-        # Step 3: Run a new orchestrator. The resume stage (cv_adjust) uses
-        # one reply; the subsequent cover_letter stage uses another. Use a
-        # factory that creates fresh 1-reply backends so the pipeline never
-        # runs out of replies.
+        # Step 3: Run a new orchestrator. restore_session pops nothing, so the resume
+        # stage (cv_adjust) consumes the first scripted reply; cover_letter the second.
+        backend_resume = FakeAgentBackend([cv_final(), cl_final()])
         orch_resume = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Stage output")]),
+            backend_factory=lambda: backend_resume,
         )
         # Kick immediately so it picks up the answered job
         orch_resume.kick()
@@ -471,7 +461,7 @@ class TestAwaitingInputResume:
         """A job in awaiting_input with unanswered FollowUp is NOT dispatched."""
         job = await _insert_job(session_factory)
 
-        backend_park = FakeAgentBackend([_fit_reply(), _needs_input_reply("What is your availability?")])
+        backend_park = FakeAgentBackend([fit_reply(), _needs_input_reply("What is your availability?")])
         orch_park = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend_park,

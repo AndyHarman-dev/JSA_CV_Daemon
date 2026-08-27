@@ -29,7 +29,7 @@ from jsa.pipeline.orchestrator import Orchestrator
 from jsa.pipeline.stages import PausedForInput, run_stage
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend
-from tests.backend.fakes.finals import cl_final, cv_final
+from tests.backend.fakes.finals import cl_final, cv_final, fit_reply
 
 
 # ---------------------------------------------------------------------------
@@ -205,9 +205,10 @@ class TestPointA_PickedUpLogEvent:
 
         mock_pub = AsyncMock()
         with patch("jsa.events.bus.bus.publish", mock_pub):
+            backend = FakeAgentBackend([fit_reply(), cv_final(), cl_final()])
             orch = Orchestrator(
                 db_session_factory=session_factory,
-                backend_factory=lambda: FakeAgentBackend([_final_reply()]),
+                backend_factory=lambda: backend,
             )
             await _run_orchestrator_until(
                 orch, session_factory, [job.id], JobState.review
@@ -226,10 +227,9 @@ class TestPointA_PickedUpLogEvent:
             f"Got log events: {log_events}"
         )
 
-        first_pickup = pickup_events[0]
-        assert "cv_adjust" in first_pickup["text"], (
-            f"Expected 'cv_adjust' in pickup log text, got: {first_pickup['text']}"
-        )
+        # fit_assessment runs first — pin the new ordering rather than loosening it.
+        assert "fit_assessment" in pickup_events[0]["text"]
+        assert any("cv_adjust" in e["text"] for e in pickup_events)
 
     async def test_log_event_includes_stage_name(self, session_factory):
         """The 'Picked up' LogEvent text includes the stage value (cv_adjust)."""
@@ -237,9 +237,10 @@ class TestPointA_PickedUpLogEvent:
 
         mock_pub = AsyncMock()
         with patch("jsa.events.bus.bus.publish", mock_pub):
+            backend = FakeAgentBackend([fit_reply(), cv_final(), cl_final()])
             orch = Orchestrator(
                 db_session_factory=session_factory,
-                backend_factory=lambda: FakeAgentBackend([_final_reply()]),
+                backend_factory=lambda: backend,
             )
             await _run_orchestrator_until(
                 orch, session_factory, [job.id], JobState.review
@@ -263,9 +264,10 @@ class TestPointA_PickedUpLogEvent:
 
         mock_pub = AsyncMock()
         with patch("jsa.events.bus.bus.publish", mock_pub):
+            backend = FakeAgentBackend([fit_reply(), cv_final(), cl_final()])
             orch = Orchestrator(
                 db_session_factory=session_factory,
-                backend_factory=lambda: FakeAgentBackend([_final_reply()]),
+                backend_factory=lambda: backend,
             )
             await _run_orchestrator_until(
                 orch, session_factory, [job.id], JobState.review
@@ -799,9 +801,10 @@ class TestPointA_Ordering:
 
         mock_pub = AsyncMock()
         with patch("jsa.events.bus.bus.publish", mock_pub):
+            backend = FakeAgentBackend([fit_reply(), cv_final(), cl_final()])
             orch = Orchestrator(
                 db_session_factory=session_factory,
-                backend_factory=lambda: FakeAgentBackend([_final_reply()]),
+                backend_factory=lambda: backend,
             )
             await _run_orchestrator_until(
                 orch, session_factory, [job.id], JobState.review
