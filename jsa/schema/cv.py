@@ -81,6 +81,9 @@ _TEXT_KEYS = ("text", "description", "summary", "content", "detail")
 _BULLET_KEYS = ("bullets", "points", "highlights", "achievements", "responsibilities",
                 "items", "details", "tasks", "list")
 _NAME_KEYS = ("name", "title", "heading", "section", "section_name", "label")
+# Discriminator-style keys some models emit instead of a name (e.g. {"type": "summary"}).
+# Fallback only — an explicit name/title key always wins (see Section._classify).
+_NAME_FALLBACK_KEYS = ("type", "kind")
 
 # Entry-level meta keys to skip when absorbing leftover content (the entry analogue of
 # _SECTION_META_KEYS). Everything not consumed as a known field and not meta is absorbed —
@@ -564,7 +567,12 @@ class Section(_Loose):
         if not isinstance(data, dict):
             return data
         d = dict(data)
-        name = _first_str(d, _NAME_KEYS) or ""
+        explicit_name = _first_str(d, _NAME_KEYS)
+        name = explicit_name or _first_str(d, _NAME_FALLBACK_KEYS) or ""
+        if not explicit_name and name:
+            # A discriminator value ("summary", "work_experience") isn't a heading —
+            # title-case it for rendering, same as an author-written heading would be.
+            name = name.replace("_", " ").replace("-", " ").title()
         text_parts: list[str] = []
         items: list[str] = []
         entries: list[Any] = []
