@@ -13,7 +13,6 @@ Scenarios:
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -39,9 +38,11 @@ from jsa.db.models import (
 )
 from jsa.pipeline.orchestrator import Orchestrator
 from jsa.pipeline.state_machine import set_current_stage
+from jsa.prompts import loader
 from jsa.server import create_app
 from tests.backend.fakes.fake_backend import FakeAgentBackend
 from tests.backend.fakes.fake_renderer import FakeRenderer
+from tests.backend.fakes.finals import cl_final, cv_final, fit_reply
 
 
 # ---------------------------------------------------------------------------
@@ -105,53 +106,6 @@ async def _insert_job(factory, **overrides) -> Job:
         return await repo.get_job(s, data["id"])
 
 
-def _cv_json(marker: str = "Adjusted CV") -> dict:
-    """A minimal valid CV object. `marker` is embedded in the summary so callers can
-    assert it survives into the serialized Markdown (assertions use substrings)."""
-    return {
-        "contact": {
-            "name": "Jane Doe",
-            "email": "jane.doe@example.com",
-            "phone": "+1-555-867-5309",
-        },
-        "sections": [
-            {"type": "summary", "text": f"{marker}: senior engineer with eight years of experience."},
-            {"type": "experience", "entries": [
-                {"role": "Senior Engineer", "company": "Acme", "dates": "2019–present",
-                 "bullets": ["Built a distributed payment pipeline", "Led a service migration"]},
-            ]},
-        ],
-    }
-
-
-def _final_reply(content: str = "Adjusted CV") -> AgentReply:
-    """A valid cv_adjust FINAL (CV JSON). `content` appears in the serialized Markdown."""
-    payload = json.dumps(_cv_json(content))
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{payload}\n<<<END>>>",
-        content=payload,
-        kind="final",
-    )
-
-
-def _cl_final_reply() -> AgentReply:
-    """A valid cover_letter FINAL (cover-letter JSON)."""
-    payload = json.dumps({
-        "salutation": "Dear Hiring Manager,",
-        "paragraphs": [
-            "I am writing to express my strong interest in the role. Over the past several "
-            "years I have built deep expertise directly relevant to this position.",
-            "I am confident my background aligns well with what your team is looking for.",
-        ],
-        "signoff": "Sincerely,\nCandidate Name",
-    })
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{payload}\n<<<END>>>",
-        content=payload,
-        kind="final",
-    )
-
-
 def _needs_input_reply(question: str = "What sector?") -> AgentReply:
     return AgentReply(
         raw=f"<<<NEED_INPUT>>>\n{question}\n<<<END>>>",
@@ -161,9 +115,17 @@ def _needs_input_reply(question: str = "What sector?") -> AgentReply:
     )
 
 
-def _fit_reply() -> AgentReply:
-    """A passing fit-assessment verdict — pending jobs run fit_assessment first."""
-    return AgentReply(raw="<<<FINAL>>>\nFIT\n<<<END>>>", content="FIT", kind="final")
+class _StageAwareDocBackend(FakeAgentBackend):
+    """The orchestrator builds a fresh backend per (job, stage) dispatch, so a positional
+    reply list cannot serve cv_adjust and cover_letter at once. Pick from the system prompt."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+
+    async def start_session(self, system_prompt, initial_user_msg):
+        is_cl = system_prompt.startswith(loader.read_prompt("cover_letter"))
+        self._replies = [cl_final() if is_cl else cv_final()]
+        return await super().start_session(system_prompt, initial_user_msg)
 
 
 async def _poll_job_state(
@@ -243,13 +205,15 @@ class TestHappyPath:
         job1 = await _insert_job(session_factory, job_id="aabbccdd00000001")
         job2 = await _insert_job(session_factory, job_id="aabbccdd00000002")
 
-        # Each backend_factory call returns a fresh 1-reply backend.
-        # The orchestrator calls it once per stage per job → 4 total (2 CV + 2 CL).
+        # Each backend_factory call returns a fresh backend, stage-discriminated on the
+        # system prompt so a 2-job run doesn't interleave a cv_final into a cl slot.
+        # The fit reply is scripted through the separate fit_backend_factory.
         # max_parallel=1 prevents concurrent SQLite writes through the shared StaticPool
         # connection — concurrency is tested separately in test_orchestrator.py.
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Output")]),
+            backend_factory=lambda: _StageAwareDocBackend(),
+            fit_backend_factory=lambda name: FakeAgentBackend([fit_reply()]),
             max_parallel=1,
         )
 
@@ -273,7 +237,8 @@ class TestHappyPath:
 
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Output")]),
+            backend_factory=lambda: _StageAwareDocBackend(),
+            fit_backend_factory=lambda name: FakeAgentBackend([fit_reply()]),
             max_parallel=1,
         )
         await _run_orchestrator_until(
@@ -288,9 +253,15 @@ class TestHappyPath:
             assert len(cl_docs) == 1, f"Job {job_id}: expected 1 cl doc"
 
     async def test_both_jobs_approved_with_pdfs(self, session_factory, tmp_path, monkeypatch):
-        """Approve both jobs via the HTTP route; PDFs must be written to output dir."""
+        """Approve both jobs via the HTTP route; PDFs must be written to output dir.
+
+        Per CLAUDE.md -> "Renderer invocation", rendering happens on review-entry (inside
+        the orchestrator's cover_letter checkpoint), not on approve — so the fake renderer
+        must be patched where stages.py actually calls it, and the orchestrator needs an
+        output_dir or _render_for_review is skipped entirely.
+        """
         fake_renderer = FakeRenderer()
-        monkeypatch.setattr("jsa.api.routes_jobs.renderer_for", lambda name: fake_renderer)
+        monkeypatch.setattr("jsa.pipeline.stages.renderer_for", lambda name: fake_renderer)
 
         job1 = await _insert_job(session_factory, job_id="ccddee0000000001", company="Alpha")
         job2 = await _insert_job(session_factory, job_id="ccddee0000000002", company="Beta")
@@ -298,8 +269,10 @@ class TestHappyPath:
         # Run pipeline until both jobs are in review
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Output")]),
+            backend_factory=lambda: _StageAwareDocBackend(),
+            fit_backend_factory=lambda name: FakeAgentBackend([fit_reply()]),
             max_parallel=1,
+            output_dir=tmp_path / "output",
         )
         await _run_orchestrator_until(
             orch, session_factory, [job1.id, job2.id], JobState.review
@@ -346,8 +319,9 @@ class TestHappyPath:
                 j = await repo.get_job(s, job_id)
             assert j.state == JobState.approved, f"Job {job_id} not approved"
 
-        # Exactly 2 render calls per job (cv + cl) = 4 total
-        assert len(fake_renderer.calls) == 4
+        # Pre-render at review-entry writes both PDF and DOCX for cv + cl per job
+        # (see CLAUDE.md -> "Renderer invocation"); approve itself renders nothing.
+        assert len(fake_renderer.calls) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +338,7 @@ class TestParkAndResume:
 
         # fit_assessment runs first (FIT); cv_adjust then parks on NEED_INPUT.
         # Shared instance so replies are consumed across both stages in order.
-        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What sector?")])
+        backend = FakeAgentBackend([fit_reply(), _needs_input_reply("What sector?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend,
@@ -382,7 +356,7 @@ class TestParkAndResume:
         job = await _insert_job(session_factory, job_id="ddee001100000002")
 
         # fit_assessment runs first (FIT); cv_adjust then parks on NEED_INPUT.
-        backend = FakeAgentBackend([_fit_reply(), _needs_input_reply("What sector?")])
+        backend = FakeAgentBackend([fit_reply(), _needs_input_reply("What sector?")])
         orch = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: backend,
@@ -400,11 +374,11 @@ class TestParkAndResume:
         """After user answers the follow-up, job continues to review."""
         job = await _insert_job(session_factory, job_id="ddee001100000003")
 
-        # Step 1: park on NEED_INPUT during cv_adjust
+        # Step 1: park on NEED_INPUT during cv_adjust (fit_assessment runs first)
         orch_park = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: FakeAgentBackend(
-                [_needs_input_reply("What sector?")]
+                [fit_reply(), _needs_input_reply("What sector?")]
             ),
         )
         await _run_orchestrator_until(
@@ -423,10 +397,12 @@ class TestParkAndResume:
             fu.answered_at = datetime.utcnow()
             await s.commit()
 
-        # Step 3: resume — cv_adjust needs one more reply, then cover_letter needs one more
+        # Step 3: resume — restore_session pops nothing, so cv_adjust consumes the first
+        # scripted reply and cover_letter the second.
+        backend_resume = FakeAgentBackend([cv_final(), cl_final()])
         orch_resume = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Output")]),
+            backend_factory=lambda: backend_resume,
         )
         orch_resume.kick()
         await _run_orchestrator_until(
@@ -441,11 +417,11 @@ class TestParkAndResume:
         """After park/resume/complete, message rows for both stages must exist."""
         job = await _insert_job(session_factory, job_id="ddee001100000004")
 
-        # Park
+        # Park (fit_assessment runs first)
         orch_park = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda: FakeAgentBackend(
-                [_needs_input_reply("Which sector?")]
+                [fit_reply(), _needs_input_reply("Which sector?")]
             ),
         )
         await _run_orchestrator_until(
@@ -462,10 +438,12 @@ class TestParkAndResume:
             fu.answered_at = datetime.utcnow()
             await s.commit()
 
-        # Resume
+        # Resume — restore_session pops nothing, so cv_adjust consumes the first scripted
+        # reply and cover_letter the second.
+        backend_resume = FakeAgentBackend([cv_final(), cl_final()])
         orch_resume = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Output")]),
+            backend_factory=lambda: backend_resume,
         )
         orch_resume.kick()
         await _run_orchestrator_until(
@@ -628,7 +606,7 @@ class TestCrashRecovery:
         # Now run the orchestrator — it should pick up cv_done and run cover_letter
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_cl_final_reply()]),
+            backend_factory=lambda: FakeAgentBackend([cl_final()]),
         )
         await _run_orchestrator_until(orch, session_factory, [job_id], JobState.review)
 
@@ -711,7 +689,7 @@ class TestRevisionFlow:
 
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Shorter CV")]),
+            backend_factory=lambda: FakeAgentBackend([cv_final("# Shorter CV")]),
         )
         await _run_orchestrator_until(
             orch, session_factory, [job_id], JobState.review, require_stage_cleared=True
@@ -745,7 +723,7 @@ class TestRevisionFlow:
 
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# Expanded CV")]),
+            backend_factory=lambda: FakeAgentBackend([cv_final("# Expanded CV")]),
         )
         await _run_orchestrator_until(
             orch, session_factory, [job_id], JobState.review, require_stage_cleared=True
@@ -778,7 +756,7 @@ class TestRevisionFlow:
 
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply("# CV + Certs")]),
+            backend_factory=lambda: FakeAgentBackend([cv_final("# CV + Certs")]),
         )
         await _run_orchestrator_until(
             orch, session_factory, [job_id], JobState.review, require_stage_cleared=True
@@ -811,7 +789,7 @@ class TestRevisionFlow:
 
         orch = Orchestrator(
             db_session_factory=session_factory,
-            backend_factory=lambda: FakeAgentBackend([_final_reply(revised_content)]),
+            backend_factory=lambda: FakeAgentBackend([cv_final(revised_content)]),
         )
         await _run_orchestrator_until(
             orch, session_factory, [job_id], JobState.review, require_stage_cleared=True

@@ -37,6 +37,7 @@ from jsa.db.models import (
 from jsa.pipeline.stages import run_stage
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
+from tests.backend.fakes.finals import cl_final, cv_final
 
 
 # ---------------------------------------------------------------------------
@@ -118,14 +119,6 @@ async def session(session_factory):
 # ---------------------------------------------------------------------------
 
 
-def _make_final_reply(content: str) -> AgentReply:
-    return AgentReply(
-        raw=f"<<<FINAL>>>\n{content}\n<<<END>>>",
-        content=content,
-        kind="final",
-    )
-
-
 async def _insert_job(session: AsyncSession) -> Job:
     data = dict(
         id="bf9test00001111",
@@ -195,9 +188,9 @@ class TestRevisingCvUsesCvSessionId:
         await session.commit()
 
         backend = TrackingFakeBackend([
-            _make_final_reply(cv_content),           # cv_adjust reply
-            _make_final_reply("# Cover Letter v1"),  # cover_letter reply
-            _make_final_reply("# REVISED_CV_MARKER"),  # revising_cv reply
+            cv_final(cv_content),          # cv_adjust reply
+            cl_final(),                    # cover_letter reply
+            cv_final("REVISED_CV_MARKER"),  # revising_cv reply
         ])
 
         await run_stage(job, backend, Stage.cv_adjust, session)
@@ -277,9 +270,12 @@ class TestRevisingClUsesClSessionId:
         await session.commit()
 
         backend = TrackingFakeBackend([
-            _make_final_reply("# CV v1"),
-            _make_final_reply("# Cover Letter v1"),
-            _make_final_reply("# REVISED_CL_MARKER"),
+            cv_final("CV v1"),
+            cl_final(),
+            cl_final(
+                "This is the REVISED_CL_MARKER revision of the cover letter, rewritten to "
+                "better highlight the candidate's relevant production experience for this role."
+            ),
         ])
 
         # Stage 1: cv_adjust
@@ -350,10 +346,10 @@ class TestSecondCvRevisionUsesSameCvSessionId:
         await session.commit()
 
         backend = TrackingFakeBackend([
-            _make_final_reply("# CV v1"),                     # cv_adjust
-            _make_final_reply("# Cover Letter v1"),           # cover_letter
-            _make_final_reply("# REVISED_CV_V2_MARKER"),      # first revising_cv
-            _make_final_reply("# REVISED_CV_V3_MARKER"),      # second revising_cv
+            cv_final("CV v1"),                     # cv_adjust
+            cl_final(),                            # cover_letter
+            cv_final("REVISED_CV_V2_MARKER"),      # first revising_cv
+            cv_final("REVISED_CV_V3_MARKER"),      # second revising_cv
         ])
 
         # Stage 1: cv_adjust

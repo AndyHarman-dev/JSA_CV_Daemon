@@ -676,9 +676,9 @@ class TestResetEndpointNuclear:
 class TestRetryCountResetOnFinal:
     async def test_retry_count_resets_on_successful_final(self, session):
         """After run_stage completes with a FINAL reply, retry_count is reset to 0."""
-        from jsa.agents.base import AgentReply
         from jsa.pipeline.stages import run_stage
         from tests.backend.fakes.fake_backend import FakeAgentBackend
+        from tests.backend.fakes.finals import cv_final
 
         job = await _insert_job(session, job_id="aabbccdd00112233")
         transition(job, JobState.running, Stage.cv_adjust)
@@ -686,12 +686,7 @@ class TestRetryCountResetOnFinal:
         job.retry_count = 1
         await session.commit()
 
-        final_reply = AgentReply(
-            raw="<<<FINAL>>>\n# Adjusted CV\n<<<END>>>",
-            content="# Adjusted CV",
-            kind="final",
-        )
-        backend = FakeAgentBackend([final_reply])
+        backend = FakeAgentBackend([cv_final("Adjusted CV")])
         await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, "aabbccdd00112233")
