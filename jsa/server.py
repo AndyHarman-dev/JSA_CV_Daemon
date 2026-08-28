@@ -41,17 +41,27 @@ def make_backend_factory(
 
     The two overrides exist so a caller can swap the model and/or timeout *without*
     re-deriving the per-backend argument mapping (anthropic takes `anthropic_timeout`,
-    CLI backends take `agent_timeout`, and `google-cli` takes no model at all). Both
-    default to None, meaning "use the settings value". The `fit_assessment` stage is
-    the one caller that passes them — see `Settings.fit_model` / `Settings.fit_timeout`.
+    CLI backends take `agent_timeout`, opencode-zen takes `opencode_zen_timeout`, and
+    `google-cli` takes no model at all). Both default to None, meaning "use the
+    settings value". The `fit_assessment` stage is the one caller that passes them —
+    see `Settings.fit_model` / `Settings.fit_timeout`.
     """
 
     def _backend_factory(name: str) -> AgentBackend:
-        model = settings.model if model_override is None else model_override
         if name == "anthropic":
+            model = settings.model if model_override is None else model_override
             timeout = settings.anthropic_timeout if timeout_override is None else timeout_override
             return backend_for("anthropic", model=model, timeout=timeout)
 
+        if name == "opencode-zen":
+            # opencode-zen has its own model catalog (nemotron/gpt/gemini/claude
+            # mirrors, not JSA's Claude-only `model` setting), so it never falls
+            # back to `settings.model` — only an explicit override applies.
+            model = settings.opencode_zen_model if model_override is None else model_override
+            timeout = settings.opencode_zen_timeout if timeout_override is None else timeout_override
+            return backend_for("opencode-zen", model=model, timeout=timeout)
+
+        model = settings.model if model_override is None else model_override
         timeout = settings.agent_timeout if timeout_override is None else timeout_override
         if name == "claude-cli":
             return backend_for(name, model=model, timeout=timeout)

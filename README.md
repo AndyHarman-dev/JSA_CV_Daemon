@@ -57,9 +57,11 @@ flowchart LR
     BE -->|1st| CLI1["claude-cli"]
     BE -->|2nd| CLI2["google-cli"]
     BE -->|3rd| API1["anthropic"]
+    BE -->|4th| API2["opencode-zen"]
     CLI1 --> PARSE["protocol.parse_reply()<br/>sentinel grammar"]
     CLI2 --> PARSE
     API1 --> PARSE
+    API2 --> PARSE
     PARSE --> SM["state_machine.transition()"]
     SM --> CKPT["repo.checkpoint()<br/>atomic: Job + Message + Document"]
     CKPT --> DB
@@ -117,7 +119,7 @@ stateDiagram-v2
 
 ### Backend fallback chain
 
-Backends implement a common `AgentBackend` ABC (`jsa/agents/base.py`) and are tried in order via `--backends claude-cli,google-cli,anthropic` (or the equivalent `JSA_BACKENDS` env var). On a hard failure (rate limit, session expiry) the orchestrator fails over to the next backend in the chain and resumes the job from its last checkpoint — the UI surfaces which backend is currently active:
+Backends implement a common `AgentBackend` ABC (`jsa/agents/base.py`) and are tried in order via `--backends claude-cli,google-cli,anthropic,opencode-zen` (or the equivalent `JSA_BACKENDS` env var). On a hard failure (rate limit, session expiry) the orchestrator fails over to the next backend in the chain and resumes the job from its last checkpoint — the UI surfaces which backend is currently active:
 
 <p align="center">
   <img src="assets/JSA_Screens_Backend_Queue.png" alt="Backend failover queue dropdown showing Claude CLI as the active backend" width="360">
@@ -203,7 +205,7 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | `--csv` | required | — | Path to the jobs CSV file |
 | `--cv` | optional | — | Path to a CV (`.pdf` or `.docx`) — used **once**, to seed the CV Structure Editor's `cv_structure.json` if it doesn't exist yet. Ignored (with a printed note) once a structure exists. The editor is the source of truth from then on — see [CV Structure Editor](#cv-structure-editor) |
 | `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where rendered PDF/DOCX files are written |
-| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (single), backward-compat alias for `--backends`: `claude-cli` \| `google-cli` \| `anthropic` |
+| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (single), backward-compat alias for `--backends`: `claude-cli` \| `google-cli` \| `anthropic` \| `opencode-zen` |
 | `--backends` | `claude-cli` | `JSA_BACKENDS` | Comma-separated ordered backend fallback chain, e.g. `claude-cli,google-cli` |
 | `--db` | `~/.jsa/jsa.sqlite` | `JSA_DB_PATH` | SQLite database path |
 | `--port` | `8765` | `JSA_PORT` | Port for the local web server |
@@ -243,7 +245,25 @@ export ANTHROPIC_API_KEY=sk-ant-...
 jsa --csv jobs.csv --cv resume.pdf --backend anthropic
 ```
 
+### `opencode-zen`
+
+Uses the [OpenCode Zen](https://opencode.ai/zen) OpenAI-compatible chat-completions API — a single endpoint proxying many models (Claude, GPT, Gemini, and various free-tier models). Requires the `OPENCODE_API_KEY` environment variable to be set.
+
+```bash
+export OPENCODE_API_KEY=...
+jsa --csv jobs.csv --cv resume.pdf --backend opencode-zen
+```
+
+The default model is the free `nemotron-3-ultra-free` — note this model is observably flaky under upstream load (intermittent errors from the underlying provider); pair it with a fallback chain (`--backends opencode-zen,claude-cli`) for reliability, or set `JSA_OPENCODE_ZEN_MODEL` to a paid model.
+
 Optional environment variables for this backend:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JSA_OPENCODE_ZEN_MODEL` | `nemotron-3-ultra-free` | Model ID from OpenCode Zen's catalog |
+| `JSA_OPENCODE_ZEN_TIMEOUT` | `180` | Per-request timeout in seconds |
+
+Optional environment variables for the `anthropic` backend:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -490,7 +510,7 @@ jsa/                   Python package
   server.py             FastAPI app factory
   db/                    SQLAlchemy models (Job, Message, Document, FollowUp, RevisionRequest), engine, repository
   ingest/                CSV and CV loaders
-  agents/                AgentBackend ABC, three backends (claude_cli, google_cli, anthropic_api), registry, sentinel protocol parser
+  agents/                AgentBackend ABC, four backends (claude_cli, google_cli, anthropic_api, opencode_zen), registry, sentinel protocol parser
   prompts/               Prompt files (edit these) + loader (no caching)
   pipeline/              Orchestrator, stage runners (stages.py), state machine, CV structure inference
   render/                PDF (WeasyPrint) and DOCX (python-docx) renderers

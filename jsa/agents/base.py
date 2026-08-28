@@ -48,7 +48,7 @@ class AgentBackend(ABC):
     task.cancel() and will burn API quota to completion regardless of
     cancellation. See jsa/agents/_subprocess.py's module docstring."""
 
-    name: str                                   # "claude-cli" | "google-cli" | "anthropic"
+    name: str                                   # "claude-cli" | "google-cli" | "anthropic" | "opencode-zen"
 
     @abstractmethod
     async def start_session(
