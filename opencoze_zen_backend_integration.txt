@@ -1,0 +1,821 @@
+ ▐▛███▛█   Claude Code v2.1.251
+▝▜██████▀  Sonnet 5 · Claude Pro
+  ▝▝ ▝▝    ~/VSCodeProjects/JSA
+
+
+❯ Any local changes must be commited so the branch is clean and you should go   
+  to another branch branched from main.                                         
+                                                                                
+  On that other branch you should add a new backend whcih will use the          
+  following http chat completion: https://opencode.ai/zen/v1/chat/completions   
+                                                                                
+  The backend will be called OpenCode_ZEN                                       
+  The default model is: opencode/nemotron-3-ultra-free (should be it but not    
+  sure, try checking it)                                                        
+                                                                                
+  The API key is in .env as OPENCODE_API_KEY so use it for tests.               
+                                                                                
+  The opencode backend should integrated just as the other backends are but     
+  keep in mind its openai compatible one over API not CLI.                      
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+⏺ The tracked/staged changes look like legitimate phase-5 frontend work. But
+  there are three untracked files that look like stray artifacts, not project
+  source:
+
+  - cv_structure.json — likely contains personal CV data (name, work history) at
+    repo root; per CLAUDE.md this belongs in ~/.jsa/cv_structure.json, not the
+    repo
+  - session-ses_fbb2.md — a session transcript from a different tool ("Kimi K3")
+  - cv_daemon_standalone.html — a standalone prototype file
+
+⏺ User answered Claude's questions:
+  ⎿  · How should I handle the 3 untracked stray files (cv_structure.json, 
+     session-ses_fbb2.md, cv_daemon_standalone.html) before committing? → Stash 
+     them
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Good, all real work is staged and the 3 stray files remain untracked.
+  Committing now.
+
+  Committed 37ad2af, ran 1 shell command (ctrl+o to expand)
+
+⏺ Branch is clean. Now switching to main and creating the new backend branch.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Clean and up to date with origin/main. Creating the feature branch.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now let's explore the existing backend implementations to follow the
+  established pattern.
+
+  Listed 1 directory, called plugin:socraticode:socraticode (ctrl+o to expand)
+
+⏺ Since anthropic is the existing HTTP API backend (closest analog to what we
+  need — OpenAI-compatible chat completions over HTTP), let's study it closely
+  along with base.py.
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ Now let's look at how config, CLI, and server wire in backend selection, plus
+  how AnthropicAPIBackend's key/model/timeout get set.
+
+  Searched for 1 pattern, read 2 files, ran 2 shell commands (ctrl+o to expand)
+
+⏺ httpx is available (pulled in transitively). Now let's look at claude_cli.py's
+  protocol parsing and google_cli.py briefly, plus tests directory structure
+  for backends.
+
+  Searched for 1 pattern, read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Now let's check the .env file and protocol.py briefly, and how OpenCode Zen's
+  API works (OpenAI-compatible chat completions). Let me check if there's any
+  existing reference to opencode in the repo.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Let me verify the endpoint and default model against the live API using the
+  key in .env.
+
+  Ran 2 shell commands (ctrl+o to expand)
+⏺ The model exists but without the opencode/ prefix — it's
+  nemotron-3-ultra-free. Let me verify with an actual chat completion call.
+
+  Searched for 2 patterns, ran 5 shell commands (ctrl+o to expand)
+
+⏺ Good — a generic Exception gets caught and marks the job failed, and
+  AgentLimitReached specifically triggers the backend-fallback chain. That's all
+  I need. Now let's check protocol.py for parse_reply and the _subprocess.py
+  module docstring reference (not needed for HTTP backend, but good to confirm).
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Now I have everything I need. Let me write the OpenCodeZenBackend, modeled
+  closely on AnthropicAPIBackend but using httpx for OpenAI-compatible chat
+  completions.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ httpx is only a transitive dependency currently (pulled in by anthropic).
+  Since I'll depend on it directly, I'll add it explicitly to pyproject.toml.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(pyproject.toml)
+  ⎿  Added 1 line
+      19      "weasyprint>=62",
+      20      "markdown-it-py>=3.0",
+      21      "anthropic>=0.26",
+      22 +    "httpx>=0.27",                                             
+      23  ]
+      24  
+      25  [tool.setuptools.packages.find]
+
+⏺ Now, the backend implementation itself:
+
+⏺ Write(jsa/agents/opencode_zen.py)
+  ⎿  Wrote 156 lines to jsa/agents/opencode_zen.py
+       1 """OpenCodeZenBackend: OpenAI-compatible chat-completions HTTP b
+       2 
+       3 Talks to https://opencode.ai/zen/v1/chat/completions — an OpenAI
+       4 endpoint (not the Anthropic Messages API shape). Unlike Anthropi
+       5 `system` top-level kwarg, the system prompt here is just the fir
+         st message in
+       7 
+       8 The API key is read from the `OPENCODE_API_KEY` environment vari
+       9 hardcoded, never logged) at call time, mirroring how `anthropic.
+      10 picks up `ANTHROPIC_API_KEY` implicitly.
+     … +187 lines (ctrl+o to expand)
+
+⏺ Now wire it into the registry, config, server, and CLI.
+
+⏺ Update(jsa/agents/registry.py)
+  ⎿  Added 4 lines
+      39  from jsa.agents.anthropic_api import AnthropicAPIBackend  # noq
+          a: E402
+      40  
+      41  register("anthropic", AnthropicAPIBackend)
+      42 +                                                               
+      43 +from jsa.agents.opencode_zen import OpenCodeZenBackend  # noqa:
+         + E402                                                          
+      44 +                                                               
+      45 +register("opencode-zen", OpenCodeZenBackend)                   
+
+⏺ Update(jsa/config.py)
+  ⎿  Added 3 lines, removed 1 line
+      11      model_config = SettingsConfigDict(env_prefix="JSA_")
+      12  
+      13      output_dir: Path = Path("output")
+      14 -    backend: str = "claude-cli"          # claude-cli | google-
+         -cli | anthropic (kept for backward compat)                     
+      14 +    backend: str = "claude-cli"          # claude-cli | google-
+         +cli | anthropic | opencode-zen (kept for backward compat)      
+      15      backends: List[str] = ["claude-cli"]  # Ordered chain; back
+          ends[0] is the primary
+      16      db_path: Path = Path.home() / ".jsa" / "jsa.sqlite"
+      17      port: int = 8765
+     ...
+      19      model: str = "claude-haiku-4-5"       # Claude model ID for
+           claude-cli and anthropic backends; overridable via JSA_MODEL
+      20      anthropic_timeout: float = 180.0     # Per-reply timeout in
+           seconds, via JSA_ANTHROPIC_TIMEOUT
+      21      agent_timeout: float = 600.0         # Timeout for CLI back
+          ends (claude-cli, google-cli), via JSA_AGENT_TIMEOUT
+      22 +    opencode_zen_model: str = "nemotron-3-ultra-free"  # Model 
+         +ID for opencode-zen, via JSA_OPENCODE_ZEN_MODEL                
+      23 +    opencode_zen_timeout: float = 180.0  # Per-reply timeout in
+         + seconds, via JSA_OPENCODE_ZEN_TIMEOUT                         
+      24      fit_model: str | None = None         # Model for the fit_as
+          sessment stage only, via JSA_FIT_MODEL / --fit-model.
+      25                                           # None → the fit stage
+           uses the same model as every other stage (`model`).
+      26      fit_timeout: float | None = None     # Per-reply timeout fo
+          r the fit_assessment stage only, via JSA_FIT_TIMEOUT.
+
+⏺ Now update _VALID_BACKENDS in cli.py and the backend factory mapping in
+  server.py.
+
+⏺ Update(jsa/cli.py)
+  ⎿  Added 1 line, removed 1 line
+      34  
+      35  app = typer.Typer(help="JSA — Job Search Assistant")
+      36  
+      37 -_VALID_BACKENDS = {"claude-cli", "google-cli", "anthropic"}  # 
+         -kept for fast validation before registry import                
+      37 +_VALID_BACKENDS = {"claude-cli", "google-cli", "anthropic", "op
+         +encode-zen"}  # kept for fast validation before registry import
+      38  
+      39  
+      40  def _start_tunnel(port: int) -> None:
+
+⏺ Update(jsa/cli.py)
+  ⎿  Added 1 line, removed 1 line
+       98          readable=True,
+       99      ),
+      100      out: Optional[Path] = typer.Option(None, "--out", help="Ou
+           tput directory for generated PDFs"),
+      101 -    backend: Optional[str] = typer.Option(None, "--backend", h
+          -elp="AI backend (single): claude-cli | google-cli | anthropic 
+          -(backward-compat alias for --backends)"),                     
+      101 +    backend: Optional[str] = typer.Option(None, "--backend", h
+          +elp="AI backend (single): claude-cli | google-cli | anthropic 
+          +| opencode-zen (backward-compat alias for --backends)"),      
+      102      backends: Optional[str] = typer.Option(None, "--backends",
+            help="Comma-separated ordered backend chain, e.g. claude-cli,
+           google-cli"),
+      103      fit_model: Optional[str] = typer.Option(None, "--fit-model
+           ", help="Model for the fit-assessment stage only (e.g. a cheap
+           er/faster one). Defaults to the same model as every other stag
+           e. No effect on google-cli, which has no model flag."),
+      104      fit_timeout: Optional[float] = typer.Option(None, "--fit-t
+           imeout", help="Per-reply timeout in seconds for the fit-assess
+           ment stage only. Defaults to the backend's normal timeout."),
+
+⏺ Now server.py's make_backend_factory:
+
+⏺ Update(jsa/server.py)
+  ⎿  Added 14 lines, removed 4 lines
+      41  
+      42      The two overrides exist so a caller can swap the model and/
+          or timeout *without*
+      43      re-deriving the per-backend argument mapping (anthropic tak
+          es `anthropic_timeout`,
+      44 -    CLI backends take `agent_timeout`, and `google-cli` takes n
+         -o model at all). Both                                          
+      45 -    default to None, meaning "use the settings value". The `fit
+         -_assessment` stage is                                          
+      46 -    the one caller that passes them — see `Settings.fit_model` 
+         -/ `Settings.fit_timeout`.                                      
+      44 +    CLI backends take `agent_timeout`, opencode-zen takes `open
+         +code_zen_timeout`, and                                         
+      45 +    `google-cli` takes no model at all). Both default to None, 
+         +meaning "use the                                               
+      46 +    settings value". The `fit_assessment` stage is the one call
+         +er that passes them —                                          
+      47 +    see `Settings.fit_model` / `Settings.fit_timeout`.         
+      48      """
+      49  
+      50      def _backend_factory(name: str) -> AgentBackend:
+      50 -        model = settings.model if model_override is None else m
+         -odel_override                                                  
+      51          if name == "anthropic":
+      52 +            model = settings.model if model_override is None el
+         +se model_override                                              
+      53              timeout = settings.anthropic_timeout if timeout_ove
+          rride is None else timeout_override
+      54              return backend_for("anthropic", model=model, timeou
+          t=timeout)
+      55  
+      56 +        if name == "opencode-zen":                             
+      57 +            # opencode-zen has its own model catalog (nemotron/
+         +gpt/gemini/claude                                              
+      58 +            # mirrors, not JSA's Claude-only `model` setting), 
+         +so it never falls                                              
+      59 +            # back to `settings.model` — only an explicit overr
+         +ide applies.                                                   
+      60 +            model = settings.opencode_zen_model if model_overri
+         +de is None else model_override                                 
+      61 +            timeout = settings.opencode_zen_timeout if timeout_
+         +override is None else timeout_override                         
+      62 +            return backend_for("opencode-zen", model=model, tim
+         +eout=timeout)                                                  
+      63 +                                                               
+      64 +        model = settings.model if model_override is None else m
+         +odel_override                                                  
+      65          timeout = settings.agent_timeout if timeout_override is
+           None else timeout_override
+      66          if name == "claude-cli":
+      67              return backend_for(name, model=model, timeout=timeo
+          ut)
+
+⏺ Now check whether the app loads .env automatically anywhere (python-dotenv or
+  similar), since os.environ.get("OPENCODE_API_KEY") needs it populated.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ That matches the existing anthropic convention — no dotenv loading exists; env
+  vars are expected to be exported by the user. Now let's check
+  test_registry.py and test_cli_backends.py for what needs updating.
+  Read 1 file (ctrl+o to expand)
+
+⏺ Generic, no changes needed there. Now let's write the test file for
+  opencode_zen.py, mirroring test_anthropic_api.py but using httpx mocking.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(tests/backend/test_opencode_zen.py)
+  ⎿  Wrote 385 lines to tests/backend/test_opencode_zen.py
+       1 """Tests for jsa/agents/opencode_zen.py: OpenCodeZenBackend and 
+       2 
+       3 `httpx.AsyncClient` is imported at module scope in opencode_zen.
+       4 `httpx.AsyncClient` globally (matching how test_anthropic_api.py
+          patches
+         ncode_zen.py reads from.
+       6 
+         oml.
+       8 """
+      10 from __future__ import annotations
+     … +454 lines (ctrl+o to expand)
+
+⏺ Now let's add an integration test using the real API key from .env, per the
+  user's instruction ("use it for tests"). Let me check the existing integration
+  test pattern first.
+
+  Searched for 1 pattern, read 1 file, listed 1 directory, ran 2 shell commands (ctrl+o to expand)
+
+⏺ I'll create tests/backend/integration/test_opencode_zen_live.py, marked
+  @pytest.mark.integration, that reads the real key from .env and hits the live
+  endpoint.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(tests/backend/integration/__init__.py)
+  ⎿  Wrote 1 line to tests/backend/integration/__init__.py
+      1 (No content)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(tests/backend/integration/test_opencode_zen_live.py)
+  ⎿  Wrote 82 lines to tests/backend/integration/test_opencode_zen_live.py
+       1 """Live integration test for OpenCodeZenBackend against the real
+       2 
+         API_KEY from the
+       4 repo-root .env file. Skipped by default (`pytest -m "not integra
+       5 explicitly with `pytest tests/backend/integration/test_opencode_
+       6 
+         rmittent 502
+       8 "Upstream error from Nvidia: Service temporarily overloaded" eve
+       9 see jsa/agents/opencode_zen.py's body-level error check), so the
+      10 retries a few times before failing.
+     … +91 lines (ctrl+o to expand)
+
+⏺ Now let's install and run the test suite.
+
+  Listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+⏺ Now let's run the new unit tests first, in isolation.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 35 pass. Now the live integration test.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Live integration test passes against the real API, confirming the model id,
+  auth, and error handling all work end to end. Now let's run the full suite to
+  check for regressions and confirm the pre-existing baseline (27 backend fails
+  per memory).
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Good — that's a pre-existing flaky test, unrelated to my change (passes in
+  isolation). Let's check test_cli_backends.py for anything that enumerates
+  backends exhaustively.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ No matches — nothing else to update there. Now let's verify the CLI itself
+  works end-to-end with --backend opencode-zen.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Everything wires correctly. Now let's update CLAUDE.md since it documents the
+  backend fallback chain and per-backend argument mapping — the OpenCode Zen
+  backend should be reflected there for future agents.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+⏺ Update(CLAUDE.md)
+  ⎿  Added 29 lines
+       68  backends or wait for quota reset". Do not treat a limit signal
+            as a hard job failure; that
+       69  is the chain's job.
+       70  
+       71 +### OpenCode Zen backend                                      
+       72 +                                                              
+       73 +`opencode-zen` (`jsa/agents/opencode_zen.py`) is an HTTP backe
+          +nd, not a CLI one — it POSTs                                  
+       74 +to `https://opencode.ai/zen/v1/chat/completions`, an **OpenAI-
+          +compatible** chat-completions                                 
+       75 +endpoint (not the Anthropic Messages API shape `anthropic_api.
+          +py` uses): the system prompt                                  
+       76 +is the first `{"role": "system", ...}` entry in `messages`, no
+          +t a top-level `system` kwarg,                                 
+       77 +and the reply lives at `body["choices"][0]["message"]["content
+          +"]`. Auth is                                                  
+       78 +`Authorization: Bearer $OPENCODE_API_KEY`, read from the envir
+          +onment at call time (never                                    
+       79 +hardcoded) — same convention as `ANTHROPIC_API_KEY`; this proj
+          +ect loads no `.env` file                                      
+       80 +itself, so the caller must export it first.                   
+       81 +                                                              
+       82 +Its model catalog is unrelated to JSA's Claude-only `model` se
+          +tting (it proxies Claude,                                     
+       83 +GPT, Gemini and various free-tier models — e.g. the default `n
+          +emotron-3-ultra-free`), so                                    
+       84 +it gets **dedicated** settings, `opencode_zen_model` / `openco
+          +de_zen_timeout`                                               
+       85 +(`JSA_OPENCODE_ZEN_MODEL` / `JSA_OPENCODE_ZEN_TIMEOUT`), rathe
+          +r than sharing `model` /                                      
+       86 +falling back to `settings.model` the way `claude-cli` does.   
+       87 +                                                              
+       88 +**The API can return `HTTP 200` with an error payload in the b
+          +ody** (observed live: a                                       
+       89 +transient upstream 502 from the underlying provider surfaces a
+          +s `{"error": {"type":                                         
+       90 +"server_error", ...}}` with `response.status_code == 200`). `_
+          +call_api` therefore checks                                    
+       91 +for an `"error"` key in the parsed body regardless of status c
+          +ode, not just `>= 400` /                                      
+       92 +`429` — do not "simplify" this to a plain status-code check, i
+          +t will silently swallow                                       
+       93 +these. `"rate"` / `"credit"` in the message (or `err_type` in 
+          +`{"RateLimitError",                                           
+       94 +"CreditsError"}`) maps to `AgentLimitReached` (joins the BF-19
+          + fallback chain like any                                      
+       95 +other backend); everything else is a plain `RuntimeError`. The
+          + free `nemotron-3-ultra-free`                                 
+       96 +model is genuinely flaky under upstream load — this is expecte
+          +d, not a bug to "fix" by                                      
+       97 +retrying inside the backend; retries belong to the fallback ch
+          +ain or the caller, not this                                   
+       98 +layer.                                                        
+       99 +                                                              
+      100  ---
+      101  
+      102  ## Prompt files
+
+⏺ Update(CLAUDE.md)
+  ⎿  Added 6 lines, removed 4 lines
+      133  The mechanism is `make_backend_factory`'s (`jsa/server.py`) `m
+           odel_override` /
+      134  `timeout_override` kwargs. **Do not derive the constructor arg
+           uments yourself at a new
+      135  call site** — the per-backend mapping is non-obvious (`anthrop
+           ic` takes
+      136 -`anthropic_timeout`, CLI backends take `agent_timeout`, and `g
+          -oogle-cli` takes no                                           
+      137 -`model` at all because the `agy` CLI has no model flag, so `fi
+          -t_model` is silently                                          
+      138 -inapplicable there). Overriding without going through the fact
+          -ory is what previously                                        
+      139 -gave `anthropic` a 600s timeout instead of its 180s one.      
+      136 +`anthropic_timeout`, CLI backends take `agent_timeout`, `openc
+          +ode-zen` takes                                                
+      137 +`opencode_zen_timeout` and never falls back to `settings.model
+          +` — see "OpenCode Zen                                         
+      138 +backend" above — and `google-cli` takes no `model` at all beca
+          +use the `agy` CLI has no                                      
+      139 +model flag, so `fit_model` is silently inapplicable there). Ov
+          +erriding without going                                        
+      140 +through the factory is what previously gave `anthropic` a 600s
+          + timeout instead of its                                       
+      141 +180s one.                                                     
+      142  
+      143  Wiring: `server.py` builds a second factory and passes it to `
+           Orchestrator` as
+      144  `fit_backend_factory`; the orchestrator instantiates it **from
+            `job.backend_name`**
+
+⏺ Now let's check the advisor before declaring done, since this is a full
+  backend integration touching several files.
+
+⏺ Advising using Opus 5
+  ⎿  ✔ Advisor has reviewed the conversation and will apply the feedback
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Found real gaps — jsa/agents/base.py's docstring, and a frontend display-name
+  map in Header.tsx. Let me look at both.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(frontend/src/components/Header.tsx)
+  ⎿  Added 1 line
+      20    "claude-cli": "CLAUDE CLI",
+      21    "google-cli": "GOOGLE CLI",
+      22    anthropic: "ANTHROPIC API",
+      23 +  "opencode-zen": "OPENCODE ZEN",                              
+      24  };
+      25  
+      26  function backendLabel(id: string): string {
+
+⏺ Now update jsa/agents/base.py's docstring comment:
+
+⏺ Update(jsa/agents/base.py)
+  ⎿  Added 1 line, removed 1 line
+      48      task.cancel() and will burn API quota to completion regardl
+          ess of
+      49      cancellation. See jsa/agents/_subprocess.py's module docstr
+          ing."""
+      50  
+      51 -    name: str                                   # "claude-cli" 
+         -| "google-cli" | "anthropic"                                   
+      51 +    name: str                                   # "claude-cli" 
+         +| "google-cli" | "anthropic" | "opencode-zen"                  
+      52  
+      53      @abstractmethod
+      54      async def start_session(
+
+  Searched for 2 patterns, listed 1 directory (ctrl+o to expand)
+
+⏺ README.md is the real user-facing doc and needs updating in several places.
+  Let me view the relevant sections.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Now let's make all the README updates.
+
+⏺ Update(README.md)
+  ⎿  Added 2 lines
+      57      BE -->|1st| CLI1["claude-cli"]
+      58      BE -->|2nd| CLI2["google-cli"]
+      59      BE -->|3rd| API1["anthropic"]
+      60 +    BE -->|4th| API2["opencode-zen"]                           
+      61      CLI1 --> PARSE["protocol.parse_reply()<br/>sentinel grammar
+          "]
+      62      CLI2 --> PARSE
+      63      API1 --> PARSE
+      64 +    API2 --> PARSE                                             
+      65      PARSE --> SM["state_machine.transition()"]
+      66      SM --> CKPT["repo.checkpoint()<br/>atomic: Job + Message + 
+          Document"]
+      67      CKPT --> DB
+
+⏺ Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      119  
+      120  ### Backend fallback chain
+      121  
+      122 -Backends implement a common `AgentBackend` ABC (`jsa/agents/ba
+          -se.py`) and are tried in order via `--backends claude-cli,goog
+          -le-cli,anthropic` (or the equivalent `JSA_BACKENDS` env var). 
+          -On a hard failure (rate limit, session expiry) the orchestrato
+          -r fails over to the next backend in the chain and resumes the 
+          -job from its last checkpoint — the UI surfaces which backend i
+          -s currently active:                                           
+      122 +Backends implement a common `AgentBackend` ABC (`jsa/agents/ba
+          +se.py`) and are tried in order via `--backends claude-cli,goog
+          +le-cli,anthropic,opencode-zen` (or the equivalent `JSA_BACKEND
+          +S` env var). On a hard failure (rate limit, session expiry) th
+          +e orchestrator fails over to the next backend in the chain and
+          + resumes the job from its last checkpoint — the UI surfaces wh
+          +ich backend is currently active:                              
+      123  
+      124  <p align="center">
+      125    <img src="assets/JSA_Screens_Backend_Queue.png" alt="Backend
+            failover queue dropdown showing Claude CLI as the active back
+           end" width="360">
+
+⏺ Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      205  | `--csv` | required | — | Path to the jobs CSV file |
+      206  | `--cv` | optional | — | Path to a CV (`.pdf` or `.docx`) — u
+           sed **once**, to seed the CV Structure Editor's `cv_structure.
+           json` if it doesn't exist yet. Ignored (with a printed note) o
+           nce a structure exists. The editor is the source of truth from
+            then on — see [CV Structure Editor](#cv-structure-editor) |
+      207  | `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where ren
+           dered PDF/DOCX files are written |
+      208 -| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (sin
+          -gle), backward-compat alias for `--backends`: `claude-cli` \| 
+          -`google-cli` \| `anthropic` |                                 
+      208 +| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (sin
+          +gle), backward-compat alias for `--backends`: `claude-cli` \| 
+          +`google-cli` \| `anthropic` \| `opencode-zen` |               
+      209  | `--backends` | `claude-cli` | `JSA_BACKENDS` | Comma-separat
+           ed ordered backend fallback chain, e.g. `claude-cli,google-cli
+           ` |
+      210  | `--db` | `~/.jsa/jsa.sqlite` | `JSA_DB_PATH` | SQLite databa
+           se path |
+      211  | `--port` | `8765` | `JSA_PORT` | Port for the local web serv
+           er |
+
+⏺ Update(README.md)
+  ⎿  Added 18 lines
+      245  jsa --csv jobs.csv --cv resume.pdf --backend anthropic
+      246  ```
+      247  
+      248 +### `opencode-zen`                                            
+      249 +                                                              
+      250 +Uses the [OpenCode Zen](https://opencode.ai/zen) OpenAI-compat
+          +ible chat-completions API — a single endpoint proxying many mo
+          +dels (Claude, GPT, Gemini, and various free-tier models). Requ
+          +ires the `OPENCODE_API_KEY` environment variable to be set.   
+      251 +                                                              
+      252 +```bash                                                       
+      253 +export OPENCODE_API_KEY=...                                   
+      254 +jsa --csv jobs.csv --cv resume.pdf --backend opencode-zen     
+      255 +```                                                           
+      256 +                                                              
+      257 +The default model is the free `nemotron-3-ultra-free` — note t
+          +his model is observably flaky under upstream load (intermitten
+          +t errors from the underlying provider); pair it with a fallbac
+          +k chain (`--backends opencode-zen,claude-cli`) for reliability
+          +, or set `JSA_OPENCODE_ZEN_MODEL` to a paid model.            
+      258 +                                                              
+      259  Optional environment variables for this backend:
+      260  
+      261  | Variable | Default | Description |
+      262  |----------|---------|-------------|
+      263 +| `JSA_OPENCODE_ZEN_MODEL` | `nemotron-3-ultra-free` | Model I
+          +D from OpenCode Zen's catalog |                               
+      264 +| `JSA_OPENCODE_ZEN_TIMEOUT` | `180` | Per-request timeout in 
+          +seconds |                                                     
+      265 +                                                              
+      266 +Optional environment variables for the `anthropic` backend:   
+      267 +                                                              
+      268 +| Variable | Default | Description |                          
+      269 +|----------|---------|-------------|                          
+      270  | `JSA_MODEL` | `claude-haiku-4-5` | Model name to use (also a
+           pplies to `claude-cli`) |
+      271  | `JSA_ANTHROPIC_TIMEOUT` | `180` | Per-request timeout in sec
+           onds |
+      272  | `JSA_AGENT_TIMEOUT` | `600` | Per-request timeout for CLI ba
+           ckends (`claude-cli`, `google-cli`) |
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ That reads cleanly. Now let's fix the other README mentions (project structure
+  line, and translate-ui.sh two-backend line is unrelated). Let's check line
+  ~493+.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Update(README.md)
+  ⎿  Added 1 line, removed 1 line
+      510    server.py             FastAPI app factory
+      511    db/                    SQLAlchemy models (Job, Message, Docu
+           ment, FollowUp, RevisionRequest), engine, repository
+      512    ingest/                CSV and CV loaders
+      513 -  agents/                AgentBackend ABC, three backends (cla
+          -ude_cli, google_cli, anthropic_api), registry, sentinel protoc
+          -ol parser                                                     
+      513 +  agents/                AgentBackend ABC, four backends (clau
+          +de_cli, google_cli, anthropic_api, opencode_zen), registry, se
+          +ntinel protocol parser                                        
+      514    prompts/               Prompt files (edit these) + loader (n
+           o caching)
+      515    pipeline/              Orchestrator, stage runners (stages.p
+           y), state machine, CV structure inference
+      516    render/                PDF (WeasyPrint) and DOCX (python-doc
+           x) renderers
+⏺ Now let's fix the _call_api JSON-decode robustness and None-content guard
+  issues the advisor flagged.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(jsa/agents/opencode_zen.py)
+  ⎿  Added 22 lines, removed 2 lines
+      139          if response.status_code == 429:
+      140              raise AgentLimitReached(f"OpenCode Zen API rate li
+           mit reached: {response.text[:500]}")
+      141  
+      142 -        body = response.json()                                
+      142 +        # A gateway-level failure (e.g. a 502/503 from the pro
+          +xy in front of the API,                                       
+      143 +        # as opposed to the API's own JSON error envelope) can
+          + return non-JSON — HTML,                                      
+      144 +        # plain text. Check that *before* touching status_code
+          +>=400 below, since that                                       
+      145 +        # branch depends on `body` and must never be reached v
+          +ia a JSONDecodeError.                                         
+      146 +        try:                                                  
+      147 +            body = response.json()                            
+      148 +        except ValueError:                                    
+      149 +            raise RuntimeError(                               
+      150 +                f"OpenCode Zen API error {response.status_code
+          +}: {response.text[:500]}"                                     
+      151 +            ) from None                                       
+      152 +                                                              
+      153          if "error" in body:
+      154              err = body["error"]
+      155              message = err.get("message", str(err)) if isinstan
+           ce(err, dict) else str(err)
+     ...
+      163                  f"OpenCode Zen API error {response.status_code
+           }: {response.text[:500]}"
+      164              )
+      165  
+      156 -        return body["choices"][0]["message"]["content"]       
+      166 +        content = body["choices"][0]["message"]["content"]    
+      167 +        if content is None:                                   
+      168 +            # Reasoning models can return a null content when 
+          +the reply is all                                              
+      169 +            # `reasoning` (e.g. truncated by max_tokens before
+          + any final answer) —                                          
+      170 +            # surface this as a clear error rather than lettin
+          +g parse_reply's regex                                         
+      171 +            # crash on None.                                  
+      172 +            raise RuntimeError(                               
+      173 +                "OpenCode Zen API returned null message conten
+          +t (model may have "                                           
+      174 +                "produced only reasoning tokens before hitting
+          + max_tokens)"                                                 
+      175 +            )                                                 
+      176 +        return content                                        
+
+⏺ Now let's add tests for both new guards and re-run the suite.
+
+⏺ Update(tests/backend/test_opencode_zen.py)
+  ⎿  Added 23 lines
+      290              with pytest.raises(RuntimeError):
+      291                  await backend.start_session("sys", "msg")
+      292  
+      293 +    async def test_non_json_5xx_body_raises_runtime_error(self
+          +):                                                            
+      294 +        """A gateway-level 502/503 can return HTML/plain-text,
+          + not the API's JSON envelope."""                              
+      295 +        mock_response = MagicMock()                           
+      296 +        mock_response.status_code = 502                       
+      297 +        mock_response.json = MagicMock(side_effect=ValueError(
+          +"not JSON"))                                                  
+      298 +        mock_response.text = "<html>Bad Gateway</html>"       
+      299 +        mock_client = MagicMock()                             
+      300 +        mock_client.post = AsyncMock(return_value=mock_respons
+          +e)                                                            
+      301 +        mock_client.aclose = AsyncMock()                      
+      302 +        with patch("httpx.AsyncClient", return_value=mock_clie
+          +nt):                                                          
+      303 +            backend = OpenCodeZenBackend()                    
+      304 +            with pytest.raises(RuntimeError, match="502"):    
+      305 +                await backend.start_session("sys", "msg")     
+      306  
+      307 +    async def test_null_content_raises_runtime_error(self):   
+      308 +        """Reasoning models can return null content when trunc
+          +ated before a final answer."""                                
+      309 +        body = {"choices": [{"message": {"role": "assistant", 
+          +"content": None}}]}                                           
+      310 +        mock_client = _make_mock_client(body, status_code=200)
+      311 +        with patch("httpx.AsyncClient", return_value=mock_clie
+          +nt):                                                          
+      312 +            backend = OpenCodeZenBackend()                    
+      313 +            with pytest.raises(RuntimeError, match="null"):   
+      314 +                await backend.start_session("sys", "msg")     
+      315 +                                                              
+      316 +                                                              
+      317  # ------------------------------------------------------------
+           ---------------
+      318  # 8 — Registry: backend_for("opencode-zen") returns OpenCodeZe
+           nBackend
+      319  # ------------------------------------------------------------
+           ---------------
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 37 pass. Let's run the frontend test suite too, since I touched
+  Header.tsx.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Passes (that act warning is pre-existing, unrelated to my change). Let's run
+  the full backend suite once more to confirm the fix didn't break anything,
+  then commit.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ All 1037 pass (the earlier flake didn't recur). Now let's re-run the live
+  integration test once more to confirm the fixes didn't break real-world
+  behavior, then commit.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now let's commit everything.
+
+  Committed 5c3fcf9, ran 3 shell commands (ctrl+o to expand)
+
+⏺ There's a relevant old stash — stash@{6}: WIP on feat/cv-adjust-avature: ... 
+  feat: add opencode-cli backend provider — worth checking before I call this
+  done.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ That stash is old, unrelated debris (a different, abandoned CLI-based
+  opencode-cli attempt from branch feat/cv-adjust-avature, mostly
+  AGENTS.md/config changes, no real backend code) — not touching it.
+
+  Summary
+
+  Branch hygiene first:
+  - Committed the in-progress phase-5 frontend work on feat/cv-cl-two-lane-split
+    (38 files)
+  - Stashed 3 stray untracked files (cv_structure.json, session-ses_fbb2.md,
+    cv_daemon_standalone.html) per your call — they're in stash@{0} on that
+    branch if you want them back
+  - Switched to main (clean, up to date with origin) and branched
+    feat/opencode-zen-backend
+
+  New backend (jsa/agents/opencode_zen.py, registered as opencode-zen, matching
+  the existing kebab-case flag convention — not the literal OpenCode_ZEN you
+  wrote; flag it if you want it reversed):
+
+  - Verified live against the real API: endpoint is
+    https://opencode.ai/zen/v1/chat/completions, OpenAI-compatible
+    chat-completions shape (system prompt as a messages[0] entry, not a
+    top-level kwarg like the Anthropic backend uses)
+  - Default model is nemotron-3-ultra-free — confirmed via /v1/models; the
+    opencode/ prefix you guessed is rejected by the API (ModelError: not 
+    supported), so I dropped it
+  - Auth: Authorization: Bearer $OPENCODE_API_KEY, read from env at call time
+    (project loads no .env itself — same as ANTHROPIC_API_KEY)
+  - Discovered live and handled: the API can return HTTP 200 with an error body
+    (saw this happen from a transient upstream 502 under load) — checked
+    regardless of status code; gateway-level non-JSON error bodies; null content
+    from reasoning models truncated before a final answer
+  - Wired through registry.py, config.py (dedicated
+    opencode_zen_model/opencode_zen_timeout, since its model catalog isn't
+    Claude-only), server.py's make_backend_factory, cli.py's _VALID_BACKENDS,
+    plus Header.tsx's backend display-label map and README/CLAUDE.md docs
+
+  Tests: 37 unit tests (tests/backend/test_opencode_zen.py, mocked) + 2 live
+  integration tests (tests/backend/integration/test_opencode_zen_live.py, marked
+  @pytest.mark.integration, hits the real API using the key from .env) — all
+  pass. Full suite: 1037 passed, 2 skipped, no regressions.
+
+  Branched from main. Let me know if you'd like this merged or left as-is for
+  review.
+
+✻ Brewed for 13m 30s · done 4:00 PM
