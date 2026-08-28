@@ -94,7 +94,7 @@ _ENTRY_META_KEYS = frozenset({"type", "kind", "id", "order", "index", "icon"})
 # Matches an explicit link key or a URL-shaped string (github.com/..., https://..., www…).
 _LINK_KEYS = frozenset({"url", "link", "links", "repo", "repository", "github",
                         "gitlab", "href", "website", "homepage", "demo", "live"})
-_URL_RE = re.compile(r"(https?://|www\.|[\w-]+\.(?:com|org|io|dev|net|app|gg|me|co|ai)\b)", re.I)
+_URL_RE = re.compile(r"(https?://|www\.|[\w-]+\.(?:com|org|io|dev|net|app|gg|me|co|ai)/\S)", re.I)
 
 # Cover-letter "tells": structural formulas that belong in a letter, never a CV. Used by the
 # content-kind guard to reject a payload where the model wrote a cover letter into the CV
