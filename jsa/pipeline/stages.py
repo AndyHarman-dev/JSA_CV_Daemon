@@ -25,6 +25,7 @@ from jsa.schema import CVDocument, CoverLetter, cv_has_summary
 from jsa.db import repo
 from jsa.util import slugify as _slugify
 from jsa.db.models import (
+    Document,
     FollowUp,
     Job,
     JobState,
@@ -71,42 +72,63 @@ class StaleJobResult(Exception):
     """
 
 
-async def _render_for_review(session: AsyncSession, job: Job, output_dir: Path) -> None:
-    """Render both PDF and DOCX for all review documents and persist paths."""
-    cv_docs = await repo.get_documents(session, job.id, Stage.cv_adjust)
-    cl_docs = await repo.get_documents(session, job.id, Stage.cover_letter)
-    if not cv_docs or not cl_docs:
-        return
+_RENDER_FILENAMES = {Stage.cv_adjust: "cv", Stage.cover_letter: "cover_letter"}
 
-    cv_doc = cv_docs[0]  # version-desc, so [0] is latest
-    cl_doc = cl_docs[0]
+
+async def _render(
+    session: AsyncSession,
+    job: Job,
+    output_dir: Path,
+    stages: tuple[Stage, ...] = (Stage.cv_adjust, Stage.cover_letter),
+) -> None:
+    """Render PDF+DOCX for the latest Document of each given stage, persisting paths.
+
+    A stage with no Document yet is skipped rather than erroring — e.g. at the CV gate
+    only ``cv_adjust`` has one; at final review both do.
+    """
+    docs: dict[Stage, Document] = {}
+    for st in stages:
+        st_docs = await repo.get_documents(session, job.id, st)
+        if st_docs:
+            docs[st] = st_docs[0]  # version-desc, so [0] is latest
+    if not docs:
+        return
 
     slug = f"{_slugify(job.company)}_{_slugify(job.role)}_{job.id[:8]}"
     out = output_dir / slug
     out.mkdir(parents=True, exist_ok=True)
 
-    cv_pdf  = out / "cv.pdf"
-    cv_docx = out / "cv.docx"
-    cl_pdf  = out / "cover_letter.pdf"
-    cl_docx = out / "cover_letter.docx"
-
     pdf_r  = renderer_for("weasyprint")
     docx_r = renderer_for("docx")
 
-    await asyncio.gather(
-        pdf_r.render(cv_doc.markdown, cv_pdf),
-        docx_r.render(cv_doc.markdown, cv_docx),
-        pdf_r.render(cl_doc.markdown, cl_pdf),
-        docx_r.render(cl_doc.markdown, cl_docx),
-    )
+    render_tasks = []
+    doc_paths: dict[Stage, tuple[Path, Path]] = {}
+    for st, doc in docs.items():
+        name = _RENDER_FILENAMES[st]
+        pdf_path = out / f"{name}.pdf"
+        docx_path = out / f"{name}.docx"
+        render_tasks.append(pdf_r.render(doc.markdown, pdf_path))
+        render_tasks.append(docx_r.render(doc.markdown, docx_path))
+        doc_paths[st] = (pdf_path, docx_path)
 
-    cv_doc.pdf_path  = str(cv_pdf)
-    cv_doc.docx_path = str(cv_docx)
-    cl_doc.pdf_path  = str(cl_pdf)
-    cl_doc.docx_path = str(cl_docx)
-    session.add(cv_doc)
-    session.add(cl_doc)
+    await asyncio.gather(*render_tasks)
+
+    for st, doc in docs.items():
+        pdf_path, docx_path = doc_paths[st]
+        doc.pdf_path = str(pdf_path)
+        doc.docx_path = str(docx_path)
+        session.add(doc)
     await session.commit()
+
+
+async def _render_for_review(session: AsyncSession, job: Job, output_dir: Path) -> None:
+    """Render both PDF and DOCX for the CV and cover-letter documents and persist paths."""
+    await _render(session, job, output_dir, stages=(Stage.cv_adjust, Stage.cover_letter))
+
+
+async def _render_cv(session: AsyncSession, job: Job, output_dir: Path) -> None:
+    """Render PDF and DOCX for the cv_adjust document only — the CV gate."""
+    await _render(session, job, output_dir, stages=(Stage.cv_adjust,))
 
 
 class FinalContentError(ValueError):
@@ -495,15 +517,31 @@ async def run_stage(
                 {"role": "assistant", "content": reply.raw},
             ]
         else:
-            # Fresh session — run research pre-step (claude-cli only; best-effort)
-            brief = await _gather_research(job, general_purpose_backend, stage)
-            # Read the standalone base-CV structure — it IS the base CV, the only CV
-            # content either stage's agent sees. Only needed here (fresh session), not on
-            # the resume branch above, so the read is deferred to this branch. cv_adjust
-            # treats it as the authoritative skeleton to preserve (see PROMPT_CDADJUST.md);
-            # cover_letter draws on it for background/achievements (see CVL_PROMPT.md).
-            base_structure = await _read_base_structure(cv_structure_path)
-            initial_user_msg = _build_initial_user_msg(job, brief, base_structure)
+            # Fresh session. cover_letter gets a company-research brief and the approved
+            # tailored CV (the two-lane split's whole point: write the letter against what
+            # will actually be submitted, not the base structure). cv_adjust gets neither —
+            # research is unwired for it (see CLAUDE.md → "CV structure — single source of
+            # truth") and it works from the base structure directly.
+            if stage is Stage.cover_letter:
+                brief = await _gather_research(job, general_purpose_backend, stage)
+                cv_docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+                if cv_docs:
+                    cv_block = (
+                        "TAILORED CV (approved by the user — write the letter against this)",
+                        cv_docs[0].markdown,
+                    )
+                else:
+                    logger.warning(
+                        "cover_letter fresh session for job %s has no cv_adjust Document "
+                        "yet; falling back to the base CV structure (should be unreachable "
+                        "past the CV gate)",
+                        job.id,
+                    )
+                    cv_block = await _base_structure_cv_block(cv_structure_path)
+            else:
+                brief = None
+                cv_block = await _base_structure_cv_block(cv_structure_path)
+            initial_user_msg = _build_initial_user_msg(job, brief, cv_block)
             fresh_system_prompt = _with_language_directive(system_prompt, language_code)
             handle, reply = await general_purpose_backend.start_session(fresh_system_prompt, initial_user_msg)
             # Accumulate all messages for this session (system, user, assistant reply)
@@ -606,7 +644,10 @@ async def run_stage(
     )
 
     # Publish stage-completion events after a successful FINAL checkpoint.
-    # `job.state` has been mutated by transition() inside _handle_final.
+    # `job.state` has been mutated by transition() inside _handle_final — read it rather
+    # than hardcoding a destination. cv_adjust always lands on cv_review (cv_done is only
+    # reached later, via the approve-cv endpoint); revising_cv lands on one of two states
+    # depending on RevisionRequest.origin_state (cv_review or review).
     if stage == Stage.cv_adjust:
         await bus.publish(
             event_to_dict(StageCompleteEvent(job_id=job.id, stage="cv_adjust"))
@@ -616,7 +657,7 @@ async def run_stage(
                 StatusChangedEvent(
                     job_id=job.id,
                     from_state=JobState.running.value,
-                    to_state=JobState.cv_done.value,
+                    to_state=job.state.value,
                 )
             )
         )
@@ -639,7 +680,7 @@ async def run_stage(
                 StatusChangedEvent(
                     job_id=job.id,
                     from_state=JobState.running.value,
-                    to_state=JobState.review.value,
+                    to_state=job.state.value,
                 )
             )
         )
@@ -902,15 +943,19 @@ async def _handle_final(
         raise StaleJobResult(job.id, current_state)
 
     if stage == Stage.cv_adjust:
-        # cv_adjust → cv_done
+        # cv_adjust → cv_review: the CV lane parks for user approve/revise. cv_done is
+        # reached only via the approve-cv endpoint (cv_review → cv_done), never directly
+        # from here — see CLAUDE.md → "Two-lane pipeline / CV gate".
         await checkpoint(
             session,
             job,
-            JobState.cv_done,
+            JobState.cv_review,
             None,
             messages=accumulated_messages,
             document=document_data,
         )
+        if output_dir is not None:
+            await _render_cv(session, job, output_dir)
     elif stage == Stage.cover_letter:
         # cover_letter → review directly: write messages + document in a single transaction.
         # cl_done is not an observable intermediate state in normal flow; it exists only
@@ -927,6 +972,22 @@ async def _handle_final(
         if output_dir is not None:
             await _render_for_review(session, job, output_dir)
     elif stage in (Stage.revising_cv, Stage.revising_cl):
+        # A CV revision can be requested from either the CV gate or final review (both are
+        # revisable there — see CLAUDE.md); revising_cl only ever returns to review (no
+        # cl_review state exists). Read origin_state BEFORE marking the RevisionRequest
+        # consumed. NULL (legacy rows) reads as "review".
+        dest_state = JobState.review
+        if stage == Stage.revising_cv:
+            rr_result = await session.execute(
+                select(RevisionRequest.origin_state).where(
+                    RevisionRequest.job_id == job.id,
+                    RevisionRequest.consumed_at.is_(None),
+                )
+            )
+            origin_state = rr_result.scalar_one_or_none()
+            if origin_state == JobState.cv_review.value:
+                dest_state = JobState.cv_review
+
         # Mark the RevisionRequest consumed (within same transaction as the checkpoint commit)
         await session.execute(
             update(RevisionRequest)
@@ -936,17 +997,19 @@ async def _handle_final(
             )
             .values(consumed_at=datetime.utcnow())
         )
-        # Revision complete → back to review
         await checkpoint(
             session,
             job,
-            JobState.review,
+            dest_state,
             None,
             messages=accumulated_messages,
             document=document_data,
         )
         if output_dir is not None:
-            await _render_for_review(session, job, output_dir)
+            if dest_state == JobState.cv_review:
+                await _render_cv(session, job, output_dir)
+            else:
+                await _render_for_review(session, job, output_dir)
 
     await backend.end_session(handle)
 
@@ -1011,34 +1074,45 @@ def _with_language_directive(system_prompt: str, language_code: str, *, fit_verd
 
 
 def _build_initial_user_msg(
-    job: Job, brief: str, base_structure: CVDocument | None = None
+    job: Job, brief: str | None, cv_block: tuple[str, str] | None = None
 ) -> str:
     """Build the initial user message for a fresh session.
 
-    ``brief`` is either a populated research block ([INTEL_BRIEF] or [COMPANY_BRIEF])
-    or the NONE placeholder produced by ``_research_placeholder``.  It is always
-    injected first so the main agent sees it immediately and the resumed Message
-    history replays it verbatim (research runs at most once per stage).
+    ``brief`` is either a populated research block ([INTEL_BRIEF] or [COMPANY_BRIEF]) or
+    the NONE placeholder produced by ``_research_placeholder`` — or ``None`` when the
+    stage has no research (cv_adjust; research is unwired for it, see CLAUDE.md → "CV
+    structure — single source of truth"). When present it is injected first so the main
+    agent sees it immediately and the resumed Message history replays it verbatim.
 
-    ``base_structure`` is the standalone base-CV ``CVDocument`` the user shaped in the
-    Structure Editor — the only CV content either stage's agent sees (used by cv_adjust
-    and cover_letter). This block only supplies the data; stage-specific instructions for
-    *how* to use it (cv_adjust: preserve the skeleton exactly; cover_letter: draw on it for
-    background/achievements) live in each stage's own system prompt, not here. Injected
-    here (rather than after research) so it is part of the persisted initial message and
-    replays verbatim on an awaiting_input resume.
+    ``cv_block`` is an optional ``(label, content)`` pair supplying the CV content —
+    cv_adjust gets the base structure's JSON skeleton; cover_letter gets the approved
+    tailored CV's markdown (or, absent one, the base structure as a fallback). This block
+    only supplies the data; stage-specific instructions for *how* to use it live in each
+    stage's own system prompt, not here. Injected here (rather than after research) so it
+    is part of the persisted initial message and replays verbatim on an awaiting_input
+    resume.
     """
+    brief_part = f"{brief}\n\n" if brief is not None else ""
     skeleton = ""
-    if base_structure is not None:
-        skeleton = (
-            "BASE CV STRUCTURE (the candidate's base CV, curated in the Structure Editor):\n"
-            f"{base_structure.model_dump_json(indent=2)}\n\n"
-        )
+    if cv_block is not None:
+        label, content = cv_block
+        skeleton = f"{label}:\n{content}\n\n"
     return (
-        f"{brief}\n\n"
+        f"{brief_part}"
         f"{skeleton}"
         f"JOB DESCRIPTION:\n{job.jd}\n\n"
         f"TIER: {job.tier}"
+    )
+
+
+async def _base_structure_cv_block(cv_structure_path: Path | None) -> tuple[str, str] | None:
+    """Return the base-CV structure as a ``(label, content)`` cv_block, or None if absent."""
+    base_structure = await _read_base_structure(cv_structure_path)
+    if base_structure is None:
+        return None
+    return (
+        "BASE CV STRUCTURE (the candidate's base CV, curated in the Structure Editor)",
+        base_structure.model_dump_json(indent=2),
     )
 
 
@@ -1156,19 +1230,13 @@ def _research_placeholder(stage: Stage) -> str:
 def _research_spec(job: Job, stage: Stage) -> tuple[str, str, str]:
     """Return (agent_name, query, open_tag) for the given stage.
 
-    Only ``cv_adjust`` and ``cover_letter`` are valid inputs — ``_gather_research``
-    is never called for revision stages, but this guard makes that contract explicit.
+    Only ``cover_letter`` is a valid input. ``cv-research``/``cv_adjust`` is unwired
+    (see CLAUDE.md → "CV structure — single source of truth"): ``cv-research.md`` and
+    ``GEMINI_CV_RESEARCH.md`` are deliberately left on disk, but nothing calls this with
+    ``Stage.cv_adjust`` anymore. ``_gather_research`` is never called for revision stages
+    either, but this guard makes that contract explicit.
     """
-    if stage == Stage.cv_adjust:
-        agent_name = "cv-research"
-        open_tag = "[INTEL_BRIEF]"
-        query = (
-            f"Company: {job.company}\n"
-            f"Role: {job.role}\n"
-            f"Job posting link: {job.link}\n"
-            f"Job description:\n{job.jd}"
-        )
-    elif stage == Stage.cover_letter:
+    if stage == Stage.cover_letter:
         agent_name = "cl-research"
         open_tag = "[COMPANY_BRIEF]"
         query = (
@@ -1179,7 +1247,7 @@ def _research_spec(job: Job, stage: Stage) -> tuple[str, str, str]:
     else:
         raise ValueError(
             f"_research_spec called with unexpected stage {stage!r}; "
-            "only cv_adjust and cover_letter are supported."
+            "only cover_letter is supported."
         )
     return agent_name, query, open_tag
 

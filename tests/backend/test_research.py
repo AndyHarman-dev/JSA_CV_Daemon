@@ -26,12 +26,12 @@ from jsa.agents.base import AgentReply
 from jsa.agents.claude_cli import ClaudeCliBackend, _PROJECT_ROOT
 from jsa.db import repo
 from jsa.db.models import Base, FollowUp, Job, JobState, Message, Stage
-from jsa.schema import CVDocument
 from jsa.pipeline.stages import (
     PausedForInput,
     _build_initial_user_msg,
     _gather_research,
     _research_placeholder,
+    _research_spec,
     run_stage,
 )
 from jsa.pipeline.state_machine import transition
@@ -174,20 +174,6 @@ class TestGatherResearchFakeBackend:
 class TestGatherResearchFallbackOnException:
     """When ClaudeCliBackend.run_research raises, _gather_research returns the placeholder."""
 
-    async def test_exception_in_run_research_returns_placeholder_cv_adjust(self, monkeypatch):
-        """run_research raising RuntimeError → cv_adjust NONE placeholder returned."""
-        job = _make_job()
-        backend = ClaudeCliBackend()
-
-        async def _raise(*args, **kwargs):
-            raise RuntimeError("subagent crashed")
-
-        monkeypatch.setattr(ClaudeCliBackend, "run_research", _raise)
-
-        result = await _gather_research(job, backend, Stage.cv_adjust)
-        assert "[INTEL_BRIEF]" in result
-        assert "NONE" in result
-
     async def test_exception_in_run_research_returns_placeholder_cover_letter(self, monkeypatch):
         """run_research raising RuntimeError → cover_letter NONE placeholder returned."""
         job = _make_job()
@@ -213,7 +199,7 @@ class TestGatherResearchFallbackOnException:
         monkeypatch.setattr(ClaudeCliBackend, "run_research", _raise)
 
         # Must not raise
-        result = await _gather_research(job, backend, Stage.cv_adjust)
+        result = await _gather_research(job, backend, Stage.cover_letter)
         assert result  # returns something non-empty
 
     async def test_run_research_returns_text_without_tag_falls_back(self, monkeypatch):
@@ -226,9 +212,35 @@ class TestGatherResearchFallbackOnException:
 
         monkeypatch.setattr(ClaudeCliBackend, "run_research", _no_tag)
 
-        result = await _gather_research(job, backend, Stage.cv_adjust)
-        assert "[INTEL_BRIEF]" in result
+        result = await _gather_research(job, backend, Stage.cover_letter)
+        assert "[COMPANY_BRIEF]" in result
         assert "NONE" in result
+
+
+class TestResearchSpecCvAdjustUnwired:
+    """cv-research is unwired from cv_adjust (two-lane pipeline split) — files stay on
+    disk (cv-research.md, GEMINI_CV_RESEARCH.md) but _research_spec no longer accepts
+    Stage.cv_adjust, and _gather_research propagates that ValueError for any backend
+    that implements run_research."""
+
+    def test_research_spec_raises_for_cv_adjust(self):
+        job = _make_job()
+        with pytest.raises(ValueError):
+            _research_spec(job, Stage.cv_adjust)
+
+    def test_research_spec_raises_for_revising_cv(self):
+        job = _make_job()
+        with pytest.raises(ValueError):
+            _research_spec(job, Stage.revising_cv)
+
+    async def test_gather_research_raises_for_cv_adjust_with_capable_backend(self):
+        """A backend WITH run_research (e.g. ClaudeCliBackend) hits _research_spec's
+        guard for cv_adjust — unlike FakeAgentBackend, which returns early via the
+        no-run_research placeholder path before ever reaching _research_spec."""
+        job = _make_job()
+        backend = ClaudeCliBackend()
+        with pytest.raises(ValueError):
+            await _gather_research(job, backend, Stage.cv_adjust)
 
 
 # ---------------------------------------------------------------------------
@@ -236,21 +248,19 @@ class TestGatherResearchFallbackOnException:
 # ---------------------------------------------------------------------------
 
 
-def _make_structure(**contact_overrides) -> CVDocument:
-    return CVDocument.model_validate({
-        "contact": {"name": "Alice Example", **contact_overrides},
-        "sections": [{"name": "Summary", "text": "Alice's full CV"}],
-    })
+def _make_cv_block(label: str = "BASE CV STRUCTURE") -> tuple[str, str]:
+    return (label, "Alice's full CV")
 
 
 class TestBuildInitialUserMsg:
-    """_build_initial_user_msg(job, brief, base_structure) injects brief at the top."""
+    """_build_initial_user_msg(job, brief, cv_block) injects brief at the top; cv_block
+    is an optional (label, content) pair (see stages.py)."""
 
     def test_brief_appears_before_skeleton(self):
-        """The brief must appear before the 'BASE CV STRUCTURE' block in the message."""
+        """The brief must appear before the cv_block's label in the message."""
         job = _make_job()
         brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
-        msg = _build_initial_user_msg(job, brief, _make_structure())
+        msg = _build_initial_user_msg(job, brief, _make_cv_block())
         assert msg.index(brief) < msg.index("BASE CV STRUCTURE")
 
     def test_brief_appears_before_job_description(self):
@@ -267,11 +277,11 @@ class TestBuildInitialUserMsg:
         msg = _build_initial_user_msg(job, brief)
         assert msg.index(brief) < msg.index("TIER:")
 
-    def test_base_structure_preserved(self):
-        """The base CV structure's content is present in the message."""
+    def test_cv_block_content_preserved(self):
+        """The cv_block's content is present in the message."""
         job = _make_job()
         brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
-        msg = _build_initial_user_msg(job, brief, _make_structure())
+        msg = _build_initial_user_msg(job, brief, _make_cv_block())
         assert "Alice's full CV" in msg
 
     def test_jd_preserved(self):
@@ -288,22 +298,30 @@ class TestBuildInitialUserMsg:
         msg = _build_initial_user_msg(job, brief)
         assert "TIER: C" in msg
 
-    def test_headers_present_with_base_structure(self):
-        """The BASE CV STRUCTURE, JOB DESCRIPTION, and TIER headers all appear in the message."""
+    def test_headers_present_with_cv_block(self):
+        """The cv_block's label, JOB DESCRIPTION, and TIER headers all appear in the message."""
         job = _make_job()
         brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
-        msg = _build_initial_user_msg(job, brief, _make_structure())
+        msg = _build_initial_user_msg(job, brief, _make_cv_block())
         assert "BASE CV STRUCTURE" in msg
         assert "JOB DESCRIPTION:" in msg
         assert "TIER:" in msg
 
-    def test_no_skeleton_when_base_structure_absent(self):
-        """Without a base structure, no BASE CV STRUCTURE block (and no CV TEXT fallback)."""
+    def test_no_skeleton_when_cv_block_absent(self):
+        """Without a cv_block, no CV content block (and no CV TEXT fallback) appears."""
         job = _make_job()
         brief = "[INTEL_BRIEF]\nNONE\n[/INTEL_BRIEF]"
         msg = _build_initial_user_msg(job, brief, None)
         assert "BASE CV STRUCTURE" not in msg
         assert "CV TEXT:" not in msg
+
+    def test_no_brief_block_when_brief_is_none(self):
+        """brief=None (cv_adjust — research is unwired) omits the brief entirely, not 'None'."""
+        job = _make_job(jd="Job desc here")
+        msg = _build_initial_user_msg(job, None, _make_cv_block())
+        assert not msg.startswith("None")
+        assert "\nNone\n" not in msg
+        assert msg.startswith("BASE CV STRUCTURE")
 
 
 # ---------------------------------------------------------------------------
@@ -312,10 +330,11 @@ class TestBuildInitialUserMsg:
 
 
 class TestRunStageFreshCvAdjustContainsIntelBrief:
-    """On a fresh cv_adjust, the persisted user Message must contain the [INTEL_BRIEF] block."""
+    """cv_adjust's research brief is unwired (two-lane split): a fresh session's persisted
+    user Message must NOT contain any brief block."""
 
-    async def test_fresh_cv_adjust_user_message_contains_intel_brief(self, session):
-        """Fresh cv_adjust with FakeAgentBackend: user Message row has [INTEL_BRIEF]."""
+    async def test_fresh_cv_adjust_user_message_has_no_brief_block(self, session):
+        """Fresh cv_adjust with FakeAgentBackend: user Message row has no brief block."""
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.cv_adjust)
         await session.commit()
@@ -333,7 +352,8 @@ class TestRunStageFreshCvAdjustContainsIntelBrief:
         )
         user_msgs = list(result.scalars().all())
         assert len(user_msgs) == 1
-        assert "[INTEL_BRIEF]" in user_msgs[0].content
+        assert "[INTEL_BRIEF]" not in user_msgs[0].content
+        assert "[COMPANY_BRIEF]" not in user_msgs[0].content
 
     async def test_fresh_cover_letter_user_message_contains_company_brief(self, session):
         """Fresh cover_letter with FakeAgentBackend: user Message row has [COMPANY_BRIEF]."""
@@ -564,17 +584,17 @@ class TestGatherResearchSuccessPath:
     """_gather_research returns the verbatim brief when run_research succeeds and tag is present."""
 
     async def test_gather_research_returns_verbatim_brief_when_tag_present(self, monkeypatch):
-        """When run_research returns text with [INTEL_BRIEF], the verbatim brief is returned."""
+        """When run_research returns text with [COMPANY_BRIEF], the verbatim brief is returned."""
         job = _make_job()
         backend = ClaudeCliBackend()
 
         async def _fake_run_research(*args, **kwargs):
-            return "[INTEL_BRIEF]\nsome content\n[/INTEL_BRIEF]\n"
+            return "[COMPANY_BRIEF]\nsome content\n[/COMPANY_BRIEF]\n"
 
         monkeypatch.setattr(ClaudeCliBackend, "run_research", _fake_run_research)
 
-        result = await _gather_research(job, backend, Stage.cv_adjust)
-        assert "[INTEL_BRIEF]" in result
+        result = await _gather_research(job, backend, Stage.cover_letter)
+        assert "[COMPANY_BRIEF]" in result
         assert "some content" in result
 
 
@@ -617,8 +637,9 @@ class TestResearchPlaceholder:
 class TestGatherResearchGeminiBackend:
     """_gather_research dispatches to GoogleCliBackend.run_research when it returns a valid brief."""
 
-    async def test_cv_adjust_returns_real_brief(self, monkeypatch):
-        """GoogleCliBackend.run_research returns valid brief → _gather_research returns it (not NONE)."""
+    async def test_cv_adjust_raises_research_unwired(self, monkeypatch):
+        """GoogleCliBackend has run_research → _gather_research reaches _research_spec's
+        cv_adjust guard and raises (cv-research is unwired from cv_adjust)."""
         from jsa.agents.google_cli import GoogleCliBackend
         job = _make_job()
         backend = GoogleCliBackend()
@@ -627,9 +648,8 @@ class TestGatherResearchGeminiBackend:
             return "[INTEL_BRIEF]\nCompany: Acme\n[/INTEL_BRIEF]"
 
         monkeypatch.setattr(GoogleCliBackend, "run_research", _fake_research)
-        result = await _gather_research(job, backend, Stage.cv_adjust)
-        assert "[INTEL_BRIEF]" in result
-        assert "NONE" not in result
+        with pytest.raises(ValueError):
+            await _gather_research(job, backend, Stage.cv_adjust)
 
     async def test_cover_letter_returns_real_brief(self, monkeypatch):
         from jsa.agents.google_cli import GoogleCliBackend
@@ -654,8 +674,8 @@ class TestGatherResearchGeminiBackend:
             raise RuntimeError("gemini quota exceeded")
 
         monkeypatch.setattr(GoogleCliBackend, "run_research", _raise)
-        result = await _gather_research(job, backend, Stage.cv_adjust)
-        assert "[INTEL_BRIEF]" in result
+        result = await _gather_research(job, backend, Stage.cover_letter)
+        assert "[COMPANY_BRIEF]" in result
         assert "NONE" in result
 
     async def test_run_research_missing_tag_returns_placeholder(self, monkeypatch):
@@ -668,8 +688,8 @@ class TestGatherResearchGeminiBackend:
             return "Some research output without the expected tag"
 
         monkeypatch.setattr(GoogleCliBackend, "run_research", _no_tag)
-        result = await _gather_research(job, backend, Stage.cv_adjust)
-        assert "[INTEL_BRIEF]" in result
+        result = await _gather_research(job, backend, Stage.cover_letter)
+        assert "[COMPANY_BRIEF]" in result
         assert "NONE" in result
 
 

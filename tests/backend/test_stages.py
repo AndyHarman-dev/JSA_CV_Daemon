@@ -205,8 +205,8 @@ class FakeBackendWithExternalId(FakeAgentBackend):
 
 
 class TestCvAdjustHappyPath:
-    async def test_job_transitions_to_cv_done(self, session):
-        """Fresh cv_adjust session: FINAL reply → job in cv_done."""
+    async def test_job_transitions_to_cv_review(self, session):
+        """Fresh cv_adjust session: FINAL reply → job parks in cv_review (the CV gate)."""
         job = await _insert_job(session)
         # Transition to running(cv_adjust) before calling run_stage
         transition(job, JobState.running, Stage.cv_adjust)
@@ -216,7 +216,7 @@ class TestCvAdjustHappyPath:
         await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state == JobState.cv_done
+        assert refreshed.state == JobState.cv_review
         assert refreshed.current_stage is None
 
     async def test_document_written_with_cv_adjust_stage(self, session):
@@ -381,7 +381,7 @@ class TestNeedsInputParking:
 
 
 class TestResumeAfterAnswer:
-    async def test_resume_continues_to_cv_done(self, session):
+    async def test_resume_continues_to_cv_review(self, session):
         """Resume after answered FollowUp continues to completion."""
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.cv_adjust)
@@ -409,7 +409,7 @@ class TestResumeAfterAnswer:
         await run_stage(job_fresh, backend2, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state == JobState.cv_done
+        assert refreshed.state == JobState.cv_review
 
     async def test_resume_writes_only_new_messages(self, session):
         """On resume, only the new answer + reply messages are added (not re-written)."""
@@ -591,8 +591,9 @@ class TestDocumentVersioning:
         assert docs_v1[0].version == 1
 
         # Now simulate revision: set up review state and insert RevisionRequest
-        # Need to go through cover_letter to reach review state
+        # Need to go through the CV gate (approve) then cover_letter to reach review state
         job_after_cv = await repo.get_job(session, job.id)
+        transition(job_after_cv, JobState.cv_done, None)  # simulate approve-cv
         transition(job_after_cv, JobState.running, Stage.cover_letter)
         transition(job_after_cv, JobState.cl_done, None)
         transition(job_after_cv, JobState.review, None)
@@ -820,7 +821,7 @@ class TestCvAdjustSelfHeal:
         await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state == JobState.cv_done
+        assert refreshed.state == JobState.cv_review
 
         docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
         assert len(docs) == 1
@@ -849,7 +850,7 @@ class TestCvAdjustSelfHeal:
             await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state != JobState.cv_done
+        assert refreshed.state != JobState.cv_review
         docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
         assert docs == []  # nothing was persisted
 
@@ -869,7 +870,7 @@ class TestCvAdjustSummaryNudge:
         await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state == JobState.cv_done
+        assert refreshed.state == JobState.cv_review
         docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
         assert "## Summary" in docs[0].markdown
 
@@ -879,7 +880,7 @@ class TestCvAdjustSummaryNudge:
         assert any("missing a Summary" in m.content for m in result.scalars().all())
 
     async def test_persistent_missing_summary_ships_thin_not_failed(self, session):
-        """A CV that never gains a summary still ships (cv_done): thinness, not corruption."""
+        """A CV that never gains a summary still ships (cv_review): thinness, not corruption."""
         job = await _insert_job(session, cv_text=_REAL_CV)
         transition(job, JobState.running, Stage.cv_adjust)
         await session.commit()
@@ -890,7 +891,7 @@ class TestCvAdjustSummaryNudge:
         await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state == JobState.cv_done  # soft: shipped, not failed
+        assert refreshed.state == JobState.cv_review  # soft: shipped, not failed
         docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
         assert len(docs) == 1
         assert "## Summary" not in docs[0].markdown
@@ -908,7 +909,7 @@ class TestCvAdjustCoverLetterGuard:
         await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state == JobState.cv_done
+        assert refreshed.state == JobState.cv_review
         # the concise validator reason ("...cover letter...") was forwarded to the model
         result = await session.execute(
             select(Message).where(Message.job_id == job.id, Message.role == "user")
@@ -926,7 +927,7 @@ class TestCvAdjustCoverLetterGuard:
             await run_stage(job, backend, Stage.cv_adjust, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state != JobState.cv_done
+        assert refreshed.state != JobState.cv_review
         docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
         assert docs == []
 
@@ -984,10 +985,11 @@ class TestCvAdjustConsumesBaseStructure:
         assert "MY UNIQUE CV BODY" not in msg
         assert "CV TEXT:" not in msg
 
-    async def test_skeleton_also_injected_for_cover_letter(self, session, tmp_path):
-        # cover_letter is a fresh session with no cv_adjust history to draw on — it needs
-        # the same base-CV structure (for background/achievements), so this must NOT be
-        # cv_adjust-only. See CVL_PROMPT.md step 2.
+    async def test_skeleton_falls_back_for_cover_letter_when_no_tailored_cv(self, session, tmp_path):
+        # cover_letter's primary CV content is the approved tailored CV Document (see
+        # TestCoverLetterUsesTailoredCv below) — but when none exists yet (should be
+        # unreachable past the CV gate; defensive only), it falls back to the base
+        # structure so the agent isn't left with zero CV content. See CVL_PROMPT.md step 2.
         structure_path = tmp_path / "cv_structure.json"
         structure_path.write_text(json.dumps({
             "contact": {"name": "Jane Doe"},
@@ -1010,3 +1012,96 @@ class TestCvAdjustConsumesBaseStructure:
         assert msg is not None
         assert "BASE CV STRUCTURE" in msg
         assert "Open Source Leadership" in msg
+
+
+# ---------------------------------------------------------------------------
+# Two-lane pipeline: cover_letter is written against the approved tailored CV,
+# not the base structure; cv_adjust no longer runs research.
+# ---------------------------------------------------------------------------
+
+
+class TestCoverLetterUsesTailoredCv:
+    async def test_cover_letter_initial_msg_contains_tailored_cv_markdown(self, session, tmp_path):
+        """When a cv_adjust Document exists, cover_letter's initial message carries its
+        markdown under a TAILORED CV label — not the base structure."""
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        doc = Document(
+            job_id=job.id,
+            stage=Stage.cv_adjust,
+            version=1,
+            markdown="# Jane Doe\n\nA distinctively-worded tailored CV body.",
+        )
+        session.add(doc)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
+        transition(job, JobState.running, Stage.cover_letter)
+        await session.commit()
+
+        backend = _CapturingBackend([_cl_final_reply()])
+        await run_stage(job, backend, Stage.cover_letter, session)
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "TAILORED CV" in msg
+        assert "A distinctively-worded tailored CV body." in msg
+        assert "BASE CV STRUCTURE" not in msg
+
+    async def test_cover_letter_falls_back_to_base_structure_without_tailored_cv(
+        self, session, tmp_path
+    ):
+        """No cv_adjust Document yet (defensive; should be unreachable past the CV gate)
+        → falls back to the base structure rather than sending no CV content at all."""
+        structure_path = tmp_path / "cv_structure.json"
+        structure_path.write_text(json.dumps({
+            "contact": {"name": "Jane Doe"},
+            "sections": [{"name": "Summary", "text": "Fallback base CV."}],
+        }), encoding="utf-8")
+
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)
+        transition(job, JobState.running, Stage.cover_letter)
+        await session.commit()
+
+        backend = _CapturingBackend([_cl_final_reply()])
+        await run_stage(
+            job, backend, Stage.cover_letter, session, cv_structure_path=structure_path
+        )
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "BASE CV STRUCTURE" in msg
+        assert "TAILORED CV" not in msg
+
+
+class TestCvAdjustResearchUnwired:
+    """cv_adjust no longer gets a research brief block — research is cover_letter-only."""
+
+    async def test_cv_adjust_initial_msg_has_no_brief_block(self, session):
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = _CapturingBackend([_final_reply()])
+        await run_stage(job, backend, Stage.cv_adjust, session)
+
+        msg = backend.captured_initial_msg
+        assert msg is not None
+        assert "[INTEL_BRIEF]" not in msg
+        assert "[COMPANY_BRIEF]" not in msg
+        assert msg.startswith("JOB DESCRIPTION:")
+
+    def test_research_spec_raises_for_cv_adjust(self):
+        from jsa.pipeline.stages import _research_spec
+
+        job = Job(
+            id="aabbccdd00112233", company="Acme", role="Engineer",
+            link="https://acme.com/job", tier="A", jd="JD", jd_hash="hash0000deadbeef",
+            cv_text="", state=JobState.pending,
+        )
+        with pytest.raises(ValueError):
+            _research_spec(job, Stage.cv_adjust)

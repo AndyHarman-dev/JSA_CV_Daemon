@@ -112,18 +112,41 @@ def _final_cl() -> AgentReply:
     return cl_final()
 
 
+async def _approve_cv(factory, job_id: str, orch: Orchestrator) -> None:
+    """Simulate the approve-cv action (Phase 4's POST /api/jobs/{id}/approve-cv route
+    body): cv_review → cv_done, then kick the orchestrator so cover_letter dispatches."""
+    async with factory() as s:
+        job = await repo.get_job(s, job_id)
+        await repo.checkpoint(s, job, JobState.cv_done, None)
+    orch.kick()
+
+
 async def _poll_job_state(
     factory,
     job_id: str,
     target_state: JobState,
     timeout: float = 5.0,
+    orch: Orchestrator | None = None,
 ) -> Job:
+    """When target_state is 'review' and orch is given, a job that parks at the CV gate
+    (cv_review) is auto-approved so the cover-letter lane starts — the two-lane pipeline
+    no longer advances a job past the CV gate on its own."""
     deadline = asyncio.get_event_loop().time() + timeout
+    approved = False
     while True:
         async with factory() as s:
             job = await repo.get_job(s, job_id)
         if job is not None and job.state == target_state:
             return job
+        if (
+            not approved
+            and orch is not None
+            and target_state == JobState.review
+            and job is not None
+            and job.state == JobState.cv_review
+        ):
+            approved = True
+            await _approve_cv(factory, job_id, orch)
         if asyncio.get_event_loop().time() >= deadline:
             raise TimeoutError(
                 f"Job {job_id} did not reach {target_state.value!r} within {timeout}s "
@@ -256,7 +279,7 @@ class TestDevAutoResponderE2E:
         resume_task = asyncio.create_task(orch_resume.run())
         responder_task = asyncio.create_task(responder.run())
         try:
-            await _poll_job_state(session_factory, job.id, JobState.review)
+            await _poll_job_state(session_factory, job.id, JobState.review, orch=orch_resume)
         finally:
             orch_resume._stopping = True
             responder._stopping = True

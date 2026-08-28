@@ -26,7 +26,7 @@ from jsa.db.models import (
     RevisionRequest,
     Stage,
 )
-from jsa.pipeline.orchestrator import Orchestrator
+from jsa.pipeline.orchestrator import Orchestrator, _next_stage_for
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
 from tests.backend.fakes.finals import cl_final, cv_final, fit_reply
@@ -100,19 +100,44 @@ def _needs_input_reply(question: str = "What is your target role?") -> AgentRepl
     )
 
 
+async def _approve_cv(factory, job_id: str, orch: Orchestrator) -> None:
+    """Simulate the approve-cv action (Phase 4's POST /api/jobs/{id}/approve-cv route
+    body): cv_review → cv_done, then kick the orchestrator so cover_letter dispatches."""
+    async with factory() as s:
+        job = await repo.get_job(s, job_id)
+        await repo.checkpoint(s, job, JobState.cv_done, None)
+    orch.kick()
+
+
 async def _poll_job_state(
     factory,
     job_id: str,
     target_state: JobState,
     timeout: float = 5.0,
+    orch: Orchestrator | None = None,
 ) -> Job:
-    """Poll the DB until job reaches target_state or timeout expires."""
+    """Poll the DB until job reaches target_state or timeout expires.
+
+    When target_state is 'review' and orch is given, a job that parks at the CV gate
+    (cv_review) is auto-approved (see _approve_cv) so the cover-letter lane starts — the
+    two-lane pipeline no longer advances a job past the CV gate on its own.
+    """
     deadline = asyncio.get_event_loop().time() + timeout
+    approved = False
     while True:
         async with factory() as s:
             job = await repo.get_job(s, job_id)
         if job is not None and job.state == target_state:
             return job
+        if (
+            not approved
+            and orch is not None
+            and target_state == JobState.review
+            and job is not None
+            and job.state == JobState.cv_review
+        ):
+            approved = True
+            await _approve_cv(factory, job_id, orch)
         if asyncio.get_event_loop().time() >= deadline:
             raise TimeoutError(
                 f"Job {job_id} did not reach {target_state} within {timeout}s "
@@ -134,7 +159,7 @@ async def _run_orchestrator_until(
         await asyncio.gather(
             *[
                 asyncio.wait_for(
-                    _poll_job_state(factory, jid, target_state),
+                    _poll_job_state(factory, jid, target_state, orch=orch),
                     timeout=timeout,
                 )
                 for jid in job_ids
@@ -147,17 +172,57 @@ async def _run_orchestrator_until(
 
 
 # ---------------------------------------------------------------------------
+# Test: _next_stage_for state → stage mapping
+# ---------------------------------------------------------------------------
+
+
+class _StubJob:
+    def __init__(self, state, current_stage=None):
+        self.state = state
+        self.current_stage = current_stage
+        self.id = "stub-job"
+
+
+class TestNextStageFor:
+    def test_pending_returns_fit_assessment(self):
+        assert _next_stage_for(_StubJob(JobState.pending)) == Stage.fit_assessment
+
+    def test_fit_done_returns_cv_adjust(self):
+        assert _next_stage_for(_StubJob(JobState.fit_done)) == Stage.cv_adjust
+
+    def test_cv_done_returns_cover_letter(self):
+        assert _next_stage_for(_StubJob(JobState.cv_done)) == Stage.cover_letter
+
+    def test_cv_review_returns_current_stage(self):
+        job = _StubJob(JobState.cv_review, current_stage=Stage.revising_cv)
+        assert _next_stage_for(job) == Stage.revising_cv
+
+    def test_cv_review_with_none_stage_raises(self):
+        job = _StubJob(JobState.cv_review, current_stage=None)
+        with pytest.raises(ValueError):
+            _next_stage_for(job)
+
+    def test_review_returns_current_stage(self):
+        job = _StubJob(JobState.review, current_stage=Stage.revising_cl)
+        assert _next_stage_for(job) == Stage.revising_cl
+
+    def test_awaiting_input_returns_current_stage(self):
+        job = _StubJob(JobState.awaiting_input, current_stage=Stage.cover_letter)
+        assert _next_stage_for(job) == Stage.cover_letter
+
+
+# ---------------------------------------------------------------------------
 # Test: Picks up pending job and completes cv_adjust
 # ---------------------------------------------------------------------------
 
 
 class TestPicksUpPendingJob:
     async def test_pending_job_completes_pipeline_to_review(self, session_factory):
-        """Pending job passes through cv_adjust (cv_done) then cover_letter to reach review.
-
-        cv_done is transient — the orchestrator immediately picks the job up
-        for cover_letter. We wait for the final resting state (review) and then
-        verify that a cv_adjust Document exists (proving cv_done was passed through).
+        """Pending job passes fit_assessment → cv_adjust, parks at the cv_review gate,
+        gets auto-approved (see _poll_job_state / _approve_cv — the two-lane pipeline no
+        longer advances a job past the CV gate on its own), then cover_letter → review.
+        We wait for the final resting state (review) and then verify a cv_adjust Document
+        exists (proving the CV gate was passed through).
         """
         job = await _insert_job(session_factory)
 
@@ -296,7 +361,7 @@ class TestKickUnblocksLoop:
 
         # Wait for the full pipeline to reach review
         await asyncio.wait_for(
-            _poll_job_state(session_factory, job.id, JobState.review),
+            _poll_job_state(session_factory, job.id, JobState.review, orch=orch),
             timeout=5.0,
         )
 

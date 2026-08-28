@@ -312,6 +312,80 @@ class TestApproveJob:
         assert refreshed.state == JobState.approved
 
 
+class TestApproveCvJob:
+    async def test_approve_cv_non_cv_review_returns_400(self, client, db):
+        """A pending job cannot be approve-cv'd — expects 400."""
+        await _insert_job(db)  # state=pending by default
+        resp = await client.post("/api/jobs/aabbccdd00112233/approve-cv")
+        assert resp.status_code == 400
+
+    async def test_approve_from_cv_review_via_final_approve_returns_400(self, client, db):
+        """The FINAL approve endpoint must reject a cv_review job — it's not final review."""
+        await _insert_job(db, state=JobState.cv_review)
+        resp = await client.post("/api/jobs/aabbccdd00112233/approve")
+        assert resp.status_code == 400
+
+    async def test_approve_cv_happy_path(self, client, db, tmp_path):
+        async with db() as session:
+            job_data = _job_data()
+            job = await repo.upsert_job(session, job_data)
+            job.state = JobState.cv_review
+            cv_doc = Document(
+                job_id=job.id,
+                stage=Stage.cv_adjust,
+                version=1,
+                markdown="# Adjusted CV",
+                pdf_path=str(tmp_path / "cv.pdf"),
+                docx_path=str(tmp_path / "cv.docx"),
+            )
+            session.add(cv_doc)
+            await session.commit()
+
+        resp = await client.post(f"/api/jobs/{job.id}/approve-cv")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["pdf_path"] == str(tmp_path / "cv.pdf")
+        assert data["docx_path"] == str(tmp_path / "cv.docx")
+
+        async with db() as session:
+            refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_done
+
+    async def test_approve_cv_no_document_returns_400(self, client, db):
+        await _insert_job(db, state=JobState.cv_review)
+        resp = await client.post("/api/jobs/aabbccdd00112233/approve-cv")
+        assert resp.status_code == 400
+
+    async def test_approve_cv_with_unconsumed_revision_returns_400(self, client, db):
+        """The orphaned-revision guard: cv_review + unconsumed RevisionRequest → 400."""
+        from jsa.db.models import RevisionRequest
+
+        async with db() as session:
+            job_data = _job_data()
+            job = await repo.upsert_job(session, job_data)
+            job.state = JobState.cv_review
+            cv_doc = Document(
+                job_id=job.id, stage=Stage.cv_adjust, version=1, markdown="# CV",
+            )
+            session.add(cv_doc)
+            rr = RevisionRequest(
+                job_id=job.id,
+                target=Stage.cv_adjust,
+                instruction="Shorten it",
+                origin_state="cv_review",
+                consumed_at=None,
+            )
+            session.add(rr)
+            await session.commit()
+
+        resp = await client.post(f"/api/jobs/{job.id}/approve-cv")
+        assert resp.status_code == 400
+
+        async with db() as session:
+            refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_review  # unchanged
+
+
 class TestExportJob:
     async def test_export_calls_renderer(self, client, db, tmp_path, monkeypatch):
         """POST /api/jobs/{id}/export re-renders both documents via the renderer."""
@@ -349,6 +423,39 @@ class TestExportJob:
         assert "cl_path" in data
         assert len(fake_renderer.calls) == 2
 
+    async def test_export_cv_review_renders_only_cv(self, client, db, tmp_path, monkeypatch):
+        """A cv_review job has no cover letter yet — export renders only the CV."""
+        from tests.backend.fakes.fake_renderer import FakeRenderer
+
+        fake_renderer = FakeRenderer()
+        monkeypatch.setattr("jsa.api.routes_jobs.renderer_for", lambda name: fake_renderer)
+
+        async with db() as session:
+            job_data = _job_data()
+            job = await repo.upsert_job(session, job_data)
+            job.state = JobState.cv_review
+            cv_doc = Document(
+                job_id=job.id, stage=Stage.cv_adjust, version=1, markdown="# Adjusted CV",
+            )
+            session.add(cv_doc)
+            await session.commit()
+
+        resp = await client.post(
+            f"/api/jobs/{job.id}/export", json={"format": "pdf"}
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert "cv_path" in data
+        assert "cl_path" not in data
+        assert len(fake_renderer.calls) == 1
+
+    async def test_export_pending_returns_409(self, client, db):
+        await _insert_job(db)  # state=pending
+        resp = await client.post(
+            "/api/jobs/aabbccdd00112233/export", json={"format": "pdf"}
+        )
+        assert resp.status_code == 409
+
 
 class TestReviseJob:
     async def test_revise_non_review_returns_400(self, client, db):
@@ -359,6 +466,58 @@ class TestReviseJob:
             json={"target": "cv", "text": "Make it shorter"},
         )
         assert resp.status_code == 400
+
+    async def test_revise_cv_from_cv_review_sets_origin_state(self, client, db):
+        from sqlalchemy import select as sa_select
+        from jsa.db.models import RevisionRequest
+
+        await _insert_job(db, state=JobState.cv_review)
+        resp = await client.post(
+            "/api/jobs/aabbccdd00112233/revise",
+            json={"target": "cv", "text": "Make it shorter"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["state"] == "cv_review"
+        assert data["current_stage"] == "revising_cv"
+
+        async with db() as session:
+            result = await session.execute(
+                sa_select(RevisionRequest).where(
+                    RevisionRequest.job_id == "aabbccdd00112233"
+                )
+            )
+            rr = result.scalar_one()
+        assert rr.origin_state == "cv_review"
+
+    async def test_revise_cl_from_cv_review_returns_400(self, client, db):
+        """No cover letter exists yet at the CV gate — revising it is rejected."""
+        await _insert_job(db, state=JobState.cv_review)
+        resp = await client.post(
+            "/api/jobs/aabbccdd00112233/revise",
+            json={"target": "cl", "text": "Punch up the opening"},
+        )
+        assert resp.status_code == 400
+
+    async def test_revise_cv_from_review_sets_origin_state(self, client, db):
+        from sqlalchemy import select as sa_select
+        from jsa.db.models import RevisionRequest
+
+        await _insert_job(db, state=JobState.review)
+        resp = await client.post(
+            "/api/jobs/aabbccdd00112233/revise",
+            json={"target": "cv", "text": "Make it shorter"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        async with db() as session:
+            result = await session.execute(
+                sa_select(RevisionRequest).where(
+                    RevisionRequest.job_id == "aabbccdd00112233"
+                )
+            )
+            rr = result.scalar_one()
+        assert rr.origin_state == "review"
 
 
 class TestResetJob:

@@ -17,6 +17,7 @@ class JobState(str, enum.Enum):
     awaiting_input = "awaiting_input"
     fit_done = "fit_done"        # fit assessment passed; ready for cv_adjust
     unfit = "unfit"              # fit assessment flagged a mismatch; parked for user decision
+    cv_review = "cv_review"      # CV lane parked: tailored CV rendered, awaiting user approve/revise
     cv_done = "cv_done"
     cl_done = "cl_done"
     review = "review"
@@ -132,6 +133,9 @@ class RevisionRequest(Base):
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"))
     target: Mapped[Stage] = mapped_column(SAEnum(Stage))           # cv_adjust | cover_letter (the doc being revised)
     instruction: Mapped[str] = mapped_column(Text)
+    origin_state: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # JobState value the revision was requested from: "cv_review" | "review".
+    # NULL (legacy rows) is read as "review".
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     job: Mapped[Job] = relationship(back_populates="revision_requests")

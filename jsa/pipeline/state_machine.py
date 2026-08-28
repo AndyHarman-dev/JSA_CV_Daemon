@@ -12,14 +12,21 @@ ALLOWED = {
     JobState.pending:        {JobState.running, JobState.failed, JobState.dismissed},
     # running → pending: crash recovery OR backend-switch restart (cv_adjust limit hit)
     # running → fit_done/unfit: fit-assessment outcomes (pass / flagged mismatch)
-    # running → cv_done: backend-switch restart (cover_letter limit hit; rewind to cv_done)
+    # running → cv_review: cv_adjust (or revising_cv) finalises; CV lane parks for approval
+    # running → cv_done: backend-switch restart (cover_letter limit hit; rewind to cv_done —
+    #     this is the BF-19 rewind target, NOT a redirect to cv_review; the CV was already
+    #     approved to get this far, so re-parking at the CV gate would be wrong)
     # running → review:  backend-switch restart (revision limit hit; rewind to review)
-    JobState.running:        {JobState.awaiting_input, JobState.fit_done, JobState.unfit, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed, JobState.pending, JobState.dismissed},
-    JobState.awaiting_input: {JobState.running, JobState.review, JobState.failed, JobState.dismissed},
+    JobState.running:        {JobState.awaiting_input, JobState.fit_done, JobState.unfit, JobState.cv_review, JobState.cv_done, JobState.cl_done, JobState.review, JobState.failed, JobState.pending, JobState.dismissed},
+    JobState.awaiting_input: {JobState.running, JobState.cv_review, JobState.review, JobState.failed, JobState.dismissed},
     # fit_done parallels cv_done: ready to be picked up for the next stage (cv_adjust).
     JobState.fit_done:       {JobState.running, JobState.failed, JobState.dismissed},
     # unfit is parked: Ignore → fit_done (proceed), Dismiss → dismissed.
     JobState.unfit:          {JobState.fit_done, JobState.dismissed},
+    # cv_review is parked: user approves (→ cv_done) or requests a revision (→ running(revising_cv)).
+    JobState.cv_review:      {JobState.running, JobState.cv_done, JobState.failed, JobState.dismissed},
+    # cv_done means "CV approved, cover letter pending, runnable" — UNCHANGED, and it stays the
+    # BF-19 rewind target from running(cover_letter). Do not redirect it to cv_review.
     JobState.cv_done:        {JobState.running, JobState.failed, JobState.dismissed},
     JobState.cl_done:        {JobState.review, JobState.failed, JobState.dismissed},
     JobState.review:         {JobState.running, JobState.awaiting_input, JobState.approved, JobState.failed, JobState.dismissed},
@@ -70,17 +77,26 @@ def transition(job, new_state: JobState, new_stage: Stage | None = None) -> None
             raise InvalidTransition(
                 f"Can only reach cl_done from running(cover_letter), got running({job.current_stage})"
             )
+    # running → cv_review only valid when current stage is cv_adjust or revising_cv
+    if job.state == JobState.running and new_state == JobState.cv_review:
+        if job.current_stage not in (Stage.cv_adjust, Stage.revising_cv):
+            raise InvalidTransition(
+                f"Can only reach cv_review from running(cv_adjust/revising_cv), got running({job.current_stage})"
+            )
     job.state = new_state
     job.current_stage = new_stage
 
 
 def set_current_stage(job: "Job", stage: "Stage | None") -> None:
-    """Set job.current_stage for revision setup; only valid when state==review."""
+    """Set job.current_stage for revision setup; only valid when state in (review, cv_review)."""
     from jsa.db.models import JobState as _JobState, Stage as StageEnum
-    if job.state != _JobState.review:
+    if job.state not in (_JobState.review, _JobState.cv_review):
         raise InvalidTransition(
-            f"set_current_stage only valid on review jobs, got {job.state!r}"
+            f"set_current_stage only valid on review/cv_review jobs, got {job.state!r}"
         )
-    if stage is not None and stage not in (StageEnum.revising_cv, StageEnum.revising_cl):
+    if job.state == _JobState.cv_review:
+        if stage is not None and stage != StageEnum.revising_cv:
+            raise InvalidTransition(f"set_current_stage on cv_review only accepts revising_cv, got {stage!r}")
+    elif stage is not None and stage not in (StageEnum.revising_cv, StageEnum.revising_cl):
         raise InvalidTransition(f"set_current_stage on review only accepts revising_cv/revising_cl, got {stage!r}")
     job.current_stage = stage

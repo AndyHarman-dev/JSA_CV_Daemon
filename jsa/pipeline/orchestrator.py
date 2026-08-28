@@ -34,11 +34,12 @@ def _next_stage_for(job: Job) -> Stage:
     """Determine which stage to run for the given job.
 
     State / current_stage mapping:
-    - pending                     → fit_assessment (fresh)
-    - fit_done                    → cv_adjust (fresh; fit check passed or was ignored)
-    - cv_done                     → cover_letter (fresh)
-    - awaiting_input              → job.current_stage (resume)
-    - review + unconsumed rev req → job.current_stage (revising_cv / revising_cl)
+    - pending                        → fit_assessment (fresh)
+    - fit_done                       → cv_adjust (fresh; fit check passed or was ignored)
+    - cv_done                        → cover_letter (fresh)
+    - awaiting_input                 → job.current_stage (resume)
+    - review + unconsumed rev req    → job.current_stage (revising_cv / revising_cl)
+    - cv_review + unconsumed rev req → job.current_stage (revising_cv)
     """
     if job.state == JobState.pending:
         return Stage.fit_assessment
@@ -46,7 +47,7 @@ def _next_stage_for(job: Job) -> Stage:
         return Stage.cv_adjust
     if job.state == JobState.cv_done:
         return Stage.cover_letter
-    if job.state in (JobState.awaiting_input, JobState.review):
+    if job.state in (JobState.awaiting_input, JobState.review, JobState.cv_review):
         if job.current_stage is None:
             raise ValueError(
                 f"Job {job.id} is in {job.state} but current_stage is None"
