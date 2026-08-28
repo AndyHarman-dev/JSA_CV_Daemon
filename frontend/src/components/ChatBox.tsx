@@ -12,7 +12,7 @@ const T = SHELL_THEME;
 
 type ChatBoxProps =
   | { kind: "answer"; jobId: string; followUpId: number; onSubmitted?: () => void }
-  | { kind: "revise"; jobId: string; onSubmitted?: () => void };
+  | { kind: "revise"; jobId: string; onSubmitted?: () => void; fixedTarget?: "cv" };
 
 // Backward-scan @-mention detection: an `@` found before any whitespace/newline makes the
 // mention "active" at that index. Ported from the design handoff's `getMentionAt`
@@ -39,7 +39,9 @@ const CLOSED_MENTION: MentionState = { open: false, pos: { x: 0, y: 0 }, at: nul
 
 export function ChatBox(props: ChatBoxProps) {
   const [text, setText] = useState("");
-  const [target, setTarget] = useState<"cv" | "cl">("cv");
+  const [targetState, setTargetState] = useState<"cv" | "cl">("cv");
+  const fixedTarget = props.kind === "revise" ? props.fixedTarget : undefined;
+  const target = fixedTarget ?? targetState;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mention, setMention] = useState<MentionState>(CLOSED_MENTION);
@@ -174,10 +176,10 @@ export function ChatBox(props: ChatBoxProps) {
       {mention.open && (
         <MentionDropdown pos={mention.pos} entries={sortedEntries} onSelect={insertScratchNote} />
       )}
-      {props.kind === "revise" && (
+      {props.kind === "revise" && !fixedTarget && (
         <select
           value={target}
-          onChange={(e) => setTarget(e.target.value as "cv" | "cl")}
+          onChange={(e) => setTargetState(e.target.value as "cv" | "cl")}
           disabled={submitting}
           style={{
             alignSelf: "flex-start",

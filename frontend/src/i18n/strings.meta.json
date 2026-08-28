@@ -207,7 +207,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "fr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -417,7 +422,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "de": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -627,7 +637,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "pt": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -837,7 +852,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "it": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1047,7 +1067,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "nl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1257,7 +1282,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "sv": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1467,7 +1497,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "pl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1677,7 +1712,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "ru": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1887,7 +1927,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "tr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2097,7 +2142,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "ar": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2307,7 +2357,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "he": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2517,7 +2572,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "zh": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2727,7 +2787,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "ko": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2937,7 +3002,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "hi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3147,7 +3217,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "id": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3357,7 +3432,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "ja": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3567,7 +3647,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "vi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3777,7 +3862,12 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   },
   "th": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3987,6 +4077,11 @@
     "cvGate.cta": "da412b15c5f67df7a6b25dfe64a7a957afd8e2620cabaff8a47d2119de296c36",
     "chatBox.submitAnswer": "eaf7fc73d28352b5528c4e40c6901d2103da024c4e0a2cd7be93398f50d37376",
     "chatBox.requestRevision": "592ff79d932114bb632a7d7c4aea31ef5a20686fd5d918e2cc6df5bbabb6844c",
-    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334"
+    "boot.setLanguageFailed": "baf70b12ab891f1105c442863711ebb0269aedbce2b9e853cf2d7c64010fd334",
+    "stateMeta.cvReview": "d1d4fcc98918d5a5df26c81f05231a690a5b1d65ec355b07acb27c307f40aa0f",
+    "stageTimeline.cvReview": "75868e6cf93c2364a367daa5e404ae66479a1a048ac0c3e3a63209ca8411f5ae",
+    "stageTimeline.clNotStarted": "ff5b00fa6368df7f032e5b39c1aa5945d7ab469221cda61fc8a37e3b242561d0",
+    "reviewPane.approveCvButton": "f285218a2cfa3c2f2d274b0d042de17f5463389d1f710c08b77ce6a42eb25db6",
+    "reviewPane.readOnlyNotice": "d04ab96f5082712b43e9042d9f4c9ff14ab9b0af7deb34784b828878da97752c"
   }
 }

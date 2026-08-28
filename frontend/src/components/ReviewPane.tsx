@@ -13,6 +13,10 @@ const T = SHELL_THEME;
 
 interface Props {
   jobId: string;
+  // "cv-gate" — the CV-only pane shown while a job is parked in `cv_review` (or, read-only,
+  // while the cover-letter lane is running and the user jumps back to view the CV). Defaults
+  // to "final" so the existing review/approved call site is unaffected.
+  mode?: "cv-gate" | "final";
 }
 
 type TabKey = "cv" | "cl";
@@ -33,9 +37,19 @@ function toFileUrl(absPath: string | null | undefined): string | null {
   return `/api/files/${rel}`;
 }
 
-export function ReviewPane({ jobId }: Props) {
+export function ReviewPane({ jobId, mode = "final" }: Props) {
   const state = useStore((s) => s.jobs[jobId]?.state as JobState | undefined);
-  const [activeTab, setActiveTab] = useState<TabKey>("cv");
+  const viewedStage = useStore((s) => s.viewedStage);
+  const setViewedStage = useStore((s) => s.setViewedStage);
+  const [localActiveTab, setLocalActiveTab] = useState<TabKey>("cv");
+  // The CV gate only ever has a CV to show. Otherwise, StageTimeline's dots and this pane's
+  // own tab buttons both write to the shared `viewedStage` — it wins whenever set, falling
+  // back to local state only before either has been touched.
+  const activeTab: TabKey = mode === "cv-gate" ? "cv" : viewedStage ?? localActiveTab;
+  // Read-only iff the job is in flight — the only way this pane renders while running or
+  // awaiting_input is the mid-cover-letter-run CV jump-back (see JobDetail.tsx). A job
+  // parked awaiting the user (cv_review, review) is always fully interactive.
+  const readOnly = state === "running" || state === "awaiting_input";
   const [cvPaths, setCvPaths] = useState<DocPaths>(emptyPaths);
   const [clPaths, setClPaths] = useState<DocPaths>(emptyPaths);
   const [pathsLoading, setPathsLoading] = useState(true);
@@ -91,7 +105,11 @@ export function ReviewPane({ jobId }: Props) {
     setApproving(true);
     setApproveError(null);
     try {
-      await api.approve(jobId);
+      if (mode === "cv-gate") {
+        await api.approveCv(jobId);
+      } else {
+        await api.approve(jobId);
+      }
       await useStore.getState().refetchAll();
     } catch (err) {
       setApproveError(err instanceof Error ? err.message : String(err));
@@ -121,7 +139,10 @@ export function ReviewPane({ jobId }: Props) {
       <button
         type="button"
         className="jtab"
-        onClick={() => setActiveTab(key)}
+        onClick={() => {
+          setLocalActiveTab(key);
+          setViewedStage(key);
+        }}
         style={{
           padding: "8px 4px",
           marginRight: 22,
@@ -141,10 +162,10 @@ export function ReviewPane({ jobId }: Props) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Tab bar */}
+      {/* Tab bar — the CV gate only ever has a CV to show */}
       <div style={{ display: "flex", borderBottom: `1px solid ${T.bd}` }}>
         {tabButton("cv", t("reviewPane.cvTab"))}
-        {tabButton("cl", t("reviewPane.clTab"))}
+        {mode === "final" && tabButton("cl", t("reviewPane.clTab"))}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -364,6 +385,24 @@ export function ReviewPane({ jobId }: Props) {
           <Icon name="check" size={14} />
           {t("reviewPane.approvedBanner")}
         </div>
+      ) : readOnly ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            font: `600 12.5px ${T.disp}`,
+            color: T.ink3,
+            border: `1px solid ${T.bd2}`,
+            background: T.sunk,
+            borderRadius: T.btnRadius,
+            padding: "10px 14px",
+            width: "fit-content",
+          }}
+        >
+          <Icon name="eye" size={14} />
+          {t("reviewPane.readOnlyNotice")}
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {approveError && (
@@ -412,7 +451,7 @@ export function ReviewPane({ jobId }: Props) {
             ) : (
               <>
                 <Icon name="check" size={15} />
-                {t("reviewPane.approveButton")}
+                {mode === "cv-gate" ? t("reviewPane.approveCvButton") : t("reviewPane.approveButton")}
               </>
             )}
           </button>
@@ -428,7 +467,7 @@ export function ReviewPane({ jobId }: Props) {
             >
               REQUEST_REVISION
             </div>
-            <ChatBox kind="revise" jobId={jobId} />
+            <ChatBox kind="revise" jobId={jobId} fixedTarget={mode === "cv-gate" ? "cv" : undefined} />
           </div>
         </div>
       )}

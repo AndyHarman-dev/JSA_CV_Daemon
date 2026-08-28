@@ -1,5 +1,6 @@
 import type { JobDTO, JobState, Stage } from "../types";
 import { useT } from "../i18n/useT";
+import { useStore } from "../store";
 import { SHELL_THEME } from "../theme/tokens";
 import { Icon } from "../theme/Icon";
 
@@ -9,12 +10,14 @@ interface StageTimelineProps {
   job: JobDTO;
 }
 
-// `labelKey` is a translation key, resolved by the component below via `t()`.
-const STEPS: { labelKey: string; key: string }[] = [
+// `labelKey` is a translation key, resolved by the component below via `t()`. `viewKey` is
+// set only on the two nodes that are clickable — they select which artifact ReviewPane
+// shows (via the store's `viewedStage`), independent of which stage is actually running.
+const STEPS: { labelKey: string; key: string; viewKey?: "cv" | "cl" }[] = [
   { labelKey: "stageTimeline.pending", key: "pending" },
-  { labelKey: "stageTimeline.cvAdjust", key: "cv_adjust" },
-  { labelKey: "stageTimeline.cvDone", key: "cv_done" },
-  { labelKey: "stageTimeline.coverLetter", key: "cover_letter" },
+  { labelKey: "stageTimeline.cvAdjust", key: "cv_adjust", viewKey: "cv" },
+  { labelKey: "stageTimeline.cvReview", key: "cv_review" },
+  { labelKey: "stageTimeline.coverLetter", key: "cover_letter", viewKey: "cl" },
   { labelKey: "stageTimeline.clDone", key: "cl_done" },
   { labelKey: "stageTimeline.review", key: "review" },
   { labelKey: "stageTimeline.approved", key: "approved" },
@@ -41,7 +44,13 @@ function getActiveStepIndex(state: JobState, currentStage: Stage | null): number
     case "unfit":
       // Parked on the not-a-fit modal; nothing produced yet.
       return 0;
+    case "cv_review":
+      // Parked at the CV gate, awaiting approve/revise.
+      return 2;
     case "cv_done":
+      // CV approved; same node position — cover_letter is up next but hasn't produced
+      // anything yet. This is also the BF-19 rewind target, so it must stay reachable
+      // from running(cover_letter) — see jsa/pipeline/state_machine.py.
       return 2;
     case "cl_done":
       return 4;
@@ -61,6 +70,8 @@ function getActiveStepIndex(state: JobState, currentStage: Stage | null): number
 
 export function StageTimeline({ job }: StageTimelineProps) {
   const activeIdx = getActiveStepIndex(job.state, job.current_stage);
+  const viewedStage = useStore((s) => s.viewedStage);
+  const setViewedStage = useStore((s) => s.setViewedStage);
   const t = useT();
 
   return (
@@ -69,6 +80,74 @@ export function StageTimeline({ job }: StageTimelineProps) {
         const isComplete = idx < activeIdx;
         const isActive = idx === activeIdx;
         const color = isComplete ? T.accent2 : isActive ? T.a : T.ink3;
+        const interactive = step.viewKey !== undefined;
+        // The cover_letter node (index 3) is where the CL lane starts running — before that
+        // (still in the CV lane, or parked at the CV gate) there is nothing to show yet.
+        const disabled = step.viewKey === "cl" && activeIdx < 3;
+        const selected = interactive && viewedStage === step.viewKey;
+        const viewKey = step.viewKey;
+
+        const nodeStyle = {
+          display: "flex" as const,
+          flexDirection: "column" as const,
+          alignItems: "center" as const,
+          flex: "none" as const,
+          width: 86,
+          border: "none",
+          background: selected ? `color-mix(in srgb, ${T.a} 12%, transparent)` : "transparent",
+          borderRadius: T.chamfer ? 4 : 10,
+          padding: "2px 0 4px",
+          cursor: interactive ? (disabled ? "default" : "pointer") : "default",
+          opacity: disabled ? 0.45 : 1,
+          font: "inherit",
+        };
+
+        const nodeContent = (
+          <>
+            <div
+              data-testid="stage-dot"
+              data-state={isComplete ? "complete" : isActive ? "active" : "pending"}
+              style={{
+                width: 16,
+                height: 16,
+                borderRadius: T.chamfer ? 3 : 16,
+                flex: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: isComplete ? T.accent2 : "transparent",
+                border: `2px solid ${selected ? T.a : color}`,
+                boxShadow: isActive ? `0 0 8px ${T.a}` : selected ? `0 0 6px ${T.a}` : "none",
+              }}
+            >
+              {isComplete ? (
+                <Icon name="check" size={9} color="#06080B" />
+              ) : isActive ? (
+                <span
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: 5,
+                    background: T.a,
+                    animation: "jsblink 1s ease-in-out infinite",
+                  }}
+                />
+              ) : null}
+            </div>
+            <span
+              style={{
+                marginTop: 6,
+                font: `500 9.5px ${T.mono}`,
+                letterSpacing: ".04em",
+                color,
+                textAlign: "center",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t(step.labelKey)}
+            </span>
+          </>
+        );
 
         return (
           <div key={step.key} style={{ display: "flex", alignItems: "flex-start", flex: "none" }}>
@@ -85,51 +164,21 @@ export function StageTimeline({ job }: StageTimelineProps) {
                 }}
               />
             )}
-            {/* Step node + label */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "none", width: 86 }}>
-              <div
-                data-testid="stage-dot"
-                data-state={isComplete ? "complete" : isActive ? "active" : "pending"}
-                style={{
-                  width: 16,
-                  height: 16,
-                  borderRadius: T.chamfer ? 3 : 16,
-                  flex: "none",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: isComplete ? T.accent2 : "transparent",
-                  border: `2px solid ${color}`,
-                  boxShadow: isActive ? `0 0 8px ${T.a}` : "none",
-                }}
+            {/* Step node + label — only the cv_adjust/cover_letter nodes are interactive */}
+            {interactive ? (
+              <button
+                type="button"
+                disabled={disabled}
+                aria-pressed={selected}
+                title={disabled ? t("stageTimeline.clNotStarted") : undefined}
+                onClick={() => setViewedStage(viewKey === viewedStage ? null : (viewKey ?? null))}
+                style={nodeStyle}
               >
-                {isComplete ? (
-                  <Icon name="check" size={9} color="#06080B" />
-                ) : isActive ? (
-                  <span
-                    style={{
-                      width: 5,
-                      height: 5,
-                      borderRadius: 5,
-                      background: T.a,
-                      animation: "jsblink 1s ease-in-out infinite",
-                    }}
-                  />
-                ) : null}
-              </div>
-              <span
-                style={{
-                  marginTop: 6,
-                  font: `500 9.5px ${T.mono}`,
-                  letterSpacing: ".04em",
-                  color,
-                  textAlign: "center",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {t(step.labelKey)}
-              </span>
-            </div>
+                {nodeContent}
+              </button>
+            ) : (
+              <div style={nodeStyle}>{nodeContent}</div>
+            )}
           </div>
         );
       })}

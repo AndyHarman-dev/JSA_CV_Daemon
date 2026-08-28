@@ -34,6 +34,13 @@ export const api = {
     );
   },
 
+  approveCv(id: string): Promise<{ pdf_path: string; docx_path: string }> {
+    return apiFetch<{ pdf_path: string; docx_path: string }>(
+      `/api/jobs/${encodeURIComponent(id)}/approve-cv`,
+      { method: "POST" }
+    );
+  },
+
   revise(id: string, target: "cv" | "cl", text: string): Promise<JobDTO> {
     return apiFetch<JobDTO>(`/api/jobs/${encodeURIComponent(id)}/revise`, {
       method: "POST",

@@ -35,8 +35,14 @@ interface Store {
   // not yet known (pre-hydration). The orchestrator keeps jobs pending until this is true —
   // JobList surfaces a gate banner pointing at the Structure Editor while it's false.
   cvStructureExists: boolean | null;
+  // Which artifact the user is looking at, independent of what the pipeline is currently
+  // running — driven by clicking the CV_ADJUST / COVER_LETTER dots in StageTimeline. `null`
+  // means "follow the pipeline" (today's default behaviour). Reset to null on every job
+  // switch (selectJob) so a stale view never carries over to a different job.
+  viewedStage: "cv" | "cl" | null;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
+  setViewedStage(stage: Store["viewedStage"]): void;
   setWsStatus(s: Store["wsStatus"]): void;
   setEditorOpen(open: boolean): void;
   setCvStructureExists(exists: boolean): void;
@@ -65,6 +71,7 @@ export const useStore = create<Store>((set, get) => ({
   bootLang: "en",
   configReady: false,
   cvStructureExists: null,
+  viewedStage: null,
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -73,7 +80,11 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   selectJob(id: string | undefined) {
-    set({ selectedId: id });
+    set({ selectedId: id, viewedStage: null });
+  },
+
+  setViewedStage(stage: Store["viewedStage"]) {
+    set({ viewedStage: stage });
   },
 
   setWsStatus(s: Store["wsStatus"]) {
