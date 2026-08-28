@@ -20,6 +20,7 @@ const BACKEND_LABELS: Record<string, string> = {
   "claude-cli": "CLAUDE CLI",
   "google-cli": "GOOGLE CLI",
   anthropic: "ANTHROPIC API",
+  "opencode-zen": "OPENCODE ZEN",
 };
 
 function backendLabel(id: string): string {

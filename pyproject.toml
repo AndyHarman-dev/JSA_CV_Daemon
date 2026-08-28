@@ -19,6 +19,7 @@ dependencies = [
     "weasyprint>=62",
     "markdown-it-py>=3.0",
     "anthropic>=0.26",
+    "httpx>=0.27",
 ]
 
 [tool.setuptools.packages.find]

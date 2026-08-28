@@ -68,6 +68,35 @@ chain is **exhausted** is the job `mark_failed`'d with "Backend limit reached �
 backends or wait for quota reset". Do not treat a limit signal as a hard job failure; that
 is the chain's job.
 
+### OpenCode Zen backend
+
+`opencode-zen` (`jsa/agents/opencode_zen.py`) is an HTTP backend, not a CLI one — it POSTs
+to `https://opencode.ai/zen/v1/chat/completions`, an **OpenAI-compatible** chat-completions
+endpoint (not the Anthropic Messages API shape `anthropic_api.py` uses): the system prompt
+is the first `{"role": "system", ...}` entry in `messages`, not a top-level `system` kwarg,
+and the reply lives at `body["choices"][0]["message"]["content"]`. Auth is
+`Authorization: Bearer $OPENCODE_API_KEY`, read from the environment at call time (never
+hardcoded) — same convention as `ANTHROPIC_API_KEY`; this project loads no `.env` file
+itself, so the caller must export it first.
+
+Its model catalog is unrelated to JSA's Claude-only `model` setting (it proxies Claude,
+GPT, Gemini and various free-tier models — e.g. the default `nemotron-3-ultra-free`), so
+it gets **dedicated** settings, `opencode_zen_model` / `opencode_zen_timeout`
+(`JSA_OPENCODE_ZEN_MODEL` / `JSA_OPENCODE_ZEN_TIMEOUT`), rather than sharing `model` /
+falling back to `settings.model` the way `claude-cli` does.
+
+**The API can return `HTTP 200` with an error payload in the body** (observed live: a
+transient upstream 502 from the underlying provider surfaces as `{"error": {"type":
+"server_error", ...}}` with `response.status_code == 200`). `_call_api` therefore checks
+for an `"error"` key in the parsed body regardless of status code, not just `>= 400` /
+`429` — do not "simplify" this to a plain status-code check, it will silently swallow
+these. `"rate"` / `"credit"` in the message (or `err_type` in `{"RateLimitError",
+"CreditsError"}`) maps to `AgentLimitReached` (joins the BF-19 fallback chain like any
+other backend); everything else is a plain `RuntimeError`. The free `nemotron-3-ultra-free`
+model is genuinely flaky under upstream load — this is expected, not a bug to "fix" by
+retrying inside the backend; retries belong to the fallback chain or the caller, not this
+layer.
+
 ---
 
 ## Prompt files
@@ -104,10 +133,12 @@ backend configuration as every other stage.
 The mechanism is `make_backend_factory`'s (`jsa/server.py`) `model_override` /
 `timeout_override` kwargs. **Do not derive the constructor arguments yourself at a new
 call site** — the per-backend mapping is non-obvious (`anthropic` takes
-`anthropic_timeout`, CLI backends take `agent_timeout`, and `google-cli` takes no
-`model` at all because the `agy` CLI has no model flag, so `fit_model` is silently
-inapplicable there). Overriding without going through the factory is what previously
-gave `anthropic` a 600s timeout instead of its 180s one.
+`anthropic_timeout`, CLI backends take `agent_timeout`, `opencode-zen` takes
+`opencode_zen_timeout` and never falls back to `settings.model` — see "OpenCode Zen
+backend" above — and `google-cli` takes no `model` at all because the `agy` CLI has no
+model flag, so `fit_model` is silently inapplicable there). Overriding without going
+through the factory is what previously gave `anthropic` a 600s timeout instead of its
+180s one.
 
 Wiring: `server.py` builds a second factory and passes it to `Orchestrator` as
 `fit_backend_factory`; the orchestrator instantiates it **from `job.backend_name`**

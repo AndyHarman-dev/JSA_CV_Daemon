@@ -39,3 +39,7 @@ register("google-cli", GoogleCliBackend)
 from jsa.agents.anthropic_api import AnthropicAPIBackend  # noqa: E402
 
 register("anthropic", AnthropicAPIBackend)
+
+from jsa.agents.opencode_zen import OpenCodeZenBackend  # noqa: E402
+
+register("opencode-zen", OpenCodeZenBackend)
