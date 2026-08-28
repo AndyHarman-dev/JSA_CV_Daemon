@@ -172,11 +172,49 @@ class TestLayoutPolicies:
             "contact": {"name": "A", "email": "a@x.com"},
             "sections": [{"name": "Projects", "entries": [
                 {"name": "DI Container", "url": "github.com/me/DI-Container"},
+                {"heading": "ASP.NET", "bullets": ["ASP.NET", "EF Core"]},
             ]}],
         })
         md = cv_to_markdown(cv)
         assert "[github.com/me/DI-Container](https://github.com/me/DI-Container)" in md
         assert "**DI Container**" in md
+
+    def test_tld_like_skill_names_not_misclassified_as_links(self):
+        # Regression: "ASP.NET" matched the URL regex (word + .net TLD) and was
+        # reclassified from bullets to links on backend validation. Real URLs have
+        # a path (slash + content); bare domain-like skill names must stay in bullets.
+        cv = CVDocument.model_validate({
+            "contact": {"name": "A", "email": "a@x.com"},
+            "sections": [{"name": "Skills", "entries": [
+                {"heading": "Frameworks", "bullets": ["ASP.NET", "Django.DEV", "EF Core"]},
+            ]}],
+        })
+        entry = cv.sections[0].entries[0]
+        assert entry.bullets == ["ASP.NET", "Django.DEV", "EF Core"]
+        assert entry.links == []
+
+    def test_bare_domain_with_no_path_not_a_link(self):
+        # A string that looks like a domain but has no path/slash is ambiguous — keep
+        # it as a bullet, not a link. (Only protocol://, www., or domain/path qualify.)
+        cv = CVDocument.model_validate({
+            "contact": {"name": "A", "email": "a@x.com"},
+            "sections": [{"name": "Skills", "entries": [
+                {"heading": "Tools", "bullets": ["github.com", "linkedin.com"]},
+            ]}],
+        })
+        entry = cv.sections[0].entries[0]
+        assert entry.bullets == ["github.com", "linkedin.com"]
+        assert entry.links == []
+
+    def test_real_urls_with_path_still_classified_as_links(self):
+        cv = CVDocument.model_validate({
+            "contact": {"name": "A", "email": "a@x.com", "links": ["github.com/janedoe"]},
+            "sections": [{"name": "Projects", "entries": [
+                {"heading": "Foo", "links": ["github.com/me/foo", "linkedin.com/in/jane"]},
+            ]}],
+        })
+        entry = cv.sections[0].entries[0]
+        assert entry.links == ["github.com/me/foo", "linkedin.com/in/jane"]
 
     def test_skills_rendered_compactly(self):
         # Skills emitted as entries (category heading + comma-list) collapse to one line
