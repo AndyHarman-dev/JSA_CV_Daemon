@@ -311,6 +311,68 @@ class TestClaudeEndSession:
         mock_run.assert_not_called()
 
 
+class TestClaudeNonZeroExitAlwaysRaises:
+    """A non-zero claude CLI exit is always a subprocess failure, never a model reply —
+    even when stdout is non-empty. --output-format text can put CLI-level diagnostics
+    (e.g. "unrecognized model") on stdout rather than stderr; treating that as the
+    agent's answer produced a misleading "no sentinel block" ProtocolError instead of
+    surfacing the real failure. Regression coverage for that bug.
+    """
+
+    async def test_nonzero_exit_with_nonempty_stdout_raises_claude_cli_error(self):
+        from jsa.agents.claude_cli import ClaudeCliError
+
+        stdout = b"There's an issue with the selected model. It may not exist."
+        with patch(
+            "jsa.agents.claude_cli.run_killable",
+            new=AsyncMock(return_value=_ok(stdout=stdout, returncode=1, stderr=b"unrecognized model")),
+        ):
+            backend = ClaudeCliBackend(timeout=5.0)
+            with pytest.raises(ClaudeCliError):
+                await backend.start_session("system prompt", "user message")
+
+    async def test_nonzero_exit_with_nonempty_stdout_error_includes_detail(self):
+        from jsa.agents.claude_cli import ClaudeCliError
+
+        stdout = b"There's an issue with the selected model. It may not exist."
+        with patch(
+            "jsa.agents.claude_cli.run_killable",
+            new=AsyncMock(return_value=_ok(stdout=stdout, returncode=1, stderr=b"")),
+        ):
+            backend = ClaudeCliBackend(timeout=5.0)
+            with pytest.raises(ClaudeCliError, match="issue with the selected model"):
+                await backend.start_session("system prompt", "user message")
+
+    async def test_nonzero_exit_with_nonempty_stdout_does_not_raise_protocol_error(self):
+        """Before the fix, this stdout (no sentinel) was returned as the reply and
+        parse_reply on it raised ProtocolError("no sentinel block"), masking the
+        real CLI-level failure."""
+        from jsa.agents.protocol import ProtocolError
+
+        stdout = b"There's an issue with the selected model. It may not exist."
+        with patch(
+            "jsa.agents.claude_cli.run_killable",
+            new=AsyncMock(return_value=_ok(stdout=stdout, returncode=1, stderr=b"")),
+        ):
+            backend = ClaudeCliBackend(timeout=5.0)
+            with pytest.raises(Exception) as exc_info:
+                await backend.start_session("system prompt", "user message")
+            assert not isinstance(exc_info.value, ProtocolError)
+
+    async def test_nonzero_exit_no_conversation_found_still_raises_session_expired(self):
+        """The "No conversation found" → ClaudeSessionExpiredError special-case must
+        survive even when stdout happens to be non-empty."""
+        from jsa.agents.claude_cli import ClaudeSessionExpiredError
+
+        with patch(
+            "jsa.agents.claude_cli.run_killable",
+            new=AsyncMock(return_value=_ok(stdout=b"some stray output", returncode=1, stderr=b"No conversation found")),
+        ):
+            backend = ClaudeCliBackend(timeout=5.0)
+            with pytest.raises(ClaudeSessionExpiredError):
+                await backend.send_message(ClaudeSessionHandle(id="h1", external_id="uuid"), "hi")
+
+
 class TestBackendForClaudeCli:
     """Test 8 — backend_for("claude-cli") returns a ClaudeCliBackend instance."""
 

@@ -504,6 +504,44 @@ before handoff, tests green again at 272/272, `tsc`/`npm run build` clean):
    `ReviewPane` already degrades to "Preview rendering in progress…" when no Document
    exists yet, so this is safe with nothing to show.
 
+**2026-08-28** (continued): Between Phase 5 handoff and this session, the user merged
+`feat/opencode-zen-backend` into this branch (new `opencode-zen` HTTP backend, unrelated to
+the two-lane split — see CLAUDE.md → "OpenCode Zen backend") and independently fixed a bug
+the user found during their own manual click-through of Phase 5: clicking the CV_ADJUST dot
+mid-`cover_letter`-run correctly showed the CV read-only, but the notice text always said
+"COVER LETTER LANE IS RUNNING" even when the CV lane itself (`cv_adjust`/`revising_cv`) was
+the one running. Fixed by branching the notice key on `current_stage`
+(`reviewPane.readOnlyNoticeCv` vs `reviewPane.readOnlyNoticeCl`) instead of hardcoding the
+CL-lane message; added a regression test. This fix was already in the working tree when
+this session resumed — verified, not re-done.
+
+**2026-08-28**: Phase 6 (`CLAUDE.md` doc update) + Phase 7 automated verification.
+Verified every claim in the plan's Phase 6 section against the actual Phase 1–4 code
+(`jsa/pipeline/stages.py`, `state_machine.py`, `orchestrator.py`, `api/routes_jobs.py`)
+before writing docs, rather than transcribing the plan's own prose — one correction found:
+`cv-research`/`cl-research` are prompt files only (`jsa/prompts/GEMINI_{CV,CL}_RESEARCH.md`),
+not agent code as the plan's phrasing implied; `cl-research` **is** wired (`_gather_research`,
+called for `cover_letter` only), `cv-research` is not. Rewrote "Renderer invocation" to name
+all three render triggers (CV-only on `cv_review` entry, both on `review` entry, manual
+`/export`) and confirmed neither `approve` nor `approve-cv` renders. Added a new "Two-lane
+pipeline / CV gate" section (`cv_review` park semantics, `cv_done`'s unchanged meaning and
+BF-19 rewind role, `RevisionRequest.origin_state` routing, cover-letter's CV-markdown source
+with its base-structure fallback, `fit_done` parity, research wiring). Also found and removed
+an orphaned i18n key: `reviewPane.readOnlyNotice` (superseded by the Cv/Cl split above) was
+still present, untranslated-reference, dead in all 19 locale catalogs plus `meta.json` —
+removed since the same lines were already being touched.
+
+Phase 7 automated verification: `pytest -m "not integration"` → 1086 passed, 2 skipped (no
+pre-existing failures found — the ~27-backend-failure debt noted in memory has since been
+resolved on this branch, unrelated to this work). `npx tsc --noEmit` → 0 errors. `npm test`
+→ 273/273 passed (21 files). `npm run build` → clean, `jsa/static` regenerated. `python -m
+jsa.i18n.translate --check` → exit 0, all 18 locales in sync. The plan's step-3 end-to-end
+browser smoke test was **not** run this turn — consistent with the user's stated Phase 5
+preference ("I will do the visual check"), it is left for the user to run manually; this was
+not re-confirmed with the user this turn, so treat it as inherited from Phase 5 rather than a
+fresh decision. Everything above is staged. Verification: automated checks verified; manual
+E2E smoke pending the user.
+
 ---
 
 ## Decisions Log

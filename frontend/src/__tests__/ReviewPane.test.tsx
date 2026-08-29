@@ -231,6 +231,21 @@ describe("ReviewPane", () => {
       expect(screen.queryByRole("button", { name: /Request Revision/i })).toBeNull();
       expect(screen.getByText(/cover letter lane is running/i)).toBeInTheDocument();
     });
+
+    it("shows the CV-lane read-only notice (not the cover-letter one) when clicking CV_ADJUST during cv_adjust's own run", async () => {
+      const job = makeJob({ state: "running", current_stage: "cv_adjust" });
+      useStore.setState({ jobs: { job1: job }, selectedId: "job1", viewedStage: "cv" });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("button", { name: /approve cv/i })).toBeNull();
+      });
+      expect(screen.queryByRole("button", { name: /Request Revision/i })).toBeNull();
+      // The bug: this used to say "COVER LETTER LANE IS RUNNING" even though cv_adjust is running.
+      expect(screen.getByText(/cv lane is running/i)).toBeInTheDocument();
+      expect(screen.queryByText(/cover letter lane is running/i)).toBeNull();
+    });
   });
 
   // The regression this whole feature could introduce: StageTimeline's dots write to the

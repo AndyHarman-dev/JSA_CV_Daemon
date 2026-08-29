@@ -61,12 +61,48 @@ tracks its active backend in the `Job.backend_name` column; the orchestrator ass
 `backends[0]` on first dispatch.
 
 When a backend raises `AgentLimitReached` (e.g. `jsa/agents/claude_cli.py` on a quota/rate
-signal), `Orchestrator._handle_limit_reached` (`jsa/pipeline/orchestrator.py`) **advances
-the job to the next backend in the chain** via `repo.backend_switch_reset` (resets to the
-failed stage, preserving the checkpoint), emitting a `BackendSwitchedEvent`. Only when the
-chain is **exhausted** is the job `mark_failed`'d with "Backend limit reached — switch
-backends or wait for quota reset". Do not treat a limit signal as a hard job failure; that
-is the chain's job.
+signal), `AgentTimeout` (e.g. `jsa/agents/opencode_zen.py`'s `httpx.TimeoutException`
+handler, or any CLI backend's `run_killable` timeout), **or `AgentBackendUnavailable`**
+(`jsa/agents/base.py` — a non-timeout, non-quota failure where retrying the SAME backend
+won't help: a bad model/config, an auth error, or a transient overload/gateway failure that
+already exhausted its own in-backend retry budget — see "OpenCode Zen backend" below),
+`Orchestrator._run_one` (`jsa/pipeline/orchestrator.py`) routes all three into the shared
+`_advance_backend_or_fail` helper — **advances the job to the next backend in the chain**
+via `repo.backend_switch_reset` (resets to the failed stage, preserving the checkpoint),
+emitting a `BackendSwitchedEvent`. Only when the chain is **exhausted** is the job
+`mark_failed`'d, with a message specific to which of the three tripped: "Backend limit
+reached — switch backends or wait for quota reset", "Backend timed out on every configured
+backend — switch backends or increase the timeout", or "Backend unavailable on every
+configured backend — check model/API key configuration, or try again later if this was
+transient overload". Do not treat any of the three as a hard job failure; that is the
+chain's job. (`_handle_limit_reached` / `_handle_backend_timeout` /
+`_handle_backend_unavailable` are thin wrappers over `_advance_backend_or_fail` that only
+differ in these message strings — before the timeout fix, `AgentTimeout` had no wrapper at
+all and fell straight into `_run_one`'s generic `except Exception`, hard-failing the job on
+the very first backend even with a working fallback configured in `--backends`.)
+
+**`_run_fit_assessment` (`jsa/pipeline/stages.py`) catches `ProtocolError` ONLY —
+`AgentTimeout`, `AgentLimitReached`, and `AgentBackendUnavailable` must propagate through
+it.** `fit_assessment` is the
+FIRST stage every job hits, on the same backend/timeout as every other stage. A timeout or
+quota signal there means the backend didn't answer — it is not the model saying "not a fit".
+Catching it here and parking the job at `unfit` would fabricate a verdict about the user's
+application from what is actually a transport failure, AND would mean the fit gate never
+lets BF-19 try the next configured backend — a chain like `--backends opencode-zen,claude-cli`
+would silently never reach claude-cli whenever opencode-zen was slow, because every job dies
+at the very first stage before the chain logic downstream ever runs. `ProtocolError` (a
+malformed/sentinel-less reply the model actually sent) is the only case that still fails to
+the `unfit` modal — that is a real "unparseable answer", not an absent one. Do not widen this
+except clause back to include `AgentTimeout`/`AgentLimitReached` as a "simplification"; that
+was the exact shape of a real bug (see `tests/backend/test_fit_assessment.py`'s
+`test_agent_timeout_propagates_for_bf19_not_swallowed_to_unfit` and
+`test_timeout_from_fit_backend_switches_to_next_backend_not_unfit`).
+
+One real, separate interaction to be aware of (not a bug): a `cv_adjust` failure's BF-19
+rewind target is `pending` (`repo.backend_switch_reset`'s `failed_stage` mapping, docstring
+in `jsa/db/repo.py`), so after a `cv_adjust`-stage switch the retry re-enters
+`fit_assessment` on the new backend before reaching `cv_adjust` again — an extra fit turn,
+by design, not a loop.
 
 ### OpenCode Zen backend
 
@@ -87,15 +123,74 @@ falling back to `settings.model` the way `claude-cli` does.
 
 **The API can return `HTTP 200` with an error payload in the body** (observed live: a
 transient upstream 502 from the underlying provider surfaces as `{"error": {"type":
-"server_error", ...}}` with `response.status_code == 200`). `_call_api` therefore checks
-for an `"error"` key in the parsed body regardless of status code, not just `>= 400` /
-`429` — do not "simplify" this to a plain status-code check, it will silently swallow
-these. `"rate"` / `"credit"` in the message (or `err_type` in `{"RateLimitError",
-"CreditsError"}`) maps to `AgentLimitReached` (joins the BF-19 fallback chain like any
-other backend); everything else is a plain `RuntimeError`. The free `nemotron-3-ultra-free`
-model is genuinely flaky under upstream load — this is expected, not a bug to "fix" by
-retrying inside the backend; retries belong to the fallback chain or the caller, not this
-layer.
+"server_error", ...}}` with `response.status_code == 200`). `_call_api_once` therefore
+checks for an `"error"` key in the parsed body regardless of status code, not just `>= 400`
+/ `429` — do not "simplify" this to a plain status-code check, it will silently swallow
+these.
+
+**Three-way error classification (`_call_api_once`, wrapped by `_call_api`'s retry loop).**
+The free `nemotron-3-ultra-free` model is genuinely flaky under upstream load — intermittent
+5xx gateway errors, a `{"error": {"type": "server_error"}}` envelope, or a null message
+content are all things this specific backend is known for, and the right response is to
+retry the SAME backend a couple of times before giving up on it, not to switch backends on
+the first hiccup:
+
+1. **Quota/rate** — `"rate"` / `"credit"` in the error message, `err_type` in
+   `{"RateLimitError", "CreditsError"}`, or HTTP `429` → `AgentLimitReached`, immediately,
+   no retry. Unchanged from before.
+2. **Transient overload/gateway** — a structured JSON error body at any status `< 400`
+   (the live-observed transient-upstream-502 shape is `{"error": {"type": "server_error"}}`
+   at HTTP `200`) or `>= 500`, a non-JSON body at `>= 500`, or a null `message.content` →
+   raises the module-private `_TransientOpenCodeError`, which `_call_api`'s loop retries up
+   to `_MAX_ATTEMPTS` (3, with a `1.0s`/`3.0s` backoff) on the *same* backend before
+   converting the final failure into `AgentBackendUnavailable`. This is "handled as
+   gracefully as possible" per the user's framing — the backend gets its own retries before
+   BF-19 gives up on it. **Deliberately not keyed on a guessed set of `err_type` strings**
+   (e.g. `"overloaded_error"`) — the only *confirmed* live shape is the 200-status
+   `server_error` envelope, so anything outside a real `4xx` defaults to transient rather
+   than risking an unrecognized-but-actually-transient error type silently skipping retries.
+3. **Permanent config/client error** — a structured JSON error body at a real `4xx` status
+   (e.g. an `invalid_request_error` for a bad model name), or a non-JSON `4xx` →
+   `AgentBackendUnavailable` immediately, with **no retry** — a bad `--opencode-zen-model`
+   or a malformed request will never succeed by calling the same backend again, so retrying
+   would only burn `_MAX_ATTEMPTS` × timeout of wall-clock time before reaching the same
+   conclusion BF-19 could have reached immediately.
+
+`AgentBackendUnavailable` (both from (2) exhausting its retries and from (3)) still joins
+the BF-19 fallback chain exactly like `AgentLimitReached`/`AgentTimeout` — see "Backend
+fallback chain (BF-19)" above. `AgentTimeout` (an `httpx.TimeoutException`, i.e. the request
+already burned a full `self._timeout`) is deliberately **not** part of the in-backend retry
+loop — repeating an expensive multi-minute call blindly before even trying the next backend
+would be a poor trade; it keeps its own separate, unretried BF-19 path. Do not fold `429` /
+quota signals into the retry loop either — those are `_TransientOpenCodeError`'s opposite
+case, a signal that this backend specifically cannot serve the request right now, not "try
+again in a second."
+
+Regression coverage: `tests/backend/test_opencode_zen.py`'s
+`TestCallApiRetryClassification` (retries-then-succeeds, retries-exhausted, and each
+immediate/no-retry case) and `tests/backend/test_bf18_limit_detection.py`'s
+`TestOrchestratorBackendUnavailableDetection` (the orchestrator-level BF-19 switch/exhaust
+behavior). Do not "simplify" the three-way split back into a single `RuntimeError`/
+`AgentLimitReached` pair — that was the exact shape of the reported bug: a transient
+overload or a bad model both used to raise a plain `RuntimeError` that `_run_one`'s generic
+`except Exception` hard-failed on the very first backend, with `--backends
+opencode-zen,claude-cli` never trying `claude-cli`.
+
+**Sentinel-compliance nudge is a different concern and is in scope.** The same free model
+also, independently of any transport error, sometimes answers in full, well-formed prose —
+including asking exactly the NEED_INPUT-shaped question the prompt wants — and simply never
+wraps it in `<<<...>>>...<<<END>>>` (`finish_reason: "stop"`, confirmed live against
+production payloads; not truncation). `OpenCodeZenBackend._parse_with_nudge` catches
+`parse_reply`'s `ProtocolError("no sentinel block")` specifically and replays the
+conversation plus one correction turn before giving up — this mirrors
+`ClaudeCliBackend._parse_with_nudge` (`jsa/agents/claude_cli.py`) exactly, including the
+same "propagate any other ProtocolError, or a second failure, immediately" rule. Before this
+existed, a single non-compliant reply from this backend was an *uncaught* `ProtocolError`
+that `run_stage`'s generic exception handler turned straight into a hard `mark_failed("no
+sentinel block")` on the job's very first turn — no BF-19 fallback-chain engagement, because
+`ProtocolError` doesn't map to `AgentLimitReached`. Do not remove this nudge as a
+"simplification"; it is the fix for that failure mode, not a violation of the paragraph
+above.
 
 ---
 
@@ -156,10 +251,16 @@ the pipeline.
 
 `cv_structure.json` (`jsa/store/cv_structure.py`, edited via the CV Structure Editor,
 `Settings.cv_structure_path` — `~/.jsa/cv_structure.json` by default) is the **only**
-source of CV content for the pipeline. Both `fit_assessment` and `cv_adjust` read it at
-stage time (`jsa/pipeline/stages.py::run_stage`) and inject it into their prompts —
-`cv_adjust` as the `BASE CV STRUCTURE` JSON skeleton, `fit_assessment` as
-`cv_to_markdown(structure)` under a `CV:` header. Neither stage reads `Job.cv_text`.
+source of *base* CV content for the pipeline — i.e. for the stages that haven't yet
+produced their own tailored CV. Both `fit_assessment` and `cv_adjust` read it at stage
+time (`jsa/pipeline/stages.py::run_stage`) and inject it into their prompts — `cv_adjust`
+as the `BASE CV STRUCTURE` JSON skeleton, `fit_assessment` as `cv_to_markdown(structure)`
+under a `CV:` header. Neither stage reads `Job.cv_text`. **`cover_letter` is the
+exception**: it reads the approved, tailored `cv_adjust` Document instead (falling back to
+this base structure only if that Document is somehow missing) — see "Two-lane pipeline /
+CV gate" below. Do not "fix" the cover-letter lane back onto `cv_structure.json`; that
+would defeat the two-lane split's entire point (writing the letter against what will
+actually be submitted).
 
 **`Job.cv_text` is DEPRECATED.** It is never populated (the CLI's `--cv` no longer
 stamps it) and never read by any prompt. The column still exists only because
@@ -185,6 +286,46 @@ pending jobs live, no restart required.
 
 ---
 
+## Two-lane pipeline / CV gate
+
+The pipeline runs as two sequential lanes — CV, then cover letter — separated by a parked
+gate state, `cv_review`, between them. `jsa/pipeline/state_machine.py` is the source of
+truth for the transition table; the shape that matters for new code:
+
+- `running(cv_adjust)` and `running(revising_cv)` land in `cv_review`, never in `cv_done`.
+  `cv_review` is a genuine park: the user must call `approve-cv` or request a revision to
+  leave it. A bare `cv_review` job (no unconsumed `RevisionRequest`) is **not** dispatched
+  by the orchestrator.
+- `cv_done` is **unchanged** from before the split: "CV approved, cover letter pending,
+  runnable" — the orchestrator dispatches it straight into `cover_letter`. It is reached
+  **only** via `POST /api/jobs/{id}/approve-cv` (`cv_review → cv_done`), never directly from
+  a finishing `cv_adjust`/`revising_cv` run. `cv_done` also remains the **BF-19 backend-
+  fallback rewind target**: when the `cover_letter` stage hits `AgentLimitReached`,
+  `Orchestrator._handle_limit_reached` rewinds the job to `cv_done` (not `cv_review`) so the
+  next backend re-enters `cover_letter` directly — the CV was already approved, there is
+  nothing to re-review. Do not redirect this rewind to `cv_review`.
+- A revision's landing state is decided by `RevisionRequest.origin_state`
+  (`jsa/pipeline/stages.py`, the `revising_cv`/`revising_cl` branch): a `revising_cv`
+  completion returns to `cv_review` if `origin_state == "cv_review"`, otherwise to `review`
+  (also the fallback for legacy `NULL` rows). `revising_cl` always returns to `review` — there
+  is no `cl_review` parked state; the cover letter has no gate of its own.
+- The `cover_letter` stage's initial prompt is built against the **approved `cv_adjust`
+  Document's rendered markdown** (`"TAILORED CV (approved by the user — write the letter
+  against this)"` block, `jsa/pipeline/stages.py`), not `cv_structure.json` — the letter is
+  written against what will actually be submitted. Falling back to the base structure only
+  happens if no `cv_adjust` Document exists yet, which the CV gate makes unreachable in
+  normal flow; that branch logs a warning if hit.
+- `fit_done` is unaffected by any of this — it still parallels `cv_done` as "ready to be
+  picked up for the next stage" (`cv_adjust`), and is still treated identically to `cv_done`
+  in `list_runnable_jobs`/`_next_stage_for`. See "Fit-assessment gate" above.
+- `cv-research` (`jsa/prompts/GEMINI_CV_RESEARCH.md`) and `cl-research`
+  (`jsa/prompts/GEMINI_CL_RESEARCH.md`) are prompt files only — there is no wired agent
+  backend that invokes `cv-research`; it is retained deliberately for a future CV-lane
+  research pass, not dead code to delete. `cl-research` **is** wired (`_gather_research` in
+  `jsa/pipeline/stages.py`, called for the `cover_letter` stage only).
+
+---
+
 ## Testing conventions
 
 - **Fakes over mocks.** Use `tests/backend/fakes/fake_backend.py` (`FakeAgentBackend`) for all pipeline and orchestrator tests. Do not `patch` or `MagicMock` internal functions.
@@ -198,7 +339,28 @@ pending jobs live, no restart required.
 
 ## Renderer invocation
 
-Renderers (`WeasyPrintRenderer` for PDF, `DocxRenderer` for DOCX) are invoked by `_render_for_review` (`jsa/pipeline/stages.py`) when a job **enters `review`** — on cover-letter completion and on every revision completion — rendering both CV and cover letter to **both PDF and DOCX**. The frontend preview is a PDF `<iframe>` fed by `GET /api/files/{relpath}` (served `Content-Disposition: inline`), not in-browser Markdown. `POST /api/jobs/{id}/approve` does **no** rendering — it only transitions `review → approved`. An approved job may be re-rendered on demand via `POST /api/jobs/{id}/export`. Do not move rendering back onto `approve`, and do not treat the review-entry pre-render as a bug. See ARCH.md → "Renderer runs on review entry (pre-render)".
+Renderers (`WeasyPrintRenderer` for PDF, `DocxRenderer` for DOCX) fire at **three** points
+in `jsa/pipeline/stages.py`, all via the shared `_render` helper:
+
+1. **`_render_cv`** (CV-only, `stages=(Stage.cv_adjust,)`) — on entry to `cv_review`, i.e.
+   `cv_adjust`'s first FINAL and every `revising_cv` completion that returns to `cv_review`.
+   Only the CV is rendered here; there is no cover-letter Document yet.
+2. **`_render_for_review`** (both artifacts, `stages=(Stage.cv_adjust, Stage.cover_letter)`)
+   — on entry to `review`: `cover_letter`'s first FINAL, and every `revising_cv`/`revising_cl`
+   completion whose `RevisionRequest.origin_state` was `review` (not `cv_review`).
+3. Manual re-render of an already-approved job via `POST /api/jobs/{id}/export`.
+
+`_render` itself skips any stage with no Document yet rather than erroring — this is what
+lets step 1 render CV-only without special-casing the missing cover letter.
+
+The frontend preview is a PDF `<iframe>` fed by `GET /api/files/{relpath}` (served
+`Content-Disposition: inline`), not in-browser Markdown. Neither `POST /api/jobs/{id}/approve-cv`
+(`cv_review → cv_done`) nor `POST /api/jobs/{id}/approve` (`review → approved`) does **any**
+rendering — both are pure state transitions; the render already happened on entry to the
+state they leave. Do not move rendering onto either approve endpoint, and do not treat the
+CV-gate or review-entry pre-renders as a bug. See ARCH.md → "Renderer runs on review entry
+(pre-render)" (predates the CV gate; the principle — render on park, not on approve — now
+applies at both parking states).
 
 ---
 

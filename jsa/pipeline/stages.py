@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jsa.agents.base import AgentBackend, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError
 from jsa.render.registry import renderer_for
 from jsa.render.serialize import cover_letter_to_markdown, cv_to_markdown
@@ -731,14 +731,6 @@ _FIT_FALLBACK_REASON = (
     "before continuing."
 )
 
-# Shown in the modal when the fit-assessment backend times out (fail-to-modal,
-# same contract as _FIT_FALLBACK_REASON — see AgentTimeout handling below).
-_FIT_TIMEOUT_REASON = (
-    "The fit assessment timed out before returning a verdict. Review this job "
-    "manually before continuing."
-)
-
-
 def _build_fit_user_msg(job: Job, base_structure: CVDocument | None) -> str:
     """Build the (single) user message for the fit-assessment stage.
 
@@ -814,12 +806,21 @@ async def _run_fit_assessment(
 
     try:
         handle, reply = await backend.start_session(system_prompt, initial_user_msg)
-    except (ProtocolError, AgentTimeout) as exc:
-        # A malformed / sentinel-less reply, or a fit-backend timeout (e.g. an
-        # aggressively low --fit-timeout), is "unparseable" → fail to the modal
+    except ProtocolError as exc:
+        # A malformed / sentinel-less reply is "unparseable" → fail to the modal
         # (closed), consistent with the verdict contract, rather than failing the
-        # job outright. Without this, AgentTimeout would propagate past run_stage
-        # into the orchestrator's generic handler and hard-fail the job.
+        # job outright.
+        #
+        # AgentTimeout and AgentLimitReached are deliberately NOT caught here — a
+        # timeout or a quota signal means the backend didn't answer, not that it
+        # "answered no". Those must propagate past run_stage to the orchestrator's
+        # BF-19 fallback chain (Orchestrator._handle_backend_timeout /
+        # _handle_limit_reached) so a timing-out or rate-limited fit backend tries
+        # the next configured backend instead of producing a false "not a fit"
+        # verdict. (Before this, AgentTimeout was caught here too — the fit gate is
+        # the very first stage every job hits, so on a chain like `--backends
+        # opencode-zen,claude-cli` a slow opencode-zen response silently parked
+        # every job as unfit instead of ever trying claude-cli.)
         #
         # Same stale-result guard as run_stage's post-reply check (see StaleJobResult):
         # fit_assessment is the FIRST stage and runs before run_stage's guard is ever
@@ -829,7 +830,7 @@ async def _run_fit_assessment(
         current_state = await repo.get_state_fresh(session, job.id)
         if current_state != JobState.running:
             raise StaleJobResult(job.id, current_state)
-        job.fit_reason = _FIT_TIMEOUT_REASON if isinstance(exc, AgentTimeout) else _FIT_FALLBACK_REASON
+        job.fit_reason = _FIT_FALLBACK_REASON
         await checkpoint(session, job, JobState.unfit, None)
         await _publish_fit_outcome(job, is_fit=False)
         return

@@ -39,6 +39,7 @@ function toFileUrl(absPath: string | null | undefined): string | null {
 
 export function ReviewPane({ jobId, mode = "final" }: Props) {
   const state = useStore((s) => s.jobs[jobId]?.state as JobState | undefined);
+  const currentStage = useStore((s) => s.jobs[jobId]?.current_stage);
   const viewedStage = useStore((s) => s.viewedStage);
   const setViewedStage = useStore((s) => s.setViewedStage);
   const [localActiveTab, setLocalActiveTab] = useState<TabKey>("cv");
@@ -47,9 +48,14 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
   // back to local state only before either has been touched.
   const activeTab: TabKey = mode === "cv-gate" ? "cv" : viewedStage ?? localActiveTab;
   // Read-only iff the job is in flight — the only way this pane renders while running or
-  // awaiting_input is the mid-cover-letter-run CV jump-back (see JobDetail.tsx). A job
+  // awaiting_input is the mid-pipeline jump-back to view the CV (see JobDetail.tsx). A job
   // parked awaiting the user (cv_review, review) is always fully interactive.
   const readOnly = state === "running" || state === "awaiting_input";
+  // Which lane's read-only notice to show depends on which stage is actually running — clicking
+  // CV_ADJUST during the CV's own run must not claim the cover letter lane is running.
+  const readOnlyNoticeKey = currentStage === "cv_adjust" || currentStage === "revising_cv"
+    ? "reviewPane.readOnlyNoticeCv"
+    : "reviewPane.readOnlyNoticeCl";
   const [cvPaths, setCvPaths] = useState<DocPaths>(emptyPaths);
   const [clPaths, setClPaths] = useState<DocPaths>(emptyPaths);
   const [pathsLoading, setPathsLoading] = useState(true);
@@ -401,7 +407,7 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
           }}
         >
           <Icon name="eye" size={14} />
-          {t("reviewPane.readOnlyNotice")}
+          {t(readOnlyNoticeKey)}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
