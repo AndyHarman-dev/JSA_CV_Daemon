@@ -67,6 +67,7 @@ export function stateMeta(T: Theme): Record<JobState, StateMeta> {
     awaiting_input: { label: "stateMeta.awaitingInput", code: "WAIT", color: T.a },
     fit_done: { label: "stateMeta.fitDone", code: "CHK", color: T.accent2 },
     unfit: { label: "stateMeta.unfit", code: "FLAG", color: T.a },
+    cv_review: { label: "stateMeta.cvReview", code: "CV_RVW", color: T.violet },
     cv_done: { label: "stateMeta.cvDone", code: "CV_OK", color: T.accent2 },
     cl_done: { label: "stateMeta.clDone", code: "CL_OK", color: T.accent2 },
     review: { label: "stateMeta.review", code: "RVW", color: T.violet },

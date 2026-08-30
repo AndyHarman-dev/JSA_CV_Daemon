@@ -25,7 +25,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # repo root conta
 
 
 class ClaudeCliError(RuntimeError):
-    """Raised when the claude subprocess fails with no usable output."""
+    """Raised when the claude subprocess exits non-zero."""
 
 
 class ClaudeSessionExpiredError(ClaudeCliError):
@@ -63,10 +63,9 @@ class ClaudeCliBackend(AgentBackend):
         """Run a claude CLI command and return its stdout.
 
         Raises AgentTimeout if the process exceeds the effective timeout.
-        Raises ClaudeSessionExpiredError if the subprocess exits non-zero with
-        empty stdout and stderr contains "No conversation found".
-        Raises ClaudeCliError if the subprocess exits non-zero with empty stdout
-        for any other reason.
+        Raises ClaudeSessionExpiredError if the subprocess exits non-zero and
+        stderr contains "No conversation found".
+        Raises ClaudeCliError if the subprocess exits non-zero for any other reason.
         stderr is logged at WARNING but never mixed into the returned string.
         """
         eff_timeout = timeout if timeout is not None else self._timeout
@@ -88,17 +87,22 @@ class ClaudeCliBackend(AgentBackend):
         if stderr_text:
             logger.debug("claude CLI stderr: %s", stderr_text)
 
-        if returncode != 0 and not stdout.strip():
-            # Subprocess failed and produced no usable output — raise rather than
-            # returning an empty string that will cause a misleading ProtocolError.
+        if returncode != 0:
+            # A non-zero exit is always a subprocess failure, never a model reply —
+            # even when stdout is non-empty. --output-format text writes some CLI-level
+            # errors (e.g. "unrecognized model") to stdout rather than stderr, so a
+            # stdout-non-empty check here previously let that text through as if it
+            # were the agent's answer, producing a misleading downstream
+            # "no sentinel block" ProtocolError instead of surfacing the real cause.
             ctx = f" [{context}]" if context else ""
             if "No conversation found" in stderr_text:
                 raise ClaudeSessionExpiredError(
                     f"Claude session expired{ctx}: {stderr_text}. "
                     "Reset this job to restart from scratch."
                 )
+            detail = stderr_text or stdout.strip() or "(no output)"
             raise ClaudeCliError(
-                f"claude CLI failed (exit {returncode}){ctx}: {stderr_text or '(no stderr)'}"
+                f"claude CLI failed (exit {returncode}){ctx}: {detail}"
             )
 
         return stdout

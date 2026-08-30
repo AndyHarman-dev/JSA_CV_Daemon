@@ -4,7 +4,8 @@ These tests use FakeAgentBackend and FakeRenderer — no real API calls are made
 They run as part of the default test suite (pytest -v) since they are deterministic.
 
 Scenarios:
-1. Happy path: 2 jobs go pending → cv_done → cl_done → review → approved
+1. Happy path: 2 jobs go pending → cv_review (CV gate, auto-approved by the test
+   helper) → cv_done → cover_letter → review → approved
 2. Park & resume: job parks at awaiting_input, user answers, job resumes
 3. Crash recovery: recovery_sweep corrects running → last checkpoint
 4. Revision flow: job in review gets a revision, new document version written
@@ -128,25 +129,49 @@ class _StageAwareDocBackend(FakeAgentBackend):
         return await super().start_session(system_prompt, initial_user_msg)
 
 
+async def _approve_cv(factory, job_id: str, orch: Orchestrator) -> None:
+    """Simulate the approve-cv action (Phase 4's POST /api/jobs/{id}/approve-cv route
+    body): cv_review → cv_done, then kick the orchestrator so cover_letter dispatches."""
+    async with factory() as s:
+        job = await repo.get_job(s, job_id)
+        await repo.checkpoint(s, job, JobState.cv_done, None)
+    orch.kick()
+
+
 async def _poll_job_state(
     factory,
     job_id: str,
     target_state: JobState,
     timeout: float = 5.0,
     require_stage_cleared: bool = False,
+    orch: Orchestrator | None = None,
 ) -> Job:
     """Poll the DB until job reaches target_state or timeout expires.
 
     If require_stage_cleared=True, also wait for current_stage to be None
     (useful for revision flow where job starts AND ends in 'review').
+
+    When target_state is 'review' and orch is given, a job that parks at the CV gate
+    (cv_review) is auto-approved (see _approve_cv) so the cover-letter lane starts —
+    the two-lane pipeline no longer advances a job past the CV gate on its own.
     """
     deadline = asyncio.get_running_loop().time() + timeout
+    approved = False
     while True:
         async with factory() as s:
             job = await repo.get_job(s, job_id)
         if job is not None and job.state == target_state:
             if not require_stage_cleared or job.current_stage is None:
                 return job
+        if (
+            not approved
+            and orch is not None
+            and target_state == JobState.review
+            and job is not None
+            and job.state == JobState.cv_review
+        ):
+            approved = True
+            await _approve_cv(factory, job_id, orch)
         if asyncio.get_running_loop().time() >= deadline:
             state_str = job.state if job else "None"
             stage_str = job.current_stage if job else "None"
@@ -180,6 +205,7 @@ async def _run_orchestrator_until(
                         jid,
                         target_state,
                         require_stage_cleared=require_stage_cleared,
+                        orch=orch,
                     ),
                     timeout=timeout,
                 )
@@ -319,9 +345,11 @@ class TestHappyPath:
                 j = await repo.get_job(s, job_id)
             assert j.state == JobState.approved, f"Job {job_id} not approved"
 
-        # Pre-render at review-entry writes both PDF and DOCX for cv + cl per job
-        # (see CLAUDE.md -> "Renderer invocation"); approve itself renders nothing.
-        assert len(fake_renderer.calls) == 8
+        # Pre-render fires twice per job now (see CLAUDE.md -> "Renderer invocation" / "Two-lane
+        # pipeline / CV gate"): CV-only PDF+DOCX at the cv_review gate (2 renders), then both
+        # artifacts' PDF+DOCX at review entry (4 renders) — 6 renders/job × 2 jobs = 12.
+        # approve itself still renders nothing.
+        assert len(fake_renderer.calls) == 12
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +595,52 @@ class TestCrashRecovery:
             j = await repo.get_job(s, job_id)
         assert j.state == JobState.awaiting_input
         assert j.current_stage == Stage.cv_adjust
+
+    async def test_running_revising_cv_from_cv_review_rewinds_to_cv_review(self, session_factory):
+        """A crash mid running(revising_cv), where the RevisionRequest.origin_state is
+        'cv_review', must rewind to cv_review — not fall through to the cv_done
+        Document-presence heuristic, which would silently "approve" a CV the user
+        never approved (see CLAUDE.md → recovery_sweep docstring)."""
+        job_id = "eeff002200000005"
+        async with session_factory() as s:
+            job = Job(
+                id=job_id,
+                company="Acme",
+                role="Engineer",
+                link="https://acme.com/5",
+                tier="A",
+                jd="JD text",
+                jd_hash="hash5555deadbeef",
+                cv_text="CV text",
+                state=JobState.running,
+                current_stage=Stage.revising_cv,
+            )
+            s.add(job)
+            # cv_adjust doc exists from the original run — must NOT trigger cv_done
+            cv_doc = Document(
+                job_id=job_id,
+                stage=Stage.cv_adjust,
+                version=1,
+                markdown="# CV before crash",
+            )
+            s.add(cv_doc)
+            rev_req = RevisionRequest(
+                job_id=job_id,
+                target=Stage.cv_adjust,
+                instruction="Make it shorter",
+                origin_state="cv_review",
+                consumed_at=None,
+            )
+            s.add(rev_req)
+            await s.commit()
+
+        async with session_factory() as s:
+            await repo.recovery_sweep(s)
+
+        async with session_factory() as s:
+            j = await repo.get_job(s, job_id)
+        assert j.state == JobState.cv_review
+        assert j.current_stage == Stage.revising_cv
 
     async def test_recovered_job_continues_after_sweep(self, session_factory):
         """A job recovered to cv_done should be picked up by orchestrator and finish."""

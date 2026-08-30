@@ -24,6 +24,7 @@ vi.mock("../api", () => ({
     getDocument: vi.fn().mockResolvedValue({ markdown: "# Doc", version: 1 }),
     answerFollowUp: vi.fn().mockResolvedValue({}),
     approve: vi.fn().mockResolvedValue({ cv_pdf_path: "/cv.pdf", cl_pdf_path: "/cl.pdf" }),
+    approveCv: vi.fn().mockResolvedValue({ pdf_path: "/cv.pdf", docx_path: "/cv.docx" }),
     revise: vi.fn().mockResolvedValue({}),
     config: vi.fn().mockResolvedValue({ backend: "anthropic" }),
     getJobs: vi.fn().mockResolvedValue([]),
@@ -142,6 +143,15 @@ describe("JobDetail", () => {
     expect(screen.getByText("PIPELINE_PROGRESS")).toBeInTheDocument();
   });
 
+  it("shows a waiting message for cv_done — the brief gap between approve-cv succeeding and the orchestrator dispatching cover_letter", () => {
+    const job = makeJob({ id: "j1", state: "cv_done" });
+    useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
+
+    render(<JobDetail />);
+
+    expect(screen.getByText("CV approved — starting the cover letter…")).toBeInTheDocument();
+  });
+
   it("renders FollowUpPane (not placeholder) for awaiting_input state", () => {
     const job = makeJob({ id: "j1", state: "awaiting_input" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
@@ -153,6 +163,36 @@ describe("JobDetail", () => {
     expect(screen.queryByText(/coming in Phase 10/)).toBeNull();
     // FollowUpPane renders its loading state
     expect(screen.getByText("Loading follow-up…")).toBeInTheDocument();
+  });
+
+  it("keeps FollowUpPane visible for awaiting_input even when viewedStage is 'cv' — the agent's question must never be hidden by the CV jump-back", () => {
+    const job = makeJob({ id: "j1", state: "awaiting_input", current_stage: "cover_letter" });
+    useStore.setState({ jobs: { j1: job }, selectedId: "j1", viewedStage: "cv" });
+
+    render(<JobDetail />);
+
+    expect(screen.getByText("Loading follow-up…")).toBeInTheDocument();
+  });
+
+  it("shows the read-only CV pane when running the cover-letter lane and viewedStage is 'cv'", () => {
+    const job = makeJob({ id: "j1", state: "running", current_stage: "cover_letter" });
+    useStore.setState({ jobs: { j1: job }, selectedId: "j1", viewedStage: "cv" });
+
+    render(<JobDetail />);
+
+    // ReviewPane mounts in cv-gate mode: its CV tab is present. (StageTimeline also renders
+    // a "COVER_LETTER" node label unconditionally, so this doesn't assert on its absence —
+    // ReviewPane.test.tsx's cv-gate suite already covers "no CL tab in cv-gate mode".)
+    expect(screen.getByText("CV / RESUME")).toBeInTheDocument();
+  });
+
+  it("shows the read-only CV pane when running cv_adjust itself and viewedStage is 'cv' (no dead click on the active dot)", () => {
+    const job = makeJob({ id: "j1", state: "running", current_stage: "cv_adjust" });
+    useStore.setState({ jobs: { j1: job }, selectedId: "j1", viewedStage: "cv" });
+
+    render(<JobDetail />);
+
+    expect(screen.getByText("CV / RESUME")).toBeInTheDocument();
   });
 
   it("renders ReviewPane (not placeholder) for review state", () => {

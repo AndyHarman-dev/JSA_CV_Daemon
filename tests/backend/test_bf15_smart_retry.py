@@ -265,7 +265,8 @@ class TestSoftResetCoverLetterFailure:
         job = await _insert_job(session, job_id="aabbccdd00112233")
         # Simulate pipeline progress: cv_adjust completed, cover_letter running then failed
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
         await repo.mark_failed(session, "aabbccdd00112233", "cl crashed")
@@ -281,7 +282,8 @@ class TestSoftResetCoverLetterFailure:
         """Soft reset for cover_letter failure must NOT delete cv_adjust Messages."""
         job = await _insert_job(session, job_id="aabbccdd00112233")
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
@@ -317,7 +319,8 @@ class TestSoftResetCoverLetterFailure:
         but preserves cv_session_id so cv_adjust can still be resumed."""
         job = await _insert_job(session, job_id="aabbccdd00112233")
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         job.cv_session_id = "cv-sess"    # should survive
         job.cl_session_id = "cl-sess"    # should be cleared
@@ -339,7 +342,8 @@ class TestSoftResetCoverLetterFailure:
         """Gap 2: soft_reset for cover_letter failure deletes unconsumed RevisionRequest rows."""
         job = await _insert_job(session, job_id="aabbccdd00112233")
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
@@ -373,7 +377,8 @@ class TestSoftResetRevisionStageFailure:
         job = await _insert_job(session, job_id="aabbccdd00112233")
         # Walk the job to running(revising_cv)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         transition(job, JobState.cl_done, None)
         transition(job, JobState.review, None)
@@ -422,7 +427,8 @@ class TestSoftResetRevisionStageFailure:
         job = await _insert_job(session, job_id="aabbccdd00112233")
         # Walk the job to running(revising_cl)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         transition(job, JobState.cl_done, None)
         transition(job, JobState.review, None)
@@ -505,7 +511,8 @@ class TestNuclearReset:
         """nuclear_reset_job deletes all Message rows."""
         job = await _insert_job(session, job_id="aabbccdd00112233")
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
@@ -523,7 +530,8 @@ class TestNuclearReset:
         """nuclear_reset_job deletes all Document rows."""
         job = await _insert_job(session, job_id="aabbccdd00112233")
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         await session.commit()
 
         doc = Document(job_id=job.id, stage=Stage.cv_adjust, version=1, markdown="# CV")

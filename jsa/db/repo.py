@@ -28,6 +28,29 @@ async def get_state_fresh(session: AsyncSession, job_id: str) -> JobState | None
         return result.scalar_one_or_none()
 
 
+async def get_unconsumed_revision_origin(session: AsyncSession, job_id: str) -> str | None:
+    """Return `RevisionRequest.origin_state` for the job's unconsumed revision request.
+
+    Used by three call sites that all need "which state (cv_review or review) did the
+    in-flight CV revision come from": _handle_final's revising_cv completion
+    (jsa/pipeline/stages.py), backend_switch_reset's BF-19 rewind, and recovery_sweep's
+    crash-recovery rewind. Single shared query so the origin_state contract (NULL — legacy
+    rows — reads as "review") only has to be maintained in one place.
+
+    The `uq_revision_open` partial unique index on RevisionRequest (job_id WHERE
+    consumed_at IS NULL) guarantees at most one row can match, so `.scalar_one_or_none()`
+    is safe here rather than an over-defensive `.first()` that would silently mask two
+    live unconsumed rows as a bug elsewhere (e.g. a missing duplicate-request guard).
+    """
+    result = await session.execute(
+        select(RevisionRequest.origin_state).where(
+            RevisionRequest.job_id == job_id,
+            RevisionRequest.consumed_at.is_(None),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_jobs(session: AsyncSession, state: JobState | None = None) -> list[Job]:
     """Return all jobs, optionally filtered by state."""
     stmt = select(Job)
@@ -99,6 +122,8 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
     3. state == cv_done
     4. state == awaiting_input AND has a FollowUp with answered_at IS NOT NULL for current_stage
     5. state == review AND has an unconsumed RevisionRequest (consumed_at IS NULL)
+    6. state == cv_review AND has an unconsumed RevisionRequest (consumed_at IS NULL) —
+       a bare cv_review job is parked awaiting user approve/revise, not runnable.
     """
     # Condition 3: awaiting_input with an answered follow-up for the current stage
     answered_followup = (
@@ -144,6 +169,7 @@ async def list_runnable_jobs(session: AsyncSession) -> list[Job]:
                 Job.state == JobState.cv_done,
                 (Job.state == JobState.awaiting_input) & answered_followup & no_open_followup,
                 (Job.state == JobState.review) & unconsumed_revision,
+                (Job.state == JobState.cv_review) & unconsumed_revision,
             )
         )
         .order_by(Job.updated_at.asc())
@@ -321,17 +347,25 @@ async def backend_switch_reset(
         else:
             job.cl_session_id = None
         job.session_external_id = None
-        # Transition running → review. current_stage is currently revising_*/
-        # we must clear it before transition then restore so orchestrator picks up
-        # the unconsumed RevisionRequest.
-        # transition() sets current_stage=None for review (correct — review jobs
-        # with an unconsumed RevisionRequest get current_stage set by the API route).
-        # But we actually need current_stage set to revising_* so list_runnable_jobs
-        # dispatches via the revision path. Use set_current_stage after transition.
-        # Actually, looking at list_runnable_jobs: it dispatches state==review jobs
-        # when unconsumed RevisionRequest exists; _next_stage_for returns job.current_stage.
-        # So we must preserve current_stage. Use set_current_stage after transition.
-        transition(job, JobState.review, None)
+
+        # Rewind destination: revising_cl always returns to review (no cl_review state
+        # exists). revising_cv can have been requested from either the CV gate or final
+        # review — see RevisionRequest.origin_state (Phase 1 of the two-lane pipeline
+        # split) — so it must rewind to whichever one it came from, not unconditionally
+        # to review (a bare cv_review→running(revising_cv)→review would land a job in
+        # "final review" with no cover_letter Document yet).
+        dest_state = JobState.review
+        if failed_stage == Stage.revising_cv:
+            origin_state = await get_unconsumed_revision_origin(session, job.id)
+            if origin_state == JobState.cv_review.value:
+                dest_state = JobState.cv_review
+
+        # transition() sets current_stage=None on entry to review/cv_review (correct —
+        # those parked states carry current_stage only while a revision is in flight, via
+        # set_current_stage). But we need current_stage restored to revising_* so
+        # list_runnable_jobs / _next_stage_for dispatch via the revision path on the new
+        # backend. Use set_current_stage after transition.
+        transition(job, dest_state, None)
         set_current_stage(job, failed_stage)  # restore revising_* so orchestrator re-dispatches
 
     elif failed_stage == Stage.cover_letter:
@@ -497,32 +531,84 @@ async def get_follow_ups(
 async def recovery_sweep(session: AsyncSession) -> None:
     """On startup: revert any jobs stuck in 'running' to their last safe checkpoint.
 
-    - Has cover_letter Document → set cl_done
-    - Has cv_adjust Document → set cv_done
-    - Neither → set pending (running→pending is now a direct transition via crash-recovery)
-    Jobs in awaiting_input are untouched. Jobs in review/approved/failed are untouched.
+    - current_stage == revising_cv → rewind to wherever the revision was requested from
+      (cv_review or review — see RevisionRequest.origin_state), preserving the unconsumed
+      RevisionRequest so it re-dispatches.
+    - current_stage == revising_cl → rewind to review (revising_cl always returns to
+      review — there is no cl_review parked state), preserving the unconsumed
+      RevisionRequest so it re-dispatches. Mirrors the revising_cv branch above; without
+      this a crash mid revising_cl fell through to the generic cl_docs heuristic below,
+      which finds the pre-existing (pre-revision) cover_letter Document, lands the job on
+      the dead-end `cl_done` state (no dispatch arm in list_runnable_jobs), and orphans the
+      unconsumed RevisionRequest forever.
+    - current_stage == cv_adjust (plain, not a revision) → rewind to pending, never to
+      cv_done. A completed cv_adjust run always transitions atomically past `running`
+      straight to `cv_review` in the same checkpoint (see stages.py::_handle_final) — being
+      caught here mid-run means THIS attempt did not complete, no matter what cv_adjust
+      Document a prior job cycle may have left behind (Documents are append-only and are
+      never deleted by soft_reset_job/JD-hash resets). Treating an old Document as proof of
+      completion — the pre-two-lane-split heuristic this replaces — would silently
+      fast-forward the job to cv_done, bypassing the cv_review approval gate for a CV the
+      user never actually approved this cycle. See CLAUDE.md → "Two-lane pipeline / CV
+      gate" and jsa/pipeline/state_machine.py's running→cv_done guard (narrowed to
+      Stage.cover_letter only, in lockstep with this branch).
+    - current_stage == cover_letter (plain): a cover_letter Document already exists →
+      cl_done (crash-recovery landing state only). No cover_letter Document yet → cv_done
+      (rewind to re-dispatch cover_letter fresh — NOT pending, which would needlessly
+      discard an already-approved CV; reaching running(cover_letter) at all already
+      required cv_done, so neither branch can bypass the CV gate).
+    - fit_assessment, or current_stage is None → pending (no signal to discriminate on).
+    Jobs in awaiting_input are untouched. Jobs in review/approved/failed/cv_review are
+    untouched (only 'running' jobs are swept).
     """
-    from jsa.pipeline.state_machine import transition
+    from jsa.pipeline.state_machine import transition, set_current_stage
 
     stmt = select(Job).where(Job.state == JobState.running)
     result = await session.execute(stmt)
     running_jobs = list(result.scalars().all())
 
     for job in running_jobs:
-        cl_docs = await get_documents(session, job.id, stage=Stage.cover_letter)
-        cv_docs = await get_documents(session, job.id, stage=Stage.cv_adjust)
+        if job.current_stage in (Stage.revising_cv, Stage.revising_cl):
+            revising_stage = job.current_stage  # transition() below clears current_stage
+            dest_state = JobState.review
+            if revising_stage == Stage.revising_cv:
+                origin_state = await get_unconsumed_revision_origin(session, job.id)
+                if origin_state == JobState.cv_review.value:
+                    dest_state = JobState.cv_review
+            transition(job, dest_state, new_stage=None)
+            set_current_stage(job, revising_stage)  # restore so it re-dispatches
+            job.updated_at = datetime.utcnow()
+            session.add(job)
+            continue
 
-        if cl_docs:
-            # running → cl_done requires current_stage == cover_letter; set it first
-            job.current_stage = Stage.cover_letter
-            transition(job, JobState.cl_done, new_stage=None)
-        elif cv_docs:
-            # running → cv_done requires current_stage == cv_adjust; set it first
-            job.current_stage = Stage.cv_adjust
-            transition(job, JobState.cv_done, new_stage=None)
-        else:
+        if job.current_stage == Stage.cv_adjust:
+            # Never treat Document presence as a completion signal here — see docstring.
             transition(job, JobState.pending, new_stage=None)
+            job.updated_at = datetime.utcnow()
+            session.add(job)
+            continue
 
+        if job.current_stage == Stage.cover_letter:
+            cl_docs = await get_documents(session, job.id, stage=Stage.cover_letter)
+            if cl_docs:
+                # A cover_letter FINAL already landed for this cycle (crash happened
+                # after the Document was written, e.g. mid-render) — cl_done, a
+                # crash-recovery-only landing state (cover_letter's own checkpoint
+                # never uses it in normal flow).
+                transition(job, JobState.cl_done, new_stage=None)
+            else:
+                # Crashed before this cycle's cover_letter attempt completed.
+                # Reaching running(cover_letter) at all already required cv_done (the
+                # state machine gates it) — rewind there, never to pending, which
+                # would needlessly discard an already-approved CV and force the whole
+                # pipeline (fit_assessment → cv_adjust → cv_review) to redo work.
+                transition(job, JobState.cv_done, new_stage=None)
+            job.updated_at = datetime.utcnow()
+            session.add(job)
+            continue
+
+        # fit_assessment, or current_stage is None: no signal to discriminate on.
+        transition(job, JobState.pending, new_stage=None)
         job.updated_at = datetime.utcnow()
         session.add(job)
 

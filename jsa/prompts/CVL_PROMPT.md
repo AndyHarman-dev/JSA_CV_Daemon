@@ -38,9 +38,11 @@ Once the user responds:
   the user.
 
 STEP 2 — GATHER PERSONAL CONTEXT
-Review the `BASE CV STRUCTURE` block in the initial message — the candidate's base CV,
-curated in the Structure Editor. Draw achievements, experience, and background from it;
-never invent facts beyond what it contains.
+Review the CV block in the initial message — labeled either `TAILORED CV` (the CV the
+user has already tailored and approved for this specific application; the normal case)
+or `BASE CV STRUCTURE` (a fallback used only if no tailored CV exists yet). Draw
+achievements, experience, and background from whichever one is present; never invent or
+assert a fact, skill, or accomplishment that is not in it, and never contradict it.
 Ask the user for:
 - Their main motivation for wanting this specific company and role
 - Anything unusual to address: career change, employment gap, or relocation (they can answer "none")

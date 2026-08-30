@@ -12,7 +12,7 @@ const T = SHELL_THEME;
 
 const RUNNING_STATES: JobState[] = ["running", "pending", "cv_done", "cl_done"];
 const INBOX_STATES: JobState[] = ["awaiting_input"];
-const REVIEW_STATES: JobState[] = ["review"];
+const REVIEW_STATES: JobState[] = ["cv_review", "review"];
 const DONE_STATES: JobState[] = ["approved"];
 const FAILED_STATES: JobState[] = ["failed"];
 
@@ -20,6 +20,7 @@ const BACKEND_LABELS: Record<string, string> = {
   "claude-cli": "CLAUDE CLI",
   "google-cli": "GOOGLE CLI",
   anthropic: "ANTHROPIC API",
+  "opencode-zen": "OPENCODE ZEN",
 };
 
 function backendLabel(id: string): string {

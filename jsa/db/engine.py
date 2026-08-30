@@ -55,6 +55,12 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN language VARCHAR(8)"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # origin_state: JobState the revision was requested from ("cv_review" | "review");
+        # NULL (legacy rows) is read as "review". Added for the CV/cover-letter lane split.
+        try:
+            await conn.execute(text("ALTER TABLE revision_requests ADD COLUMN origin_state VARCHAR(24)"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

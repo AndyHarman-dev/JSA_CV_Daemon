@@ -34,6 +34,13 @@ export const api = {
     );
   },
 
+  approveCv(id: string): Promise<{ pdf_path: string; docx_path: string }> {
+    return apiFetch<{ pdf_path: string; docx_path: string }>(
+      `/api/jobs/${encodeURIComponent(id)}/approve-cv`,
+      { method: "POST" }
+    );
+  },
+
   revise(id: string, target: "cv" | "cl", text: string): Promise<JobDTO> {
     return apiFetch<JobDTO>(`/api/jobs/${encodeURIComponent(id)}/revise`, {
       method: "POST",
@@ -97,8 +104,12 @@ export const api = {
   exportJob(
     id: string,
     format: "pdf" | "docx"
-  ): Promise<{ cv_path: string; cl_path: string }> {
-    return apiFetch<{ cv_path: string; cl_path: string }>(
+  ): Promise<{ cv_path?: string; cl_path?: string }> {
+    // Backend (jsa/api/routes_jobs.py::export_job) only sets each key when that
+    // stage's Document exists — a cv_review-only job's export omits cl_path
+    // entirely. Both keys are optional here to match; do not widen back to
+    // required without also changing the backend to always emit both.
+    return apiFetch<{ cv_path?: string; cl_path?: string }>(
       `/api/jobs/${encodeURIComponent(id)}/export`,
       {
         method: "POST",

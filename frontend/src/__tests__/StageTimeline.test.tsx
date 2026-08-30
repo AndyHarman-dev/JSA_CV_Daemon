@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, it, expect, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { StageTimeline } from "../components/StageTimeline";
+import { useStore } from "../store";
 import type { JobDTO } from "../types";
 
 function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
@@ -26,6 +28,10 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
 function getStepDots(container: HTMLElement): Element[] {
   return Array.from(container.querySelectorAll('[data-testid="stage-dot"]'));
 }
+
+beforeEach(() => {
+  useStore.setState({ viewedStage: null });
+});
 
 describe("StageTimeline", () => {
   it('shows first step (index 0) as active for state "pending"', () => {
@@ -76,11 +82,73 @@ describe("StageTimeline", () => {
 
     expect(getAllByText("PENDING").length).toBeGreaterThan(0);
     expect(getAllByText("CV_ADJUST").length).toBeGreaterThan(0);
-    expect(getAllByText("CV_DONE").length).toBeGreaterThan(0);
+    expect(getAllByText("CV_REVIEW").length).toBeGreaterThan(0);
     expect(getAllByText("COVER_LETTER").length).toBeGreaterThan(0);
     expect(getAllByText("CL_DONE").length).toBeGreaterThan(0);
     expect(getAllByText("REVIEW").length).toBeGreaterThan(0);
     expect(getAllByText("APPROVED").length).toBeGreaterThan(0);
+  });
+
+  it("renders only the CV_ADJUST and COVER_LETTER nodes as buttons; the other five stay plain divs", () => {
+    // A "review" job so the CL button is enabled too — this test is about element type,
+    // not disabled state.
+    const job = makeJob({ state: "review" });
+    render(<StageTimeline job={job} />);
+
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /COVER_LETTER/ })).toBeInTheDocument();
+    // Only those two — no other step label sits inside a <button>.
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+  });
+
+  it("disables the COVER_LETTER button while no cover-letter Document exists yet", () => {
+    const job = makeJob({ state: "cv_review" });
+    render(<StageTimeline job={job} />);
+
+    expect(screen.getByRole("button", { name: /COVER_LETTER/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toBeEnabled();
+  });
+
+  it("disables the CV_ADJUST button while no cv_adjust Document exists yet", () => {
+    const job = makeJob({ state: "pending" });
+    render(<StageTimeline job={job} />);
+
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toHaveAttribute(
+      "title",
+      "CV not started yet"
+    );
+  });
+
+  it("enables the COVER_LETTER button while the cover-letter lane is actively running — the click-back in verification step (f) must work mid-run, not just after review", () => {
+    const job = makeJob({ state: "running", current_stage: "cover_letter" });
+    render(<StageTimeline job={job} />);
+
+    expect(screen.getByRole("button", { name: /COVER_LETTER/ })).toBeEnabled();
+  });
+
+  it("enables the COVER_LETTER button once the job has reached review", () => {
+    const job = makeJob({ state: "review" });
+    render(<StageTimeline job={job} />);
+
+    expect(screen.getByRole("button", { name: /COVER_LETTER/ })).toBeEnabled();
+  });
+
+  it("clicking a dot sets the store's viewedStage, and clicking it again clears it", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({ state: "review" });
+    render(<StageTimeline job={job} />);
+
+    await user.click(screen.getByRole("button", { name: /CV_ADJUST/ }));
+    expect(useStore.getState().viewedStage).toBe("cv");
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: /COVER_LETTER/ }));
+    expect(useStore.getState().viewedStage).toBe("cl");
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: /COVER_LETTER/ }));
+    expect(useStore.getState().viewedStage).toBeNull();
   });
 
   it('shows step index 1 as active when state is "running" with cv_adjust stage', () => {

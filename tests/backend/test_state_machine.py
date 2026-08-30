@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from jsa.db.models import JobState, Stage
-from jsa.pipeline.state_machine import ALLOWED, InvalidTransition, transition
+from jsa.pipeline.state_machine import ALLOWED, InvalidTransition, set_current_stage, transition
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,10 @@ class TestAllowedTransitions:
         assert job.current_stage == Stage.cv_adjust
 
     def test_running_to_cv_done(self):
-        job = make_job(JobState.running, Stage.cv_adjust)
+        # running → cv_done is now only reachable from current_stage == cover_letter
+        # (the BF-19 rewind target) — cv_adjust completion goes to cv_review instead,
+        # never directly to cv_done. See TestStageCompatibility for the negative case.
+        job = make_job(JobState.running, Stage.cover_letter)
         transition(job, JobState.cv_done)
         assert job.state == JobState.cv_done
         assert job.current_stage is None
@@ -144,6 +147,45 @@ class TestAllowedTransitions:
         job = make_job(JobState.failed)
         transition(job, JobState.pending)
         assert job.state == JobState.pending
+        assert job.current_stage is None
+
+    def test_running_cv_adjust_to_cv_review(self):
+        job = make_job(JobState.running, Stage.cv_adjust)
+        transition(job, JobState.cv_review)
+        assert job.state == JobState.cv_review
+        assert job.current_stage is None
+
+    def test_running_revising_cv_to_cv_review(self):
+        job = make_job(JobState.running, Stage.revising_cv)
+        transition(job, JobState.cv_review)
+        assert job.state == JobState.cv_review
+
+    def test_cv_review_to_cv_done(self):
+        job = make_job(JobState.cv_review)
+        transition(job, JobState.cv_done)
+        assert job.state == JobState.cv_done
+        assert job.current_stage is None
+
+    def test_cv_review_to_running_revising_cv(self):
+        job = make_job(JobState.cv_review)
+        transition(job, JobState.running, Stage.revising_cv)
+        assert job.state == JobState.running
+        assert job.current_stage == Stage.revising_cv
+
+    def test_cv_review_to_failed(self):
+        job = make_job(JobState.cv_review)
+        transition(job, JobState.failed)
+        assert job.state == JobState.failed
+
+    def test_cv_review_to_dismissed(self):
+        job = make_job(JobState.cv_review)
+        transition(job, JobState.dismissed)
+        assert job.state == JobState.dismissed
+
+    def test_awaiting_input_to_cv_review(self):
+        job = make_job(JobState.awaiting_input, Stage.revising_cv)
+        transition(job, JobState.cv_review)
+        assert job.state == JobState.cv_review
         assert job.current_stage is None
 
 
@@ -260,22 +302,40 @@ class TestForbiddenTransitions:
         with pytest.raises(InvalidTransition):
             transition(job, JobState.failed)
 
+    def test_cv_review_to_review_raises(self):
+        job = make_job(JobState.cv_review)
+        with pytest.raises(InvalidTransition):
+            transition(job, JobState.review)
+
+    def test_cv_review_to_pending_raises(self):
+        job = make_job(JobState.cv_review)
+        with pytest.raises(InvalidTransition):
+            transition(job, JobState.pending)
+
+    def test_cv_done_to_cv_review_raises(self):
+        """cv_done must stay reachable only via cv_review→cv_done, never the reverse."""
+        job = make_job(JobState.cv_done)
+        with pytest.raises(InvalidTransition):
+            transition(job, JobState.cv_review)
+
 
 # ---------------------------------------------------------------------------
 # Stage compatibility: running → cv_done / cl_done stage checks
 # ---------------------------------------------------------------------------
 
 class TestStageCompatibility:
-    """running(cv_adjust) → cv_done allowed; running(revising_cv) → cv_done raises.
+    """running(cv_adjust) → cv_done raises; only running(cover_letter) → cv_done is allowed.
 
-    BF-19: running(cover_letter) → cv_done is now also allowed (backend-switch restart
+    A normal cv_adjust completion goes to cv_review, never directly to cv_done — cv_done
+    is reached only via the approve-cv endpoint (see CLAUDE.md → "Two-lane pipeline / CV
+    gate"). BF-19: running(cover_letter) → cv_done is allowed (backend-switch restart
     rewinds a mid-cover_letter job back to cv_done so the new backend starts fresh).
     """
 
-    def test_running_cv_adjust_to_cv_done_allowed(self):
+    def test_running_cv_adjust_to_cv_done_raises(self):
         job = make_job(JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done)
-        assert job.state == JobState.cv_done
+        with pytest.raises(InvalidTransition, match="cv_done"):
+            transition(job, JobState.cv_done)
 
     def test_running_cover_letter_to_cv_done_allowed_for_backend_switch(self):
         """BF-19: backend-switch restart from cover_letter stage → rewind to cv_done."""
@@ -331,6 +391,47 @@ class TestStageCompatibility:
         transition(job, JobState.awaiting_input, Stage.cover_letter)
         assert job.current_stage == Stage.cover_letter
 
+    def test_running_cover_letter_to_cv_review_raises(self):
+        job = make_job(JobState.running, Stage.cover_letter)
+        with pytest.raises(InvalidTransition, match="cv_review"):
+            transition(job, JobState.cv_review)
+
+    def test_running_fit_assessment_to_cv_review_raises(self):
+        job = make_job(JobState.running, Stage.fit_assessment)
+        with pytest.raises(InvalidTransition, match="cv_review"):
+            transition(job, JobState.cv_review)
+
+
+# ---------------------------------------------------------------------------
+# set_current_stage: review vs cv_review
+# ---------------------------------------------------------------------------
+
+class TestSetCurrentStage:
+    def test_review_accepts_revising_cv(self):
+        job = make_job(JobState.review)
+        set_current_stage(job, Stage.revising_cv)
+        assert job.current_stage == Stage.revising_cv
+
+    def test_review_accepts_revising_cl(self):
+        job = make_job(JobState.review)
+        set_current_stage(job, Stage.revising_cl)
+        assert job.current_stage == Stage.revising_cl
+
+    def test_cv_review_accepts_revising_cv(self):
+        job = make_job(JobState.cv_review)
+        set_current_stage(job, Stage.revising_cv)
+        assert job.current_stage == Stage.revising_cv
+
+    def test_cv_review_rejects_revising_cl(self):
+        job = make_job(JobState.cv_review)
+        with pytest.raises(InvalidTransition):
+            set_current_stage(job, Stage.revising_cl)
+
+    def test_pending_rejects_any_stage(self):
+        job = make_job(JobState.pending)
+        with pytest.raises(InvalidTransition):
+            set_current_stage(job, Stage.revising_cv)
+
 
 # ---------------------------------------------------------------------------
 # approved is terminal — all transitions from it raise
@@ -358,7 +459,7 @@ class TestMutatesInPlace:
         assert job.current_stage == Stage.cv_adjust
 
     def test_stage_cleared_on_terminal_like_transition(self):
-        job = make_job(JobState.running, Stage.cv_adjust)
+        job = make_job(JobState.running, Stage.cover_letter)
         transition(job, JobState.cv_done)
         assert job.current_stage is None
 

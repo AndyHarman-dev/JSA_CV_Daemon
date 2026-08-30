@@ -23,7 +23,7 @@ const GROUPS: Group[] = [
   { labelKey: "jobList.inbox", states: ["awaiting_input"] },
   { labelKey: "jobList.needsReview", states: ["unfit"] },
   { labelKey: "jobList.running", states: ["running", "pending", "fit_done", "cv_done", "cl_done"] },
-  { labelKey: "jobList.review", states: ["review"] },
+  { labelKey: "jobList.review", states: ["cv_review", "review"] },
   { labelKey: "jobList.done", states: ["approved"] },
   { labelKey: "jobList.failed", states: ["failed"] },
   { labelKey: "jobList.dismissed", states: ["dismissed"] },

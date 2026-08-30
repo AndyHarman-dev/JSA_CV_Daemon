@@ -21,13 +21,14 @@ from sqlalchemy.pool import StaticPool
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from jsa.agents.anthropic_api import AnthropicAPIBackend
-from jsa.agents.base import AgentLimitReached, AgentReply
+from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentReply, AgentTimeout
 from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
 from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
 from jsa.db import repo
 from jsa.db.models import Base, Job, JobState, Stage
 from jsa.pipeline.orchestrator import Orchestrator
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
+from tests.backend.fakes.finals import cl_final
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +376,30 @@ async def _insert_job(factory, **overrides) -> Job:
     return job
 
 
+async def _insert_job_at_cv_done(factory, **overrides) -> Job:
+    """Insert a job already past the fit gate AND the CV lane, so dispatch goes
+    straight to cover_letter — used for AgentTimeout tests.
+
+    Two stages are deliberately avoided here:
+    - fit_assessment (the `pending` stage) swallows AgentTimeout into `unfit`
+      internally and never lets it reach the orchestrator (see stages.py), so
+      it can't exercise BF-19 at all.
+    - cv_adjust: repo.backend_switch_reset's BF-19 rewind for a cv_adjust
+      failure resets the job all the way back to `pending`, which re-enters
+      fit_assessment on the new backend — i.e. a second timeout there would
+      hit fit_assessment's swallow-to-unfit path above, not chain-exhaustion.
+    cover_letter's rewind target is cv_done (not pending), so both attempts in
+    a chain re-enter cover_letter on cv_done and a persistent timeout cleanly
+    exhausts the chain instead of detouring through the fit gate.
+    """
+    data = _job_data(**overrides)
+    async with factory() as s:
+        job = await repo.upsert_job(s, data)
+        job.state = JobState.cv_done
+        await s.commit()
+    return job
+
+
 async def _poll_job_state(
     factory,
     job_id: str,
@@ -428,6 +453,186 @@ class LimitReachedBackend(FakeAgentBackend):
 
     async def start_session(self, system_prompt, initial_user_msg):
         raise AgentLimitReached("Anthropic API rate limit reached: 429 Too Many Requests")
+
+
+class TimeoutBackend(FakeAgentBackend):
+    """Test double: backend that always raises AgentTimeout."""
+
+    def __init__(self):
+        super().__init__([])
+
+    async def start_session(self, system_prompt, initial_user_msg):
+        raise AgentTimeout("OpenCode Zen API timed out after 180.0s")
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Orchestrator._run_one catches AgentTimeout and engages the BF-19
+# fallback chain exactly like AgentLimitReached, instead of hard-failing on
+# the first backend (the reported bug: a configured `--backends opencode-zen,
+# claude-cli` chain never switched to claude-cli when opencode-zen timed out).
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorTimeoutDetection:
+    """Tests for Orchestrator._run_one handling of AgentTimeout via BF-19."""
+
+    async def test_agent_timeout_switches_to_next_backend_in_chain(self, session_factory):
+        """A single-backend timeout advances job.backend_name to the next
+        configured backend and keeps the job runnable, rather than failing it.
+
+        Job starts at cv_done (past the fit gate and the CV lane — see
+        _insert_job_at_cv_done), so dispatch goes straight to cover_letter and
+        the timeout is handled by the generic BF-19 path in
+        Orchestrator._run_one / _handle_backend_timeout.
+        """
+        job = await _insert_job_at_cv_done(session_factory)
+
+        def backend_factory(name: str):
+            return TimeoutBackend() if name == "opencode-zen" else FakeAgentBackend([cl_final()])
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=backend_factory,
+            backends=["opencode-zen", "claude-cli"],
+        )
+
+        # The second backend actually answers, so the job should progress into
+        # the review gate instead of ending up `failed`.
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.backend_name == "claude-cli"
+        assert refreshed.state == JobState.review
+
+    async def test_agent_timeout_exhausted_chain_marks_job_failed(self, session_factory):
+        """When every backend in the chain times out, the job is marked failed
+        with a human-readable, timeout-specific message (not silently retried
+        forever, and not confused with the limit-reached message)."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: TimeoutBackend(),
+            backends=["opencode-zen", "claude-cli"],
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
+        assert "timed out" in (refreshed.error or "").lower()
+        assert "Backend limit reached" not in (refreshed.error or "")
+
+    async def test_agent_timeout_single_backend_marks_job_failed(self, session_factory):
+        """With no fallback configured, a timeout still fails the job cleanly
+        (same as before this fix) rather than hanging or looping."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: TimeoutBackend(),
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
+
+
+class BackendUnavailableBackend(FakeAgentBackend):
+    """Test double: backend that always raises AgentBackendUnavailable — the
+    exception OpenCodeZenBackend._call_api raises once it has exhausted its own
+    in-process retries on a transient overload/gateway signal, or immediately
+    for a permanent config error (bad model, bad request). See CLAUDE.md
+    "OpenCode Zen backend"."""
+
+    def __init__(self):
+        super().__init__([])
+
+    async def start_session(self, system_prompt, initial_user_msg):
+        raise AgentBackendUnavailable(
+            "OpenCode Zen API still failing after 3 attempts: 502 Bad Gateway"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Orchestrator._run_one catches AgentBackendUnavailable and engages the
+# BF-19 fallback chain exactly like AgentLimitReached/AgentTimeout, instead of
+# hard-failing on the first backend. This is the third leg of backend-failure
+# resilience: overload/gateway errors that survive a backend's own in-process
+# retry budget, and permanent config errors (bad model, bad request) that
+# retrying the SAME backend would never fix, both switch to the next configured
+# backend rather than failing the job outright.
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorBackendUnavailableDetection:
+    """Tests for Orchestrator._run_one handling of AgentBackendUnavailable via BF-19."""
+
+    async def test_agent_backend_unavailable_switches_to_next_backend_in_chain(
+        self, session_factory
+    ):
+        """A single-backend AgentBackendUnavailable advances job.backend_name to
+        the next configured backend and keeps the job runnable."""
+        job = await _insert_job_at_cv_done(session_factory)
+
+        def backend_factory(name: str):
+            return (
+                BackendUnavailableBackend()
+                if name == "opencode-zen"
+                else FakeAgentBackend([cl_final()])
+            )
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=backend_factory,
+            backends=["opencode-zen", "claude-cli"],
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.backend_name == "claude-cli"
+        assert refreshed.state == JobState.review
+
+    async def test_agent_backend_unavailable_exhausted_chain_marks_job_failed(
+        self, session_factory
+    ):
+        """When every backend in the chain raises AgentBackendUnavailable, the
+        job fails with a message distinct from the limit/timeout wording."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: BackendUnavailableBackend(),
+            backends=["opencode-zen", "claude-cli"],
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
+        assert "unavailable" in (refreshed.error or "").lower()
+        assert "Backend limit reached" not in (refreshed.error or "")
+        assert "timed out on every" not in (refreshed.error or "")
+
+    async def test_agent_backend_unavailable_single_backend_marks_job_failed(
+        self, session_factory
+    ):
+        """With no fallback configured, still fails cleanly rather than looping."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: BackendUnavailableBackend(),
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
 
 
 class TestOrchestratorLimitDetection:

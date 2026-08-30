@@ -248,9 +248,76 @@ async def approve_job(request: Request, job_id: str):
     return {"cv_pdf_path": cv_pdf_path, "cl_pdf_path": cl_pdf_path}
 
 
+@router.post("/api/jobs/{job_id}/approve-cv")
+async def approve_cv_job(request: Request, job_id: str):
+    """Approve the CV at the CV gate: cv_review → cv_done, unlocking the cover-letter lane.
+
+    Requires state == cv_review and a cv_adjust Document (the CV gate always renders one
+    on entry — see jsa/pipeline/stages.py::_handle_final — so its absence would indicate
+    a bug, not a normal condition). Rejects with 400 if an unconsumed RevisionRequest
+    exists: a bare cv_review + unconsumed RevisionRequest is a legitimate parked
+    combination (see jsa/db/repo.py::list_runnable_jobs), and approving through it would
+    strand the request — cv_done's runnable arm has no revision condition, so it would
+    never be consumed or dispatched.
+    """
+    sf = _session_factory(request)
+
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.cv_review:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'cv_review'",
+            )
+
+        unconsumed_result = await session.execute(
+            select(RevisionRequest.id).where(
+                RevisionRequest.job_id == job_id,
+                RevisionRequest.consumed_at.is_(None),
+            )
+        )
+        if unconsumed_result.first() is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} has a pending CV revision; cannot approve until it completes",
+            )
+
+        cv_docs = await repo.get_documents(session, job_id, stage=Stage.cv_adjust)
+        if not cv_docs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} has no cv_adjust document",
+            )
+        cv_doc = cv_docs[0]
+        cv_pdf_path = cv_doc.pdf_path or ""
+        cv_docx_path = cv_doc.docx_path or ""
+
+        await repo.checkpoint(session, job, JobState.cv_done, new_stage=None)
+
+    await bus.publish(
+        event_to_dict(
+            StatusChangedEvent(
+                job_id=job_id,
+                from_state=JobState.cv_review.value,
+                to_state=JobState.cv_done.value,
+            )
+        )
+    )
+
+    request.app.state.orchestrator.kick()
+
+    return {"pdf_path": cv_pdf_path, "docx_path": cv_docx_path}
+
+
 @router.post("/api/jobs/{job_id}/revise")
 async def revise_job(request: Request, job_id: str, body: ReviseBody):
-    """Insert a revision request and wake the orchestrator."""
+    """Insert a revision request and wake the orchestrator.
+
+    Accepts state in (review, cv_review) — both artifacts are revisable at final review,
+    but a cv_review job has no cover letter yet, so target="cl" there is rejected.
+    """
     if body.target not in ("cv", "cl"):
         raise HTTPException(
             status_code=400,
@@ -262,10 +329,34 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
         job = await repo.get_job(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        if job.state != JobState.review:
+        if job.state not in (JobState.review, JobState.cv_review):
             raise HTTPException(
                 status_code=400,
-                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'review'",
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'review' or 'cv_review'",
+            )
+        if job.state == JobState.cv_review and body.target == "cl":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is at the CV gate (cv_review) — no cover letter exists yet",
+            )
+
+        # Reject a second revision request while one is already pending. Without
+        # this, job.state stays review/cv_review until the orchestrator actually
+        # dispatches (only current_stage flips), so a double-click or a race lets
+        # two POSTs both pass the state check above. The DB's uq_revision_open
+        # partial unique index (job_id WHERE consumed_at IS NULL) would reject the
+        # second INSERT anyway, but only as an unhandled IntegrityError — this
+        # check turns that into a clean 409 instead.
+        existing = await session.execute(
+            select(RevisionRequest.id).where(
+                RevisionRequest.job_id == job_id,
+                RevisionRequest.consumed_at.is_(None),
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job {job_id!r} already has a pending revision request",
             )
 
         # Map target to stage values
@@ -276,15 +367,17 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
             revision_target = Stage.cover_letter
             new_current_stage = Stage.revising_cl
 
-        # Insert revision request
+        # Insert revision request — origin_state records where to return once the
+        # revision completes (see jsa/pipeline/stages.py::_handle_final).
         rev_req = RevisionRequest(
             job_id=job_id,
             target=revision_target,
             instruction=body.text,
+            origin_state=job.state.value,
         )
         session.add(rev_req)
 
-        # Set current_stage (state stays review per spec) and updated_at
+        # Set current_stage (state stays review/cv_review per spec) and updated_at
         set_current_stage(job, new_current_stage)
         job.updated_at = datetime.utcnow()
         session.add(job)
@@ -662,11 +755,14 @@ async def get_document(
 
 @router.post("/api/jobs/{job_id}/export")
 async def export_job(request: Request, job_id: str, body: ExportBody):
-    """Re-render approved job documents in the requested format and return file paths.
+    """Re-render job documents in the requested format and return file paths.
 
-    Requires job.state == approved (409 if not).
+    Requires job.state in (cv_review, review, approved) (409 otherwise) — a cv_review
+    job only has a CV to export; review/approved jobs may have both. Renders whichever
+    of cv_adjust/cover_letter has a Document, skipping the other rather than erroring on
+    its absence.
     Re-runnable: calling again with the same format overwrites the output file.
-    Does NOT call repo.checkpoint / transition — state stays approved (terminal).
+    Does NOT call repo.checkpoint / transition — state is left unchanged.
     """
     if body.format not in ("pdf", "docx"):
         raise HTTPException(
@@ -681,77 +777,80 @@ async def export_job(request: Request, job_id: str, body: ExportBody):
         job = await repo.get_job(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        if job.state not in (JobState.review, JobState.approved):
+        if job.state not in (JobState.cv_review, JobState.review, JobState.approved):
             raise HTTPException(
                 status_code=409,
-                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'review' or 'approved'",
+                detail=(
+                    f"Job {job_id!r} is in state {job.state.value!r}, expected "
+                    "'cv_review', 'review', or 'approved'"
+                ),
             )
 
         cv_docs = await repo.get_documents(session, job_id, stage=Stage.cv_adjust)
         cl_docs = await repo.get_documents(session, job_id, stage=Stage.cover_letter)
 
-        if not cv_docs:
+        if not cv_docs and not cl_docs:
             raise HTTPException(
                 status_code=400,
-                detail=f"Job {job_id!r} has no cv_adjust document",
+                detail=f"Job {job_id!r} has no documents to export",
             )
-        if not cl_docs:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Job {job_id!r} has no cover_letter document",
-            )
-
-        cv_doc = cv_docs[0]
-        cl_doc = cl_docs[0]
 
         # Compute output paths — same slug convention as approve
         slug = f"{_slugify(job.company)}_{_slugify(job.role)}_{job.id[:8]}"
         ext = "pdf" if body.format == "pdf" else "docx"
-        cv_out = settings.output_dir / slug / f"cv.{ext}"
-        cl_out = settings.output_dir / slug / f"cover_letter.{ext}"
+
+        cv_out = settings.output_dir / slug / f"cv.{ext}" if cv_docs else None
+        cl_out = settings.output_dir / slug / f"cover_letter.{ext}" if cl_docs else None
 
         # Capture IDs and markdown before closing session
-        cv_markdown = cv_doc.markdown
-        cl_markdown = cl_doc.markdown
-        cv_doc_id = cv_doc.id
-        cl_doc_id = cl_doc.id
+        cv_markdown = cv_docs[0].markdown if cv_docs else None
+        cl_markdown = cl_docs[0].markdown if cl_docs else None
+        cv_doc_id = cv_docs[0].id if cv_docs else None
+        cl_doc_id = cl_docs[0].id if cl_docs else None
 
     # Select the renderer — "pdf" maps to "weasyprint"; "docx" maps to "docx"
     renderer_key = "weasyprint" if body.format == "pdf" else "docx"
     renderer = renderer_for(renderer_key)
 
     # Render outside the session — both renderers use asyncio.to_thread internally
-    await renderer.render(cv_markdown, cv_out)
-    await renderer.render(cl_markdown, cl_out)
+    if cv_out is not None:
+        await renderer.render(cv_markdown, cv_out)
+    if cl_out is not None:
+        await renderer.render(cl_markdown, cl_out)
 
     # Update the path columns in a single DB transaction
     async with sf() as session:
-        cv_result = await session.execute(
-            select(Document).where(Document.id == cv_doc_id)
-        )
-        cv_doc = cv_result.scalar_one()
-        cl_result = await session.execute(
-            select(Document).where(Document.id == cl_doc_id)
-        )
-        cl_doc = cl_result.scalar_one()
-
-        if body.format == "pdf":
-            cv_doc.pdf_path = str(cv_out)
-            cl_doc.pdf_path = str(cl_out)
-        else:
-            cv_doc.docx_path = str(cv_out)
-            cl_doc.docx_path = str(cl_out)
-
-        session.add(cv_doc)
-        session.add(cl_doc)
+        if cv_doc_id is not None:
+            cv_result = await session.execute(
+                select(Document).where(Document.id == cv_doc_id)
+            )
+            cv_doc = cv_result.scalar_one()
+            if body.format == "pdf":
+                cv_doc.pdf_path = str(cv_out)
+            else:
+                cv_doc.docx_path = str(cv_out)
+            session.add(cv_doc)
+        if cl_doc_id is not None:
+            cl_result = await session.execute(
+                select(Document).where(Document.id == cl_doc_id)
+            )
+            cl_doc = cl_result.scalar_one()
+            if body.format == "pdf":
+                cl_doc.pdf_path = str(cl_out)
+            else:
+                cl_doc.docx_path = str(cl_out)
+            session.add(cl_doc)
         await session.commit()
 
     # Return relative paths (relative to output_dir) so the frontend can build
     # a /api/files/<relpath> URL that the file-serving route resolves safely.
-    cv_rel = str(cv_out.relative_to(settings.output_dir))
-    cl_rel = str(cl_out.relative_to(settings.output_dir))
+    result: dict[str, str] = {}
+    if cv_out is not None:
+        result["cv_path"] = str(cv_out.relative_to(settings.output_dir))
+    if cl_out is not None:
+        result["cl_path"] = str(cl_out.relative_to(settings.output_dir))
 
-    return {"cv_path": cv_rel, "cl_path": cl_rel}
+    return result
 
 
 @router.get("/api/files/{relpath:path}")

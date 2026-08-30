@@ -318,6 +318,47 @@ class TestListRunnableJobs:
         runnable = await repo.list_runnable_jobs(session)
         assert len(runnable) == 0
 
+    async def test_cv_review_with_no_revision_request_not_returned(self, session):
+        job = await _insert_job(session, job_id="aaaa000000000001")
+        job.state = JobState.cv_review
+        await session.commit()
+        runnable = await repo.list_runnable_jobs(session)
+        assert len(runnable) == 0
+
+    async def test_cv_review_with_unconsumed_revision_is_returned(self, session):
+        job = await _insert_job(session, job_id="aaaa000000000001")
+        job.state = JobState.cv_review
+        job.current_stage = Stage.revising_cv
+        await session.commit()
+        rr = RevisionRequest(
+            job_id=job.id,
+            target=Stage.cv_adjust,
+            instruction="Make it shorter",
+            origin_state="cv_review",
+            consumed_at=None,
+        )
+        session.add(rr)
+        await session.commit()
+        runnable = await repo.list_runnable_jobs(session)
+        assert len(runnable) == 1
+        assert runnable[0].id == job.id
+
+    async def test_cv_review_with_consumed_revision_not_returned(self, session):
+        job = await _insert_job(session, job_id="aaaa000000000001")
+        job.state = JobState.cv_review
+        await session.commit()
+        rr = RevisionRequest(
+            job_id=job.id,
+            target=Stage.cv_adjust,
+            instruction="Make it shorter",
+            origin_state="cv_review",
+            consumed_at=datetime.utcnow(),
+        )
+        session.add(rr)
+        await session.commit()
+        runnable = await repo.list_runnable_jobs(session)
+        assert len(runnable) == 0
+
     async def test_results_ordered_fifo_by_updated_at(self, session):
         """Jobs should be ordered ascending by updated_at (oldest first)."""
         # Insert jobs with distinct updated_at by slightly changing the timestamp
@@ -439,6 +480,81 @@ class TestListRunnableJobs:
 
 
 # ---------------------------------------------------------------------------
+# backend_switch_reset tests (BF-19 + origin_state-aware cv_review rewind)
+# ---------------------------------------------------------------------------
+
+class TestBackendSwitchReset:
+    async def test_revising_cv_from_cv_review_rewinds_to_cv_review(self, session):
+        """A revising_cv RevisionRequest with origin_state='cv_review' must rewind the
+        job to cv_review (not review) so it doesn't land in final review with no
+        cover_letter Document yet."""
+        job = await _insert_job(session, job_id="aaaa000000000001")
+        job.state = JobState.running
+        job.current_stage = Stage.revising_cv
+        await session.commit()
+        rr = RevisionRequest(
+            job_id=job.id,
+            target=Stage.cv_adjust,
+            instruction="Make it shorter",
+            origin_state="cv_review",
+            consumed_at=None,
+        )
+        session.add(rr)
+        await session.commit()
+
+        await repo.backend_switch_reset(session, job, "claude-cli", Stage.revising_cv)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.cv_review
+        assert refreshed.current_stage == Stage.revising_cv
+        assert refreshed.backend_name == "claude-cli"
+
+    async def test_revising_cv_from_review_rewinds_to_review(self, session):
+        """origin_state='review' (final-review revision) rewinds to review, not cv_review."""
+        job = await _insert_job(session, job_id="aaaa000000000002")
+        job.state = JobState.running
+        job.current_stage = Stage.revising_cv
+        await session.commit()
+        rr = RevisionRequest(
+            job_id=job.id,
+            target=Stage.cv_adjust,
+            instruction="Add certifications",
+            origin_state="review",
+            consumed_at=None,
+        )
+        session.add(rr)
+        await session.commit()
+
+        await repo.backend_switch_reset(session, job, "claude-cli", Stage.revising_cv)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.review
+        assert refreshed.current_stage == Stage.revising_cv
+
+    async def test_revising_cv_with_null_origin_state_rewinds_to_review(self, session):
+        """Legacy rows with origin_state=NULL must read as 'review' (backward-compat)."""
+        job = await _insert_job(session, job_id="aaaa000000000003")
+        job.state = JobState.running
+        job.current_stage = Stage.revising_cv
+        await session.commit()
+        rr = RevisionRequest(
+            job_id=job.id,
+            target=Stage.cv_adjust,
+            instruction="Fix typo",
+            origin_state=None,
+            consumed_at=None,
+        )
+        session.add(rr)
+        await session.commit()
+
+        await repo.backend_switch_reset(session, job, "claude-cli", Stage.revising_cv)
+
+        refreshed = await repo.get_job(session, job.id)
+        assert refreshed.state == JobState.review
+        assert refreshed.current_stage == Stage.revising_cv
+
+
+# ---------------------------------------------------------------------------
 # mark_failed tests
 # ---------------------------------------------------------------------------
 
@@ -496,11 +612,11 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
         )
         refreshed = await repo.get_job(session, "aaaa000000000001")
-        assert refreshed.state == JobState.cv_done
+        assert refreshed.state == JobState.cv_review
         assert refreshed.current_stage is None
 
     async def test_checkpoint_inserts_message_rows(self, session):
@@ -517,7 +633,7 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
             messages=messages,
         )
@@ -540,7 +656,7 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
             document=doc,
         )
@@ -639,11 +755,11 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
             # messages not passed
         )
-        assert job.state == JobState.cv_done
+        assert job.state == JobState.cv_review
 
     async def test_checkpoint_replaces_stale_open_followup(self, session):
         """BF-8 Fix 2: if an open FollowUp already exists for (job_id, stage), checkpoint

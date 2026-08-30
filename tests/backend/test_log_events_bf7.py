@@ -115,19 +115,44 @@ def _needs_input_reply(question: str = "What is your target role?") -> AgentRepl
     )
 
 
+async def _approve_cv(factory, job_id: str, orch: Orchestrator) -> None:
+    """Simulate the approve-cv action (Phase 4's POST /api/jobs/{id}/approve-cv route
+    body): cv_review → cv_done, then kick the orchestrator so cover_letter dispatches."""
+    async with factory() as s:
+        job = await repo.get_job(s, job_id)
+        await repo.checkpoint(s, job, JobState.cv_done, None)
+    orch.kick()
+
+
 async def _poll_job_state(
     factory,
     job_id: str,
     target_state: JobState,
     timeout: float = 5.0,
+    orch: Orchestrator | None = None,
 ) -> Job:
-    """Poll the DB until job reaches target_state or timeout expires."""
+    """Poll the DB until job reaches target_state or timeout expires.
+
+    When target_state is 'review' and orch is given, a job that parks at the CV gate
+    (cv_review) is auto-approved (see _approve_cv) so the cover-letter lane starts — the
+    two-lane pipeline no longer advances a job past the CV gate on its own.
+    """
     deadline = asyncio.get_event_loop().time() + timeout
+    approved = False
     while True:
         async with factory() as s:
             job = await repo.get_job(s, job_id)
         if job is not None and job.state == target_state:
             return job
+        if (
+            not approved
+            and orch is not None
+            and target_state == JobState.review
+            and job is not None
+            and job.state == JobState.cv_review
+        ):
+            approved = True
+            await _approve_cv(factory, job_id, orch)
         if asyncio.get_event_loop().time() >= deadline:
             raise TimeoutError(
                 f"Job {job_id} did not reach {target_state} within {timeout}s "
@@ -149,7 +174,7 @@ async def _run_orchestrator_until(
         await asyncio.gather(
             *[
                 asyncio.wait_for(
-                    _poll_job_state(factory, jid, target_state),
+                    _poll_job_state(factory, jid, target_state, orch=orch),
                     timeout=timeout,
                 )
                 for jid in job_ids
@@ -513,7 +538,8 @@ class TestPointD_StartingStageLogEvent:
         """run_stage publishes 'Starting stage: cover_letter' for the cover_letter stage."""
         job = await _insert_job_in_session(session)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
@@ -592,7 +618,8 @@ class TestPointE_FinalReceivedLogEvent:
         """run_stage publishes 'FINAL received' after a successful cover_letter."""
         job = await _insert_job_in_session(session)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 

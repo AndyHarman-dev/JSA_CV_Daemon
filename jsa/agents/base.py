@@ -17,6 +17,19 @@ class AgentLimitReached(RuntimeError):
     """
 
 
+class AgentBackendUnavailable(RuntimeError):
+    """Raised when a backend cannot serve a request for a reason that retrying
+    the SAME backend is unlikely to fix, but that is distinct from a quota/rate
+    signal (AgentLimitReached) or a pure timeout (AgentTimeout).
+
+    Covers: bad model/config, auth errors, and transient overload/gateway
+    failures (e.g. a flaky free-tier backend's intermittent 5xx responses or
+    null-content replies) that have already exhausted their in-backend retry
+    budget. Like AgentLimitReached and AgentTimeout, this is meant to engage
+    BF-19's backend-fallback chain rather than hard-failing the job.
+    """
+
+
 @dataclass(frozen=True)
 class AgentReply:
     raw: str                                    # full text returned by the model
@@ -48,7 +61,7 @@ class AgentBackend(ABC):
     task.cancel() and will burn API quota to completion regardless of
     cancellation. See jsa/agents/_subprocess.py's module docstring."""
 
-    name: str                                   # "claude-cli" | "google-cli" | "anthropic"
+    name: str                                   # "claude-cli" | "google-cli" | "anthropic" | "opencode-zen"
 
     @abstractmethod
     async def start_session(

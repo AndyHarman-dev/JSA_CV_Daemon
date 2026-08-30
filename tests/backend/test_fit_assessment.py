@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from jsa.agents.base import AgentLimitReached, AgentReply
+from jsa.agents.base import AgentLimitReached, AgentReply, AgentTimeout
 from jsa.config import Settings
 from jsa.db import repo
 from jsa.db.models import Base, Document, Job, JobState, Message, Stage
@@ -30,6 +30,7 @@ from jsa.pipeline.stages import PausedForInput, _parse_fit_verdict, run_stage
 from jsa.server import make_backend_factory
 from jsa.pipeline.state_machine import InvalidTransition, transition
 from tests.backend.fakes.fake_backend import CapturingBackend, FakeAgentBackend
+from tests.backend.fakes.finals import cv_final
 
 
 # ---------------------------------------------------------------------------
@@ -245,11 +246,13 @@ class TestFitAssessmentStage:
         assert refreshed.state == JobState.unfit
         assert refreshed.fit_reason
 
-    async def test_agent_timeout_parks_as_unfit_not_failed(self, session):
-        """A fit-backend timeout (e.g. an aggressively low --fit-timeout) -> unfit,
-        not a hard job failure — same fail-to-modal contract as ProtocolError."""
+    async def test_agent_timeout_propagates_for_bf19_not_swallowed_to_unfit(self, session):
+        """A fit-backend timeout (e.g. an aggressively low --fit-timeout, or a slow
+        opencode-zen response) must propagate past run_stage so the orchestrator's
+        BF-19 chain can try the next configured backend — NOT be swallowed here into
+        a false "not a fit" verdict. A timeout means the backend didn't answer; it is
+        not the model saying UNFIT. See CLAUDE.md's "Backend fallback chain (BF-19)"."""
         from jsa.agents.base import AgentTimeout
-        from jsa.pipeline.stages import _FIT_TIMEOUT_REASON
 
         class TimingOutBackend(FakeAgentBackend):
             async def start_session(self, system_prompt, initial_user_msg):
@@ -258,11 +261,12 @@ class TestFitAssessmentStage:
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.fit_assessment)
         await session.commit()
-        await run_stage(job, TimingOutBackend([]), Stage.fit_assessment, session)
+
+        with pytest.raises(AgentTimeout):
+            await run_stage(job, TimingOutBackend([]), Stage.fit_assessment, session)
 
         refreshed = await repo.get_job(session, job.id)
-        assert refreshed.state == JobState.unfit
-        assert refreshed.fit_reason == _FIT_TIMEOUT_REASON
+        assert refreshed.state == JobState.running  # untouched — orchestrator handles it
 
     async def test_no_document_is_written(self, session):
         """The assessment stores its reason in a column, not a Document."""
@@ -584,3 +588,44 @@ class TestOrchestratorFitBackendWiring:
             refreshed = await repo.get_job(s, job_id)
         assert refreshed.state == JobState.failed
         assert "Backend limit reached" in (refreshed.error or "")
+
+    async def test_timeout_from_fit_backend_switches_to_next_backend_not_unfit(
+        self, session_factory
+    ):
+        """The reported bug's exact shape: opencode-zen (backends[0]) times out on
+        the very first stage every job hits (fit_assessment). Before this fix, that
+        was swallowed into a false `unfit` verdict and claude-cli (backends[1]) was
+        never tried. It must instead walk the BF-19 chain like any other backend
+        failure — the second backend actually answers here, so the job should reach
+        cv_review (via fit_done → cv_adjust), not park at unfit."""
+        async with session_factory() as s:
+            job = await _insert_job(s)
+            job_id = job.id
+
+        class _TimeoutBackend(FakeAgentBackend):
+            def __init__(self) -> None:
+                super().__init__([])
+
+            async def start_session(self, system_prompt, initial_user_msg):
+                raise AgentTimeout("OpenCode Zen API timed out after 180.0s")
+
+        def fit_factory(name: str):
+            return _TimeoutBackend() if name == "opencode-zen" else FakeAgentBackend(
+                [_final("FIT")]
+            )
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            # Once fit_done, the orchestrator immediately dispatches cv_adjust on
+            # the (non-fit) backend_factory — give it a valid reply so the job
+            # keeps moving instead of erroring on an empty script.
+            backend_factory=lambda name: FakeAgentBackend([cv_final()]),
+            backends=["opencode-zen", "claude-cli"],
+            fit_backend_factory=fit_factory,
+        )
+        await _run_orch_until(orch, session_factory, job_id, JobState.cv_review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job_id)
+        assert refreshed.backend_name == "claude-cli"
+        assert refreshed.state == JobState.cv_review

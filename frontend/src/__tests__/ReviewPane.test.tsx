@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
   api: {
     getJob: vi.fn(),
     approve: vi.fn(),
+    approveCv: vi.fn(),
     revise: vi.fn(),
     getJobs: vi.fn().mockResolvedValue([]),
   },
@@ -41,7 +42,7 @@ function makeFullJob(overrides: Partial<JobDTO> = {}): FullJobDTO {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting" });
+  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting", viewedStage: null });
   (api.getJobs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.getJob as ReturnType<typeof vi.fn>).mockResolvedValue(makeFullJob());
 });
@@ -180,5 +181,86 @@ describe("ReviewPane", () => {
         screen.getByRole("button", { name: /Request Revision/i })
       ).toBeInTheDocument();
     });
+  });
+
+  describe('mode="cv-gate"', () => {
+    it("shows only the CV tab and an APPROVE CV button, and calls api.approveCv", async () => {
+      const user = userEvent.setup();
+      (api.approveCv as ReturnType<typeof vi.fn>).mockResolvedValue({
+        pdf_path: "/out/cv.pdf",
+        docx_path: "/out/cv.docx",
+      });
+      const job = makeJob({ state: "cv_review" });
+      useStore.setState({ jobs: { job1: job }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      expect(screen.getByRole("button", { name: "CV / RESUME" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "COVER_LETTER" })).toBeNull();
+
+      const approveButton = await screen.findByRole("button", { name: /approve cv/i });
+      await user.click(approveButton);
+
+      await waitFor(() => {
+        expect(api.approveCv).toHaveBeenCalledWith("job1");
+      });
+      expect(api.approve).not.toHaveBeenCalled();
+    });
+
+    it("restricts the revise ChatBox to the CV target (no cv/cl selector)", async () => {
+      const job = makeJob({ state: "cv_review" });
+      useStore.setState({ jobs: { job1: job }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /Request Revision/i })).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("combobox")).toBeNull();
+    });
+
+    it("hides the approve button and revise box, and shows a read-only notice, when the job is running/awaiting_input", async () => {
+      const job = makeJob({ state: "running", current_stage: "cover_letter" });
+      useStore.setState({ jobs: { job1: job }, selectedId: "job1", viewedStage: "cv" });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("button", { name: /approve cv/i })).toBeNull();
+      });
+      expect(screen.queryByRole("button", { name: /Request Revision/i })).toBeNull();
+      expect(screen.getByText(/cover letter lane is running/i)).toBeInTheDocument();
+    });
+
+    it("shows the CV-lane read-only notice (not the cover-letter one) when clicking CV_ADJUST during cv_adjust's own run", async () => {
+      const job = makeJob({ state: "running", current_stage: "cv_adjust" });
+      useStore.setState({ jobs: { job1: job }, selectedId: "job1", viewedStage: "cv" });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("button", { name: /approve cv/i })).toBeNull();
+      });
+      expect(screen.queryByRole("button", { name: /Request Revision/i })).toBeNull();
+      // The bug: this used to say "COVER LETTER LANE IS RUNNING" even though cv_adjust is running.
+      expect(screen.getByText(/cv lane is running/i)).toBeInTheDocument();
+      expect(screen.queryByText(/cover letter lane is running/i)).toBeNull();
+    });
+  });
+
+  // The regression this whole feature could introduce: StageTimeline's dots write to the
+  // same shared `viewedStage` the final ReviewPane reads for its tab. Looking at the CV tab
+  // via viewedStage must never be mistaken for the CV-gate's read-only condition — a job at
+  // state === "review" stays fully interactive regardless of which tab is being viewed.
+  it('mode="final" with viewedStage "cv" still shows APPROVE & EXPORT and the revise box at state "review"', async () => {
+    const job = makeJob({ state: "review" });
+    useStore.setState({ jobs: { job1: job }, selectedId: "job1", viewedStage: "cv" });
+
+    render(<ReviewPane jobId="job1" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /approve & export/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /Request Revision/i })).toBeInTheDocument();
   });
 });

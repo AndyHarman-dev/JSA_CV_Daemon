@@ -59,6 +59,7 @@ export function JobDetail() {
   const refetchAll = useStore((s) => s.refetchAll);
   const removeJob = useStore((s) => s.removeJob);
   const selectJob = useStore((s) => s.selectJob);
+  const viewedStage = useStore((s) => s.viewedStage);
 
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -428,11 +429,32 @@ export function JobDetail() {
         </div>
       )}
 
-      {job.state === "awaiting_input" && (
-        <FollowUpPane jobId={job.id} />
+      {/* A pipeline stage running doesn't retire the CV — clicking the CV_ADJUST dot in the
+          timeline (StageTimeline.tsx) jumps to a read-only view of it (ReviewPane's own
+          state==="running" check keeps it non-interactive; it degrades gracefully to
+          "rendering in progress" if no cv_adjust Document exists yet). This only applies to
+          `running`, never `awaiting_input` — the agent may be blocking on a question, and
+          FollowUpPane (the only place that question and its answer box are shown) must
+          never be suppressed while the job is actually waiting on the user. Clicking
+          COVER_LETTER (or anything resetting viewedStage away from "cv") returns to the
+          normal running-lane UI below. */}
+      {job.state === "running" && viewedStage === "cv" ? (
+        <ReviewPane jobId={job.id} mode="cv-gate" />
+      ) : (
+        job.state === "awaiting_input" && <FollowUpPane jobId={job.id} />
       )}
+      {job.state === "cv_review" && <ReviewPane jobId={job.id} mode="cv-gate" />}
       {(job.state === "review" || job.state === "approved") && (
         <ReviewPane jobId={job.id} />
+      )}
+      {job.state === "cv_done" && (
+        // Brief transitional state between "Approve CV" succeeding (cv_review → cv_done)
+        // and the orchestrator actually dispatching cover_letter (which flips state back
+        // to running). Without this, the pane matches none of the branches above and
+        // renders blank with no confirmation the approval went through.
+        <div style={{ font: `400 13px/1.5 ${T.ui}`, color: T.ink3, padding: "11px 14px" }}>
+          {t("jobDetail.cvApprovedWaiting")}
+        </div>
       )}
 
       {job.state === "unfit" && <UnfitModal job={job} />}

@@ -11,7 +11,7 @@ from typing import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jsa.agents.base import AgentBackend, AgentLimitReached
+from jsa.agents.base import AgentBackend, AgentBackendUnavailable, AgentLimitReached, AgentTimeout
 from jsa.agents.google_cli import GoogleCliSessionExpiredError
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
@@ -34,11 +34,12 @@ def _next_stage_for(job: Job) -> Stage:
     """Determine which stage to run for the given job.
 
     State / current_stage mapping:
-    - pending                     → fit_assessment (fresh)
-    - fit_done                    → cv_adjust (fresh; fit check passed or was ignored)
-    - cv_done                     → cover_letter (fresh)
-    - awaiting_input              → job.current_stage (resume)
-    - review + unconsumed rev req → job.current_stage (revising_cv / revising_cl)
+    - pending                        → fit_assessment (fresh)
+    - fit_done                       → cv_adjust (fresh; fit check passed or was ignored)
+    - cv_done                        → cover_letter (fresh)
+    - awaiting_input                 → job.current_stage (resume)
+    - review + unconsumed rev req    → job.current_stage (revising_cv / revising_cl)
+    - cv_review + unconsumed rev req → job.current_stage (revising_cv)
     """
     if job.state == JobState.pending:
         return Stage.fit_assessment
@@ -46,7 +47,7 @@ def _next_stage_for(job: Job) -> Stage:
         return Stage.cv_adjust
     if job.state == JobState.cv_done:
         return Stage.cover_letter
-    if job.state in (JobState.awaiting_input, JobState.review):
+    if job.state in (JobState.awaiting_input, JobState.review, JobState.cv_review):
         if job.current_stage is None:
             raise ValueError(
                 f"Job {job.id} is in {job.state} but current_stage is None"
@@ -345,6 +346,22 @@ class Orchestrator:
             logger.warning("_run_one: job %s hit backend limit: %s", job_id, exc)
             await self._handle_limit_reached(job_id, exc)
 
+        except AgentTimeout as exc:
+            # A timeout is an availability failure exactly like a quota signal —
+            # the backend didn't answer, not "answered no" — so it must engage
+            # the same BF-19 fallback chain rather than falling into the generic
+            # `except Exception` below (which hard-fails with no retry).
+            logger.warning("_run_one: job %s backend timed out: %s", job_id, exc)
+            await self._handle_backend_timeout(job_id, exc)
+
+        except AgentBackendUnavailable as exc:
+            # Non-timeout, non-quota failure where the SAME backend won't help:
+            # bad model/config, auth errors, or a transient overload/gateway
+            # error that already exhausted its in-backend retry budget (see
+            # OpenCodeZenBackend._call_api). Same BF-19 chain as the other two.
+            logger.warning("_run_one: job %s backend unavailable: %s", job_id, exc)
+            await self._handle_backend_unavailable(job_id, exc)
+
         except GoogleCliSessionExpiredError as exc:
             logger.warning("_run_one: job %s google session expired, attempting auto-recovery", job_id)
             await self._handle_session_expired(job_id, exc)
@@ -374,7 +391,53 @@ class Orchestrator:
             self.kick()
 
     async def _handle_limit_reached(self, job_id: str, exc: AgentLimitReached) -> None:
-        """Handle AgentLimitReached: switch to next backend or mark failed (BF-19).
+        """Handle AgentLimitReached: switch to next backend or mark failed (BF-19)."""
+        await self._advance_backend_or_fail(
+            job_id,
+            switch_reason="Backend limit reached",
+            exhausted_message="Backend limit reached — switch backends or wait for quota reset",
+        )
+
+    async def _handle_backend_timeout(self, job_id: str, exc: AgentTimeout) -> None:
+        """Handle AgentTimeout: switch to next backend or mark failed (BF-19).
+
+        Mirrors _handle_limit_reached — a timeout means the active backend is
+        unavailable right now, which is exactly the condition BF-19's chain exists
+        for. Before this existed, AgentTimeout fell into _run_one's generic
+        `except Exception` handler and hard-failed the job on the very first
+        backend, even with a working fallback configured in `--backends`.
+        """
+        await self._advance_backend_or_fail(
+            job_id,
+            switch_reason="Backend timed out",
+            exhausted_message=(
+                "Backend timed out on every configured backend — switch backends "
+                "or increase the timeout"
+            ),
+        )
+
+    async def _handle_backend_unavailable(self, job_id: str, exc: AgentBackendUnavailable) -> None:
+        """Handle AgentBackendUnavailable: switch to next backend or mark failed (BF-19).
+
+        Mirrors _handle_limit_reached/_handle_backend_timeout. Distinct message from
+        both — "wait for quota reset" (limit) and "increase the timeout" (timeout)
+        are both wrong advice for a bad model name, an auth error, or a backend
+        that stayed overloaded through its own in-process retries.
+        """
+        await self._advance_backend_or_fail(
+            job_id,
+            switch_reason="Backend unavailable",
+            exhausted_message=(
+                "Backend unavailable on every configured backend — check model/API "
+                "key configuration, or try again later if this was transient overload"
+            ),
+        )
+
+    async def _advance_backend_or_fail(
+        self, job_id: str, switch_reason: str, exhausted_message: str
+    ) -> None:
+        """Shared BF-19 chain-advance logic for AgentLimitReached, AgentTimeout, and
+        AgentBackendUnavailable.
 
         If a next backend exists in the chain:
         1. Persist job.backend_name = next backend.
@@ -383,13 +446,13 @@ class Orchestrator:
         4. Emit BackendSwitchedEvent.
         The finally block in _run_one calls kick() which re-triggers dispatch.
 
-        If chain is exhausted: mark the job failed with a human-readable message.
+        If chain is exhausted: mark the job failed with `exhausted_message`.
         """
         try:
             async with self._db_session_factory() as session:
                 job = await repo.get_job(session, job_id)
                 if job is None:
-                    logger.error("_handle_limit_reached: job %s not found", job_id)
+                    logger.error("_advance_backend_or_fail: job %s not found", job_id)
                     return
 
                 current_backend = job.backend_name or self._backends[0]
@@ -407,11 +470,8 @@ class Orchestrator:
                     next_backend = self._backends[next_idx]
                     await repo.backend_switch_reset(session, job, next_backend, failed_stage)
 
-                    switch_msg = (
-                        f"Backend limit reached — switching from "
-                        f"{current_backend} to {next_backend}"
-                    )
-                    logger.info("_handle_limit_reached: job %s: %s", job_id, switch_msg)
+                    switch_msg = f"{switch_reason} — switching from {current_backend} to {next_backend}"
+                    logger.info("_advance_backend_or_fail: job %s: %s", job_id, switch_msg)
 
                     await bus.publish(
                         event_to_dict(LogEvent(job_id=job_id, level="warn", text=switch_msg))
@@ -427,20 +487,17 @@ class Orchestrator:
                     )
                 else:
                     # Chain exhausted — mark failed
-                    human_msg = (
-                        "Backend limit reached — switch backends or wait for quota reset"
-                    )
-                    await repo.mark_failed(session, job_id, human_msg)
+                    await repo.mark_failed(session, job_id, exhausted_message)
                     await bus.publish(
-                        event_to_dict(LogEvent(job_id=job_id, level="error", text=human_msg))
+                        event_to_dict(LogEvent(job_id=job_id, level="error", text=exhausted_message))
                     )
                     await bus.publish(
-                        event_to_dict(ErrorEvent(job_id=job_id, message=human_msg))
+                        event_to_dict(ErrorEvent(job_id=job_id, message=exhausted_message))
                     )
 
         except Exception as inner_exc:
             logger.error(
-                "_handle_limit_reached: failed to handle limit for job %s: %s",
+                "_advance_backend_or_fail: failed to handle backend failover for job %s: %s",
                 job_id,
                 inner_exc,
             )

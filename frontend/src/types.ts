@@ -1,6 +1,6 @@
 export type JobState =
-  | "queued" | "pending" | "running" | "awaiting_input" | "fit_done" | "unfit" | "cv_done"
-  | "cl_done" | "review" | "approved" | "failed" | "dismissed";
+  | "queued" | "pending" | "running" | "awaiting_input" | "fit_done" | "unfit" | "cv_review"
+  | "cv_done" | "cl_done" | "review" | "approved" | "failed" | "dismissed";
 
 export type Stage =
   | "fit_assessment" | "cv_adjust" | "cover_letter" | "revising_cv" | "revising_cl";
