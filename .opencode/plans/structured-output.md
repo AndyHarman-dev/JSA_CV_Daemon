@@ -1,0 +1,519 @@
+---
+status: InProgress
+---
+
+# Structured Output for API Backends — Sentinel as Fallback
+
+## Context
+
+The JSA pipeline parses every model reply through `<<<NEED_INPUT>>>`/
+`<<<FINAL>>>` sentinel blocks (`jsa/agents/protocol.py::parse_reply`). For CLI
+backends (`claude-cli`, `google-cli`) this is the only available channel — but for
+HTTP API backends (`anthropic`, `opencode-zen`) the sentinel contract is pure
+prompt etiquette, and a stubborn model that never emits sentinels raises
+`ProtocolError`, which is deliberately NOT a BF-19 signal and therefore hard-fails
+the job (the "stuck pipeline" problem).
+
+The CV and cover-letter stages already mandate a JSON payload *inside* the
+FINAL block, validated post-hoc by Pydantic (`jsa/schema/cv.py`,
+`jsa/schema/cover_letter.py`). This plan moves those stages — plus the free-text
+fit verdict — onto provider-enforced JSON-schema output for the two HTTP API
+backends, keeping the sentinel grammar as the CLI fallback path.
+
+### Locked decisions (from user)
+
+1. **Capability detection**: hard-coded per backend (`supports_structured_output`
+   ClassVar on `AgentBackend`; anthropic + opencode-zen = True, CLIs = False).
+2. **opencode-zen**: attempt structured, per-session downgrade to sentinel on
+   unparseable reply (per-session handle flag, not persisted; restarts flip back
+   to structured since the downgrade was that session's flakiness).
+3. **Reply union**: single flat schema per stage — `{kind: "question"|"final",
+   question?, payload?}` (single Pydantic model with nullable fields + cross-field
+   validator; NOT an `anyOf` discriminated union — strict json-schema providers
+   reject top-level `anyOf` and require `additionalProperties: false` +
+   all-fields-required).
+4. **Fit verdict**: structured `{verdict: enum[FIT,UNFIT], reason: str}` —
+   `reason` is REQUIRED for both verdicts (a bare FIT/UNFIT without a why is
+   rejected; e.g. "role requires 15+ years of UI experience, candidate has only
+   4" for UNFIT, or "JD and candidate profile align on X" for FIT). Replaces
+   substring-tolerant parsing for structured-capable backends.
+   **Enforcement mechanism (fixed 2026-08-30 per skeptic gate — see Change
+   Log): `reason` must be `str` with NO default and NOT `Optional`, so the
+   provider's own strict-schema validation rejects a bare verdict at
+   generation time — this is what makes "REQUIRED" real rather than aspirational
+   prose. This is a validation-time gate only: it does not change
+   `job.fit_reason` storage, which today discards the reason on a FIT verdict
+   (`stages.py::_parse_fit_verdict` returns `(True, None)`;
+   `stages.py`'s `job.fit_reason = None if is_fit else reason` nulls it again).
+   That behavior is unchanged by this plan — decision #4 forces the model to
+   justify itself, it does not require persisting a FIT reason anywhere.**
+5. **Scope**: all five stages (fit_assessment, cv_adjust, cover_letter,
+   revising_cv, revising_cl).
+6. **Mixed-mode history** (amended per advisor): no translation upgrading to
+   structured mode; mechanical sentinel-wrap applied when replaying canonical
+   structured turns into a sentinel-mode session. Never persist provider wire
+   format — DB stores canonical normalized JSON text only.
+
+### Advisor amendments (locked)
+
+- Backend parse layer is minimal: `json.loads` + `kind` routing only; all
+  semantic/cross-field validation stays stage-side in `_validate_final_content`
+  so `_self_heal_final` (2-correction budget) keeps working. Downgrade trigger
+  (zen) narrowed to *unparseable JSON / missing·invalid `kind`* only. Semantic
+  failures never downgrade.
+- Structured-mode `ProtocolError` in `run_stage` spends the existing self-heal
+  correction budget (wording: re-emit a valid schema-conforming object) before
+  propagating to hard fail; sentinel-mode behavior byte-for-byte unchanged
+  (backend-internal CLI nudges already cover it); fit stage stays one-shot to
+  modal.
+- Anthropic: forced tool-use (`tools=[tool]`, `tool_choice` forced, extract
+  `tool_use.input`) as primary mechanism behind a thin dict-extraction adapter;
+  `response_format` (SDK 0.104 surface unknown) is a non-blocking discovery
+  follow-up inside the same adapter seam. Handle `stop_reason == "max_tokens"`
+  under forced tool as a ProtocolError variant that routes into the new self-heal
+  budget ("output truncated; re-emit more concisely").
+- Prompt assembly lives in ONE composition root:
+  `assemble_system_prompt(prompt_text, *, language, structured_model=None,
+  fit_verdict=False)` next to the language directive. Structured sessions get an
+  appended "structured-output contract" section (assembled at runtime, never
+  written into user-edited prompt files) with precedence wording over the
+  sentinel-format section + per-stage union schema embedded + "never embed
+  sentinel markers in payload values" line + language directive variant ("keys
+  stay English; sentinel instructions don't apply this session").
+- Parity gate framed as an **equivalence invariant** (sentinel path is retained
+  forever for CLIs — nothing gets deleted): sentinel-mode fake vs structured-mode
+  fake must produce identical `Document.structured` + `Document.markdown`,
+  identical `Job.fit_reason` + state transition, and identical `FollowUp.question`
+  text for the same logical payload.
+- Observability: `LogEvent` at session start naming active mode (`structured` /
+  `sentinel` / `sentinel (downgraded)`).
+
+### Named invariant
+
+**The DB stores canonical form; provider wire format never round-trips.**
+`Message` rows persist the normalized union-JSON plain text (never `tool_use`
+blocks, never provider envelopes). On replay, history is reconstructed from
+canonical text + **content-based format detection of each row** (fixed
+2026-08-30, skeptic gate — see Phase 2: a `<<<`-prefixed row is sentinel form,
+a `{`-prefixed row is canonical form; there is no persisted or reliably
+reconstructible "session active mode" to key off, since Phase 4's downgrade
+flag is explicitly never persisted). Sentinel-wrap only when replaying a
+canonical row into a sentinel-mode destination backend; unwrap only when
+replaying a sentinel row into a structured-mode destination. Anthropic replay
+pairs nothing — plain-text assistant turns are valid input even when the
+current turn is tool-forced.
+
+---
+
+## Phase 1 — Turn models + canonical normalization
+
+**Current State**
+`parse_reply(raw) -> AgentReply` is the only reply parser
+(`jsa/agents/protocol.py`). Stage→schema mapping lives implicitly in
+`_validate_final_content` (`CVDocument` for cv/revising_cv, `CoverLetter` for
+cl/revising_cl, `None` for fit). No backend declares capability.
+
+**Desired State**
+`jsa/schema/turn_models.py` holds: flat union models
+`FitVerdict{verdict: Literal["FIT","UNFIT"], reason: str}` (reason NON-nullable,
+NO default — see decision #4's enforcement-mechanism note above; a nullable/
+defaulted field is what caused the strict-schema failure below),
+`CvTurn{kind: Literal["question","final"], question: str|None,
+payload: CVDocument|None}`, `ClTurn{... payload: CoverLetter|None}` — the two
+genuinely-optional fields (`question`, `payload`) stay `X|None` with no default
+either (the iff-validator enforces presence, a default would just re-introduce
+the missing-`required`-entry bug) — each model also carries
+`model_config = ConfigDict(extra="forbid")` (required for
+`additionalProperties: false`, see Problems/Bugs below) plus a
+`model_validator(mode="after")` enforcing payload-iff-final and
+question-iff-question; `STAGE_TURN_MODELS: dict[Stage, type[BaseModel]]`;
+`json_schema_for(stage) -> dict` (via `model_json_schema()`, must emit
+`additionalProperties: false` AND `required` containing every field —
+`ConfigDict(extra="forbid")` handles the first, no-default fields handle the
+second); `parse_structured_reply(raw) -> AgentReply` doing
+`json.loads` + `kind` routing ONLY — `kind="question"` →
+`AgentReply(kind="needs_input", question=…)`; `kind="final"` →
+`AgentReply(kind="final", content=json.dumps(payload))` (payload re-serialized so
+`_validate_final_content` receives the byte-identical shape as the sentinel path);
+fit model replies map to `content=f"{verdict}\n{reason}"` so `_parse_fit_verdict`
+is reused unchanged. Raises `ProtocolError("structured reply unparseable…")` on
+JSON/missing-kind failure only. `AgentBackend` gains
+`supports_structured_output: ClassVar[bool] = False`.
+
+**Problems/Bugs**
+None existing — new leaf module. Risks: Pydantic emitting top-level `anyOf`
+(avoids via flat nullable fields), schema not strict-clean (assert
+`additionalProperties: false` in tests), or re-serialization drift between
+parse_structured_reply and the sentinel path's raw content string (round-trip
+tests cover).
+
+**CONFIRMED empirically 2026-08-30 (skeptic gate) — the naive version of this
+module fails its own strict-clean tripwire, for a subtler reason than
+"missing `additionalProperties`":** `FitVerdict.model_json_schema()` with
+`reason: str | None = None` (the field shape originally drafted here) produces
+NO `additionalProperties` key at all, AND `required` contains only `verdict`
+— Pydantic drops any field with a default out of `required` entirely, which
+is worse than nullable-but-required for strict providers. Both problems are
+now fixed at the Desired-State level above (`ConfigDict(extra="forbid")` +
+no defaults on any field, `Optional` types enforced by the iff-validator
+instead). Verify in Phase 1's tests with a literal
+`assert schema["additionalProperties"] is False` and
+`assert set(schema["required"]) == set(schema["properties"])` for every
+model in `STAGE_TURN_MODELS` plus `FitVerdict` — not just one spot-check.
+
+**Solutions**
+- New `jsa/schema/turn_models.py` (~120 lines), imports only
+  `jsa/schema/cv.py`, `jsa/schema/cover_letter.py`, `jsa/db/models.Stage`,
+  `jsa/agents/base.py`, `jsa/agents/protocol.py` — schema package remains a leaf;
+  zero new edges into backends.
+- `jsa/agents/base.py`: one-line ClassVar default.
+- Tests: `tests/backend/test_turn_models.py` — round-trip through json_schema →
+  validate ⇄ parse_structured_reply ⇄ `_parse_structured`; `additionalProperties:
+  false` assertion; iff-rule validators; ProtocolError cases.
+- Recommended model: Sonnet (small, isolated module). Tripwire: if Pydantic
+  schema shape fights strict-provider requirements in tests → escalate to Opus.
+
+## Phase 2 — Prompt assembly root + replay adapter
+
+**Current State**
+Language directive appended ad-hoc inside `run_stage`/`_run_fit_assessment`
+(`_with_language_directive`, no-op for `"en"`); sentinel grammar is the only
+output-format section. History replays verbatim (`_load_history` → backends).
+
+**Desired State**
+One helper `assemble_system_prompt(prompt_text, *, language,
+structured_model=None, fit_verdict=False) -> str` owns ALL runtime prompt
+mutation: language directive (two variants — sentinel mode: keys + sentinels stay
+ASCII; structured mode: keys stay English and the sentinel section is superseded)
+and the structured-output contract section (defines `kind` semantics, embeds the
+per-stage union JSON schema, explicit precedence over the file's sentinel-format
+section, "never embed sentinel markers inside payload string values"). New
+`wrap_canonical_for_sentinel(canonical_text) -> str` (~10 lines) converting a
+canonical union-JSON turn into sentinel-wrapped text (`kind=final` → wrap payload
+in `<<<FINAL>>>...<<<END>>>`; `kind=question` → `<<<NEED_INPUT>>>` wrap) for
+replay into sentinel-mode sessions.
+
+**Replay-mode detection FIXED 2026-08-30 (skeptic gate) — content-based, not
+session-flag-based:** there is no persisted `mode` column anywhere (Phase 4's
+`structured_enabled` flag is explicitly per-session, never persisted — see
+Locked decision #2), so a "session ACTIVE MODE" is not actually a thing that
+exists at replay time for a freshly-reconstructed job (resume after restart,
+BF-19 backend switch, revision resume all rebuild a session from scratch).
+Every `Message.content` row already unambiguously self-identifies its own
+origin format today — a sentinel row starts with `<<<NEED_INPUT>>>` or
+`<<<FINAL>>>` (it is `reply.raw`, per `stages.py`'s existing `Message`
+writes); a canonical structured row is bare JSON (starts with `{`). Replace
+the session-mode-keyed design with a pure content-sniffing pair:
+`_is_sentinel_wrapped(text) -> bool` (checks the `<<<` prefix) plus
+`wrap_canonical_for_sentinel`/`unwrap_sentinel_to_canonical` (the new inverse
+direction) applied per-row, per-destination, at EVERY `restore_session` call
+site — enumerated explicitly so none is silently skipped:
+1. fresh/resume `cv_adjust` and `cover_letter` (`stages.py`'s existing
+   resume branches),
+2. `revising_cv`/`revising_cl` resume (loads the ORIGINAL stage's Messages,
+   which `backend_switch_reset` does NOT delete on a revision-stage BF-19
+   switch — only the failed revision stage's own Messages are deleted, per
+   `jsa/db/repo.py::backend_switch_reset`'s docstring),
+3. any BF-19 rewind resume in general (`cv_adjust`/`cover_letter` failures
+   rewind to `pending`/`cv_done`, which are *fresh*-session states, so no
+   stale-mode replay risk there — but the revision case in (2) is a real,
+   reachable gap without this fix: an anthropic structured-mode `cv_adjust`
+   session's canonical-JSON Messages, replayed unmodified into a
+   `claude-cli` sentinel-only backend after a revision-stage BF-19 switch,
+   is exactly the failure this phase exists to prevent).
+Legacy/pre-feature rows (written before this feature ships) are indistinguishable
+from live sentinel rows under this scheme by construction — they already start
+with `<<<`, so they get wrapped/passed-through correctly with zero special-casing.
+
+**Problems/Bugs**
+Downgraded zen sessions leave the structured contract in the prompt while
+flipping to sentinel mode (accepted — the sentinel nudge wording re-asserts the
+format; restart re-assembles the prompt per current mode). Without the sentinel
+wrap at replay, BF-19 switching anthropic→claude-cli mid-conversation hands the
+CLI grammar-violating assistant turns of bare JSON.
+
+**Solutions**
+- New `jsa/pipeline/prompt_assembly.py` (~80 lines) — imports only
+  `jsa/store/preferences` + `jsa/schema/turn_models`; `stages.py` switches its
+  two `_with_language_directive` call sites to `assemble_system_prompt`.
+- Sentinel-wrap/unwrap helper pair colocated in `jsa/schema/turn_models.py`
+  (see content-based detection above — replaces the single one-directional
+  helper originally scoped here).
+- Tests: assembly composition for both modes × languages; wrap/unwrap
+  round-trip through `parse_reply`; replay adapter exercised at each of the
+  three enumerated call sites above, including the anthropic(structured)→
+  claude-cli(sentinel) revision-resume case specifically (not just zen's
+  internal downgrade, which the original test list under-covered).
+- **PARITY GATE (added 2026-08-30, skeptic gate — required by the project's
+  own CLAUDE.md "Parity gate for replace / delete refactors" rule since this
+  phase replaces `_with_language_directive` at both its call sites):** before
+  swapping either call site, add a characterization test that captures
+  `_with_language_directive`'s CURRENT output verbatim — for every language in
+  the catalog, for a fixed representative `prompt_text` — as a golden fixture.
+  Then assert `assemble_system_prompt(prompt_text, language=lang,
+  structured_model=None)` (the sentinel-mode / CLI-backend path) is
+  byte-identical to that golden fixture for every language, BEFORE the two
+  call sites are switched over. This is the only thing standing between "CLI
+  sentinel-mode behavior is byte-identical to today" (this plan's own "Done"
+  criterion) and a silent prompt-wording drift for claude-cli/google-cli that
+  no other planned test would catch.
+- Recommended model: Sonnet.
+
+## Phase 3 — Anthropic backend structured mode
+
+**Current State**
+`AnthropicAPIBackend` sends `messages.create(model, max_tokens=8192, system,
+messages)` and parses with raw `parse_reply` — the ONLY backend with no nudge; any
+sentinel-less reply = ProtocolError → hard fail.
+
+**Desired State**
+`supports_structured_output = True`. When a `structured_schema: dict` kwarg is
+passed, forced tool call via a thin adapter: `tools=[{"name":"respond",
+"input_schema": schema}]` + `tool_choice={"type":"tool","name":"respond"}`;
+extract dict from `tool_use.input` (adapter shape keeps a future `response_format`
+swap contained inside one function); normalize via `parse_structured_reply`. A
+`stop_reason == "max_tokens"` tool reply raises
+`ProtocolError("structured reply truncated")` — routed into the new self-heal
+budget from Phase 5 ("re-emit more concisely"). When `structured_schema is None`:
+exactly today's sentinel behavior (unchanged; no per-session downgrade for
+anthropic — structured is reliable there).
+
+**Problems/Bugs**
+SDK 0.104.1 surface for `response_format` unknown → discovery item, non-blocking.
+Tool-forced truncation (8192 tokens mid-tool-input) must not be a silent
+ProtocolError with no corrective signal.
+
+**Solutions**
+- `jsa/agents/anthropic_api.py`: `start_session`/`send_message`/`restore_session`
+  gain `structured_schema: dict | None = None`; internals branch to the adapter.
+  Rate-limit/timeout exception mapping untouched.
+- Tests with stub Anthropic SDK responses (via the `tests/backend/fakes` pattern —
+  do NOT mock internals): forced-tool happy path, truncation → ProtocolError
+  variant, None-schema → sentinel parity.
+- Recommended model: Opus. Tripwire: SDK surface mismatch → decide tool-only vs
+  response_format; return to advisor if forced-tool extraction is awkward.
+
+## Phase 4 — OpenCode Zen structured mode + per-session downgrade
+
+**Current State**
+Payload `{"model","messages","max_tokens":8192}`; replay-style sentinel nudge
+(`_parse_with_nudge`); 3-way error classification already drives BF-19
+(`AgentLimitReached` / `_TransientOpenCodeError` retry×3 → `AgentBackendUnavailable`
+/ immediate `AgentBackendUnavailable`); free models frequently ignore format
+instructions.
+
+**Desired State**
+`supports_structured_output = True`. Session handle gains
+`structured_enabled: bool = True` (per-session, NEVER persisted — a restart
+re-attempts structured). When enabled, POST gains
+`response_format={"type":"json_schema","json_schema":{"name":<stage>,
+"strict":True,"schema":<STAGE_TURN_MODELS schema>}}`. Replies normalize via
+`parse_structured_reply`; on `ProtocolError` from THAT parse → set
+`handle.structured_enabled=False` and behave exactly as today's sentinel path:
+run the existing `_parse_with_nudge` on the same raw text. Downgrade trigger is
+unparseable/missing-kind only — semantic failures never downgrade. Nudge text
+gets a mode-conditional variant re-asserting sentinel grammar ("disregard the
+earlier output-format contract; wrap your reply in
+`<<<NEED_INPUT>>>`/`<<<FINAL>>>`..."). Subsequent calls omit `response_format`,
+and restart re-assembles the prompt per current mode so the contradiction
+self-heals.
+
+**Problems/Bugs**
+Proxied free models may treat `response_format` as advisory → mid-session
+downgrade contradictions (accepted). Must not interfere with existing
+transient-retry / `_MAX_ATTEMPTS=3` classification — the downgrade must not
+consume retry budget and vice versa. Strict-schema rejection at the wire level is
+possible per proxied model.
+
+**Solutions**
+- `jsa/agents/opencode_zen.py`: same `structured_schema` kwarg;
+  `OpenCodeZenSessionHandle.structured_enabled`;
+  `_parse_structured_with_downgrade` wrapper replacing `_parse_with_nudge` at both
+  call sites.
+- Tests: downgrade on malformed JSON (sentinel nudge engages, flag sticks,
+  subsequent POSTs omit `response_format`); no-downgrade on semantic violation;
+  retry-loop independence; mode LogEvents.
+- Recommended model: Opus. Tripwire: zen proxy rejecting strict schemas at wire
+  level → relax `strict`/name, re-verify with a marked integration test.
+
+## Phase 5 — Pipeline wiring, mode-aware self-heal, structured ProtocolError budget
+
+**Current State**
+`run_stage`/`_run_fit_assessment` dispatch on `reply.kind`; `ProtocolError` is
+hard-fail outside fit; self-heal corrections mention sentinels explicitly;
+backend capability never consulted; backend methods accept no schema kwarg; the
+fit-capability trap (fit stage may run on a DIFFERENT backend instance, e.g.
+fit_model="google-cli" while the pipeline runs anthropic) is unhandled.
+
+**Desired State**
+- Stage→schema map (`STAGE_TURN_MODELS`; fit → `FitVerdict`) consulted per stage;
+  when `backend.supports_structured_output` and the running instance's session
+  mode is structured, pass `structured_schema=json_schema_for(stage)` into
+  start_session / send_message / restore_session. Fit uses the actual fit-backend
+  instance (a `google-cli` fit override keeps sentinel mode).
+- `assemble_system_prompt` replaces `_with_language_directive` at both call
+  sites, arming `structured_model` from the stage schema.
+- Self-heal corrections become mode-aware (structured variant: "re-emit a
+  corrected object conforming to the schema — a `kind` field plus `question` or
+  `payload`"; no sentinel mention).
+- Structured-mode `ProtocolError` from the backend in `run_stage` (NOT fit) is
+  routed through the SAME `MAX_FINAL_CORRECTIONS=2` budget (as a form of
+  self-heal) before propagating. Sentinel-mode semantics unchanged
+  (backend-internal CLI nudges remain the only response). Fit stays
+  one-shot → modal.
+- Mode observability: LogEvent on session start naming active mode.
+- `tests/backend/fakes/fake_backend.py` grows a structured-mode simulation knob:
+  accepts the schema kwarg, can serve canned replies in both modes, used by the
+  parity gate.
+
+**Problems/Bugs**
+Fit-capability trap (see above), self-heal double-application between wire-level
+vs semantic violations, and keeping sentinel CLI behavior byte-identical — all
+addressed explicitly.
+
+**Solutions**
+- Edits localized to `jsa/pipeline/stages.py` (plus new imports),
+  `tests/backend/fakes/fake_backend.py`, and accept-and-ignore kwarg signatures on
+  base + CLI backends.
+- Tests: run_stage structured end-to-end with fake; BF-19 cross-mode switch
+  (structured start → zen downgrade → claude-cli fallback replay uses
+  sentinel-wrap; job completes); fit-on-google-cli isolation; ProtocolError
+  budget consumption then `mark_failed` unchanged.
+- Recommended model: Opus.
+
+## Phase 6 — Parity gate (equivalence invariant) + integration
+
+**Current State**
+No cross-mode equivalence asserted anywhere.
+
+**Desired State**
+Characterization module `tests/backend/test_mode_parity.py`: the same canned
+logical payload through (a) sentinel-mode fake reply `<<<FINAL>>>{json}<<<END>>>`
+vs (b) structured-mode fake reply `{kind:"final", payload:...}` → assert identical
+`Document.structured`, `Document.markdown`, identical fit verdict (reason+state),
+and identical `FollowUp.question` text. Module docstring + commit message frame
+it as a PERMANENT equivalence invariant (not a deletion gate — the sentinel path
+lives forever for CLIs). Marked integration tests for real anthropic + zen
+(opt-in `pytest -m integration`).
+
+**Problems/Bugs**
+None new.
+
+**Solutions**
+- Tests + integration markers only; run `pytest -v -m "not integration"`;
+  frontend unaffected.
+- Recommended model: Sonnet.
+
+## Phase 7 — Docs
+
+**Current State**
+CLAUDE.md's Sentinel-protocol section presents sentinels as THE protocol; ARCH.md
+architecture narrative likewise.
+
+**Desired State**
+CLAUDE.md gains a "Structured output (API backends)" section — capability flag,
+session mode, canonical-form invariant, downgrade semantics, replay-wrap rule,
+amended BF-19 note (structured-mode ProtocolError spends the self-heal budget).
+The sentinel section is reframed as "mandatory for CLI backends and as the
+downgrade target". ARCH.md's pipeline section updated. **Prompt files are NOT
+edited** — the runtime contract section covers structured sessions (editing rule
+honored).
+
+**Problems/Bugs**
+None new.
+
+**Solutions**
+Minimal diffs following existing doc style. Recommended model: Sonnet.
+
+---
+
+## Decisions Log
+
+(Reserved for the user — agents do not write here.)
+
+## Change Log
+
+**2026-08-30**: context — ran the skeptic gate (`skeptic` subagent, Sonnet)
+against this plan before any phase implementation started, per a pre-written
+dossier covering claims C1–C14 and pre-synthesis assertions A1–A10. actions —
+verified two findings directly against live code/Pydantic before accepting
+them (FitVerdict schema emission, `_parse_fit_verdict`'s FIT-reason discard),
+trusted two more on the skeptic's specific file:line citations (BF-19 replay
+gap, missing prompt-wording characterization test); folded all four into the
+plan: (1) decision #4 now specifies its enforcement mechanism (non-nullable
+`reason`, no default) and clarifies it doesn't change `job.fit_reason`
+storage; (2) Phase 1's turn models now require `ConfigDict(extra="forbid")`
++ no-default fields on every model, with an explicit strict-schema assertion
+in tests; (3) Phase 2's replay design switched from session-mode-keyed to
+content-based (`<<<` vs `{` prefix) wrap/unwrap, with every `restore_session`
+call site enumerated, especially the revision-resume path that
+`backend_switch_reset` leaves exposed to a cross-mode BF-19 switch; (4) Phase
+2 gained a characterization/golden test pinning `_with_language_directive`'s
+current output before it's replaced by `assemble_system_prompt`, per this
+project's own CLAUDE.md parity-gate rule. decisions — no skeptic findings
+were rejected; all four held up under direct verification or citation-level
+trust. Six other claims (C1–C5, C7, C9) were confirmed to already hold as
+described and needed no plan changes. Two items remain genuinely open and
+unresolved by this pass: Anthropic SDK 0.104.1's actual `response_format`/
+forced-tool-use surface (Phase 3 still carries this as a discovery item), and
+OpenCode Zen's wire-level acceptance of `response_format` for free models
+(deferred to Phase 6's integration tests, as originally planned).
+verification — unverified; no phase has been implemented yet, this is a
+plan-only revision. Full skeptic report and dossier:
+`/Users/wiam/VSCodeProjects/JSA/skeptoc-dossier-on-plan-structured-output-copy.md`.
+
+**2026-08-30**: context — implemented Phase 1 (turn models + canonical
+normalization) and Phase 2 (prompt-assembly composition root + replay
+adapter) per this plan. actions — added `jsa/schema/turn_models.py`
+(`FitVerdict`/`CvTurn`/`ClTurn`, `STAGE_TURN_MODELS`, `json_schema_for`,
+`parse_structured_reply`, plus the mixed-mode replay adapter
+`wrap_canonical_for_sentinel`/`unwrap_sentinel_to_canonical`/
+`adapt_history`); added `supports_structured_output: ClassVar[bool] = False`
+to `AgentBackend` (`jsa/agents/base.py`); added
+`jsa/pipeline/prompt_assembly.py::assemble_system_prompt` as the single
+composition root, and switched `stages.py`'s two `_with_language_directive`
+call sites to it, deleting the old functions; wired `adapt_history` (hardcoded
+`structured=False`) into all three `restore_session` call sites in
+`stages.py` (fresh/resume cv_adjust & cover_letter; revising_cv/revising_cl
+fresh-revision; revising_cv/revising_cl mid-revision resume). Captured
+`tests/backend/fixtures/language_directive_golden.json` (84 cases: 19
+languages + one unknown code, fit_verdict × 2, with/without a trailing
+newline on `prompt_text`) from the ORIGINAL `_with_language_directive` before
+deleting it, per CLAUDE.md's parity-gate rule — `test_prompt_assembly.py`'s
+`TestSentinelModeParityGate` asserts byte-for-byte equality against it.
+New test files: `test_turn_models.py` (33 tests), `test_prompt_assembly.py`
+(90 tests, mostly the golden-fixture parametrization), `test_replay_adapter.py`
+(23 tests: primitives + all three restore_session call sites, including the
+plan's specifically-flagged revising_cv mid-revision-resume gap). decisions —
+four deliberate deviations from the plan's literal sketch, all surfaced by an
+advisor consult mid-session: (1) `parse_structured_reply` takes `(raw, stage)`,
+not the plan's one-arg sketch — fit-verdict routing needs the stage to know
+which shape to expect; (2) `adapt_history(history, *, structured: bool)` takes
+an explicit destination-mode flag rather than consulting
+`backend.supports_structured_output` — capability ≠ active session mode (the
+OpenCode Zen per-session downgrade means a structured-capable backend can be
+mid-downgrade), so Phase 2 hardcodes `structured=False` at all three call
+sites, making Phase 5's eventual wiring a literal-swap; (3) added
+`unwrap_sentinel_to_canonical` as the new inverse direction (the plan's Phase
+2 text only named the one-way `wrap_canonical_for_sentinel`) — needed because
+the replay-mode-detection fix (2026-08-30, skeptic gate) requires adapting in
+BOTH directions depending on destination mode, not just canonical→sentinel;
+it is fail-soft by construction (never raises — a parse failure passes the
+row through unchanged), since a fit_assessment-shaped or otherwise-foreign
+FINAL body is legacy content this adapter doesn't own; (4) confirmed and left
+as-is (not a deviation, a deliberate limitation carried into code comments):
+`turn_models.py`'s nested `$defs` (`CVDocument`/`Contact`/`Section`/`Entry`/
+`CoverLetter`) are NOT recursively strict (those models are `extra="ignore"`
+with defaulted optional fields) — acceptable for Anthropic's `input_schema`
+(Phase 3), a live open risk for an OpenCode-Zen-style `strict: true` mode
+(Phase 4/6, already flagged in this plan's own Change Log as deferred to
+integration tests). Also note for Phase 6's parity gate:
+`wrap_canonical_for_sentinel` emits compact (non-indented) JSON inside the
+`<<<FINAL>>>` block, unlike a real model's usually pretty-printed sentinel
+output — semantically identical after `_strip_code_fence` + `json.loads`, but
+the two paths' FINAL-block whitespace differs by construction, not by bug.
+verification — verified: `pytest -q -m "not integration"` → 1259 passed, 2
+skipped, 2 deselected, 0 failed (full suite, not just the new files); the
+pre-existing `tests/backend/test_language_directive.py` (end-to-end
+`run_stage` coverage of the language directive) passed unchanged, serving as
+a second, independent regression signal beyond the new golden-fixture test.

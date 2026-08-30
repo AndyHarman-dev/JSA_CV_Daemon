@@ -41,9 +41,10 @@ from jsa.events.schema import (
     StatusChangedEvent,
     event_to_dict,
 )
-from jsa.i18n.languages import language_name
 from jsa.pipeline.checkpoints import checkpoint
+from jsa.pipeline.prompt_assembly import assemble_system_prompt
 from jsa.prompts import loader
+from jsa.schema.turn_models import adapt_history
 from jsa.store import cv_structure as cv_structure_store
 from jsa.store import preferences as preferences_store
 
@@ -410,7 +411,7 @@ async def run_stage(
     # live global preference fresh at stage time (no cache) — mirrors
     # cv_structure_path's read-at-stage-time rationale. Only used to steer NEW
     # sessions (start_session); resumed sessions (restore_session) never see this
-    # — see _with_language_directive's docstring.
+    # — see assemble_system_prompt's docstring (jsa/pipeline/prompt_assembly.py).
     if job.language is not None:
         language_code = job.language
     else:
@@ -484,6 +485,10 @@ async def run_stage(
             answer_text = await _get_latest_answer(session, job.id, stage)
             original_history = await _load_history(session, job.id, original_stage)
             combined_history = original_history + revision_turns
+            # structured=False hardcoded — Phase 5 wires the real destination-mode
+            # decision (backend.supports_structured_output + active session mode);
+            # today every destination is sentinel-mode, so this is a no-op adapter.
+            combined_history = adapt_history(combined_history, structured=False)
             handle = await general_purpose_backend.restore_session(system_prompt, combined_history, revision_session_id)
             reply = await general_purpose_backend.send_message(handle, answer_text)
             accumulated_messages = [
@@ -495,6 +500,7 @@ async def run_stage(
             # revision instruction.
             history = await _load_history(session, job.id, original_stage)
             instruction = rev_req.instruction
+            history = adapt_history(history, structured=False)  # see structured=False note above
             handle = await general_purpose_backend.restore_session(system_prompt, history, revision_session_id)
             reply = await general_purpose_backend.send_message(handle, instruction)
             accumulated_messages = [
@@ -509,6 +515,7 @@ async def run_stage(
         if history:
             # Resume after awaiting_input — send the user's answer as the next turn.
             answer_text = await _get_latest_answer(session, job.id, stage)
+            history = adapt_history(history, structured=False)  # see structured=False note above
             handle = await general_purpose_backend.restore_session(system_prompt, history, job.session_external_id)
             reply = await general_purpose_backend.send_message(handle, answer_text)
             # Only the new turns are new; prior messages already persisted.
@@ -542,7 +549,7 @@ async def run_stage(
                 brief = None
                 cv_block = await _base_structure_cv_block(cv_structure_path)
             initial_user_msg = _build_initial_user_msg(job, brief, cv_block)
-            fresh_system_prompt = _with_language_directive(system_prompt, language_code)
+            fresh_system_prompt = assemble_system_prompt(system_prompt, language=language_code)
             handle, reply = await general_purpose_backend.start_session(fresh_system_prompt, initial_user_msg)
             # Accumulate all messages for this session (system, user, assistant reply)
             accumulated_messages = [
@@ -802,7 +809,7 @@ async def _run_fit_assessment(
     initial_user_msg = _build_fit_user_msg(job, base_structure)
     job.retry_count = 0
     # Always a fresh start_session (no resume path for this stage) — safe to inject here.
-    system_prompt = _with_language_directive(system_prompt, language_code, fit_verdict=True)
+    system_prompt = assemble_system_prompt(system_prompt, language=language_code, fit_verdict=True)
 
     try:
         handle, reply = await backend.start_session(system_prompt, initial_user_msg)
@@ -1024,48 +1031,13 @@ def _get_system_prompt(stage: Stage) -> str:
         return loader.read_prompt("cover_letter")
 
 
-def _language_directive(language_code: str, *, fit_verdict: bool = False) -> str:
-    """A short directive appended to a NEW session's system prompt for a non-English
-    language preference (see CLAUDE.md → "Language preference" / the language-preference
-    handoff's "Pipeline Integration" section).
-
-    Carves out the two things that must stay English/ASCII regardless of the chosen
-    language: the sentinel blocks (matched literally by ``jsa/agents/protocol.py``) and,
-    for ``fit_assessment`` only, the ``FIT``/``UNFIT`` verdict word itself (matched
-    literally by ``_parse_fit_verdict``).
-    """
-    name = language_name(language_code)
-    lines = [
-        "\n\n## Output language",
-        f"Write all natural-language, user-facing output in {name} ({language_code}) — "
-        "the change-log, any clarifying questions you ask, and every text VALUE in the "
-        "final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do "
-        "not translate JSON keys/field names — they are fixed schema fields and must "
-        "stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, "
-        "`entries`, etc.).",
-        "The sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay "
-        "exactly as spelled, in English/ASCII — never translate or localize them.",
-    ]
-    if fit_verdict:
-        lines.append(
-            "The verdict word itself (`FIT` or `UNFIT`) must stay in English and be the "
-            f"first word of your reply; only the reason that follows should be in {name}."
-        )
-    return "\n".join(lines)
-
-
-def _with_language_directive(system_prompt: str, language_code: str, *, fit_verdict: bool = False) -> str:
-    """Append the language directive to ``system_prompt`` for a NEW session only.
-
-    A no-op for the default ``"en"`` — the prompt files are already written in English, so
-    there is nothing to direct. Never call this for a ``restore_session`` path: a resumed
-    session already committed to a language, and re-injecting a changed directive would
-    contradict the replayed history (see the handoff's "Do not change language
-    mid-conversation").
-    """
-    if language_code == "en":
-        return system_prompt
-    return system_prompt + _language_directive(language_code, fit_verdict=fit_verdict)
+# NOTE: the language directive used to live here as `_language_directive` /
+# `_with_language_directive`. It moved verbatim to
+# `jsa/pipeline/prompt_assembly.py::assemble_system_prompt` (the structured-output
+# plan's single composition root for runtime system-prompt mutation) — see that
+# module's docstring and `tests/backend/fixtures/language_directive_golden.json`
+# (captured from this original implementation) for the parity gate that proved the
+# move is byte-identical for the sentinel-mode path every CLI backend depends on.
 
 
 def _build_initial_user_msg(

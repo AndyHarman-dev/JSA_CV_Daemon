@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
 
 
 class AgentTimeout(Exception):
@@ -62,6 +62,13 @@ class AgentBackend(ABC):
     cancellation. See jsa/agents/_subprocess.py's module docstring."""
 
     name: str                                   # "claude-cli" | "google-cli" | "anthropic" | "opencode-zen"
+
+    # True only for backends whose wire protocol can enforce a JSON schema on the
+    # model's reply (Anthropic forced tool-use, OpenCode Zen's response_format). CLI
+    # backends have no such channel and stay on the sentinel grammar unconditionally.
+    # Hard-coded per backend (not runtime-detected) — see the structured-output plan's
+    # "Locked decisions" #1.
+    supports_structured_output: ClassVar[bool] = False
 
     @abstractmethod
     async def start_session(

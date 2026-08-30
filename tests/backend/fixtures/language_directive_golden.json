@@ -1,0 +1,590 @@
+[
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "en",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT"
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "en",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT"
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "es",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Spanish (es) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "es",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Spanish (es) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Spanish."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "fr",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in French (fr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "fr",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in French (fr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in French."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "de",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in German (de) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "de",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in German (de) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in German."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "pt",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Portuguese (pt) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "pt",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Portuguese (pt) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Portuguese."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "it",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Italian (it) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "it",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Italian (it) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Italian."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "nl",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Dutch (nl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "nl",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Dutch (nl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Dutch."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "sv",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Swedish (sv) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "sv",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Swedish (sv) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Swedish."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "pl",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Polish (pl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "pl",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Polish (pl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Polish."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ru",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Russian (ru) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ru",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Russian (ru) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Russian."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "tr",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Turkish (tr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "tr",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Turkish (tr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Turkish."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ar",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Arabic (ar) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ar",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Arabic (ar) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Arabic."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "he",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Hebrew (he) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "he",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Hebrew (he) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Hebrew."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "hi",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Hindi (hi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "hi",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Hindi (hi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Hindi."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "zh",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Chinese (zh) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "zh",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Chinese (zh) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Chinese."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ja",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Japanese (ja) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ja",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Japanese (ja) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Japanese."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ko",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Korean (ko) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "ko",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Korean (ko) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Korean."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "vi",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Vietnamese (vi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "vi",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Vietnamese (vi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Vietnamese."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "th",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Thai (th) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "th",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Thai (th) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Thai."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "id",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Indonesian (id) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "id",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in Indonesian (id) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Indonesian."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "xx",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in xx (xx) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "no_trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT",
+    "language_code": "xx",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n## Output language\nWrite all natural-language, user-facing output in xx (xx) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in xx."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "en",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n"
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "en",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n"
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "es",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Spanish (es) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "es",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Spanish (es) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Spanish."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "fr",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in French (fr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "fr",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in French (fr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in French."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "de",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in German (de) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "de",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in German (de) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in German."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "pt",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Portuguese (pt) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "pt",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Portuguese (pt) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Portuguese."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "it",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Italian (it) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "it",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Italian (it) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Italian."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "nl",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Dutch (nl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "nl",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Dutch (nl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Dutch."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "sv",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Swedish (sv) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "sv",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Swedish (sv) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Swedish."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "pl",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Polish (pl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "pl",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Polish (pl) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Polish."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ru",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Russian (ru) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ru",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Russian (ru) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Russian."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "tr",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Turkish (tr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "tr",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Turkish (tr) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Turkish."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ar",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Arabic (ar) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ar",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Arabic (ar) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Arabic."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "he",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Hebrew (he) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "he",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Hebrew (he) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Hebrew."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "hi",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Hindi (hi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "hi",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Hindi (hi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Hindi."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "zh",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Chinese (zh) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "zh",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Chinese (zh) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Chinese."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ja",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Japanese (ja) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ja",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Japanese (ja) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Japanese."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ko",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Korean (ko) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "ko",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Korean (ko) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Korean."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "vi",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Vietnamese (vi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "vi",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Vietnamese (vi) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Vietnamese."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "th",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Thai (th) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "th",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Thai (th) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Thai."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "id",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Indonesian (id) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "id",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in Indonesian (id) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in Indonesian."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "xx",
+    "fit_verdict": false,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in xx (xx) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them."
+  },
+  {
+    "prompt_label": "trailing_newline",
+    "prompt_text": "SYSTEM PROMPT BASE TEXT\n",
+    "language_code": "xx",
+    "fit_verdict": true,
+    "output": "SYSTEM PROMPT BASE TEXT\n\n\n## Output language\nWrite all natural-language, user-facing output in xx (xx) — the change-log, any clarifying questions you ask, and every text VALUE in the final JSON (summary prose, bullet text, headings, cover-letter paragraphs). Do not translate JSON keys/field names — they are fixed schema fields and must stay exactly as specified (`heading`, `subheading`, `bullets`, `text`, `items`, `entries`, etc.).\nThe sentinel blocks `<<<FINAL>>>`, `<<<NEED_INPUT>>>`, and `<<<END>>>` must stay exactly as spelled, in English/ASCII — never translate or localize them.\nThe verdict word itself (`FIT` or `UNFIT`) must stay in English and be the first word of your reply; only the reason that follows should be in xx."
+  }
+]
