@@ -81,9 +81,14 @@ export function StageTimeline({ job }: StageTimelineProps) {
         const isActive = idx === activeIdx;
         const color = isComplete ? T.accent2 : isActive ? T.a : T.ink3;
         const interactive = step.viewKey !== undefined;
-        // The cover_letter node (index 3) is where the CL lane starts running — before that
-        // (still in the CV lane, or parked at the CV gate) there is nothing to show yet.
-        const disabled = step.viewKey === "cl" && activeIdx < 3;
+        // A node is disabled until the pipeline has actually reached it — before that,
+        // clicking it would set viewedStage to an artifact that doesn't exist yet, and
+        // JobDetail.tsx has no render branch for that combination (a dead click with no
+        // visible effect). cv_adjust (index 1) has nothing to show before activeIdx
+        // reaches it; cover_letter (index 3) likewise before the CL lane starts running.
+        const disabled =
+          (step.viewKey === "cv" && activeIdx < 1) ||
+          (step.viewKey === "cl" && activeIdx < 3);
         const selected = interactive && viewedStage === step.viewKey;
         const viewKey = step.viewKey;
 
@@ -170,7 +175,13 @@ export function StageTimeline({ job }: StageTimelineProps) {
                 type="button"
                 disabled={disabled}
                 aria-pressed={selected}
-                title={disabled ? t("stageTimeline.clNotStarted") : undefined}
+                title={
+                  disabled
+                    ? step.viewKey === "cv"
+                      ? t("stageTimeline.cvNotStarted")
+                      : t("stageTimeline.clNotStarted")
+                    : undefined
+                }
                 onClick={() => setViewedStage(viewKey === viewedStage ? null : (viewKey ?? null))}
                 style={nodeStyle}
               >

@@ -231,6 +231,17 @@ class OpenCodeZenBackend(AgentBackend):
             raise AgentTimeout(
                 f"OpenCode Zen API timed out after {self._timeout}s"
             ) from None
+        except httpx.HTTPError as exc:
+            # Anything else httpx can raise on the connect/write/read path (ConnectError,
+            # ReadError, RemoteProtocolError, PoolTimeout, ...) is a transport-level
+            # failure, not a "the request completed and the response was bad" failure —
+            # treat it the same as a gateway 5xx: retry this backend a couple of times
+            # (_call_api's loop) before BF-19 gives up on it. Without this, any of these
+            # exceptions propagated raw past all three typed BF-19 exceptions and hard-
+            # failed the job on the very first configured backend.
+            raise _TransientOpenCodeError(
+                f"OpenCode Zen API transport error: {exc}"
+            ) from None
         finally:
             await client.aclose()
 
@@ -274,7 +285,18 @@ class OpenCodeZenBackend(AgentBackend):
                 raise _TransientOpenCodeError(detail)
             raise AgentBackendUnavailable(detail)
 
-        content = body["choices"][0]["message"]["content"]
+        choices = body.get("choices")
+        if not choices:
+            # A 200 with a well-formed JSON body but an empty/missing `choices` list (a
+            # proxy bug, or a model that produced zero completions) is not covered by the
+            # "error" key check above. Treat it the same as a null message content below —
+            # transient and worth retrying on this backend before BF-19 gives up on it,
+            # rather than letting an unhandled IndexError/KeyError escape past all three
+            # typed BF-19 exceptions and hard-fail the job on the first backend.
+            raise _TransientOpenCodeError(
+                f"OpenCode Zen API returned no choices: {response.text[:500]}"
+            )
+        content = choices[0].get("message", {}).get("content")
         if content is None:
             # Reasoning models can return a null content when the reply is all
             # `reasoning` (e.g. truncated by max_tokens before any final answer).

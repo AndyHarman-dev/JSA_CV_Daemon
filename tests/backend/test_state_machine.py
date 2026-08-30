@@ -56,7 +56,10 @@ class TestAllowedTransitions:
         assert job.current_stage == Stage.cv_adjust
 
     def test_running_to_cv_done(self):
-        job = make_job(JobState.running, Stage.cv_adjust)
+        # running → cv_done is now only reachable from current_stage == cover_letter
+        # (the BF-19 rewind target) — cv_adjust completion goes to cv_review instead,
+        # never directly to cv_done. See TestStageCompatibility for the negative case.
+        job = make_job(JobState.running, Stage.cover_letter)
         transition(job, JobState.cv_done)
         assert job.state == JobState.cv_done
         assert job.current_stage is None
@@ -321,16 +324,18 @@ class TestForbiddenTransitions:
 # ---------------------------------------------------------------------------
 
 class TestStageCompatibility:
-    """running(cv_adjust) → cv_done allowed; running(revising_cv) → cv_done raises.
+    """running(cv_adjust) → cv_done raises; only running(cover_letter) → cv_done is allowed.
 
-    BF-19: running(cover_letter) → cv_done is now also allowed (backend-switch restart
+    A normal cv_adjust completion goes to cv_review, never directly to cv_done — cv_done
+    is reached only via the approve-cv endpoint (see CLAUDE.md → "Two-lane pipeline / CV
+    gate"). BF-19: running(cover_letter) → cv_done is allowed (backend-switch restart
     rewinds a mid-cover_letter job back to cv_done so the new backend starts fresh).
     """
 
-    def test_running_cv_adjust_to_cv_done_allowed(self):
+    def test_running_cv_adjust_to_cv_done_raises(self):
         job = make_job(JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done)
-        assert job.state == JobState.cv_done
+        with pytest.raises(InvalidTransition, match="cv_done"):
+            transition(job, JobState.cv_done)
 
     def test_running_cover_letter_to_cv_done_allowed_for_backend_switch(self):
         """BF-19: backend-switch restart from cover_letter stage → rewind to cv_done."""
@@ -454,7 +459,7 @@ class TestMutatesInPlace:
         assert job.current_stage == Stage.cv_adjust
 
     def test_stage_cleared_on_terminal_like_transition(self):
-        job = make_job(JobState.running, Stage.cv_adjust)
+        job = make_job(JobState.running, Stage.cover_letter)
         transition(job, JobState.cv_done)
         assert job.current_stage is None
 

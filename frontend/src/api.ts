@@ -104,8 +104,12 @@ export const api = {
   exportJob(
     id: string,
     format: "pdf" | "docx"
-  ): Promise<{ cv_path: string; cl_path: string }> {
-    return apiFetch<{ cv_path: string; cl_path: string }>(
+  ): Promise<{ cv_path?: string; cl_path?: string }> {
+    // Backend (jsa/api/routes_jobs.py::export_job) only sets each key when that
+    // stage's Document exists — a cv_review-only job's export omits cl_path
+    // entirely. Both keys are optional here to match; do not widen back to
+    // required without also changing the backend to always emit both.
+    return apiFetch<{ cv_path?: string; cl_path?: string }>(
       `/api/jobs/${encodeURIComponent(id)}/export`,
       {
         method: "POST",

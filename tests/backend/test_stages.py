@@ -264,7 +264,8 @@ class TestCoverLetterHappyPath:
         job = await _insert_job(session)
         # Simulate that cv_adjust is done; job is now cv_done
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         # Now transition to running(cover_letter)
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
@@ -280,7 +281,8 @@ class TestCoverLetterHappyPath:
         """Document row created with stage=cover_letter after successful run."""
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
@@ -296,7 +298,8 @@ class TestCoverLetterHappyPath:
         """system, user, assistant Message rows are written for cover_letter stage."""
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
@@ -460,7 +463,8 @@ class TestRevisionFlow:
         job = await _insert_job(session)
         # Set up state as if cv_adjust and cover_letter completed
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         transition(job, JobState.cl_done, None)
         transition(job, JobState.review, None)
@@ -999,7 +1003,8 @@ class TestCvAdjustConsumesBaseStructure:
         job = await _insert_job(session)
         # cover_letter runs from cv_done; reach it via running(cv_adjust) like the suite does.
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 

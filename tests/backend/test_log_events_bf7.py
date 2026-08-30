@@ -538,7 +538,8 @@ class TestPointD_StartingStageLogEvent:
         """run_stage publishes 'Starting stage: cover_letter' for the cover_letter stage."""
         job = await _insert_job_in_session(session)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 
@@ -617,7 +618,8 @@ class TestPointE_FinalReceivedLogEvent:
         """run_stage publishes 'FINAL received' after a successful cover_letter."""
         job = await _insert_job_in_session(session)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 

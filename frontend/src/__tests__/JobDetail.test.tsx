@@ -143,6 +143,15 @@ describe("JobDetail", () => {
     expect(screen.getByText("PIPELINE_PROGRESS")).toBeInTheDocument();
   });
 
+  it("shows a waiting message for cv_done — the brief gap between approve-cv succeeding and the orchestrator dispatching cover_letter", () => {
+    const job = makeJob({ id: "j1", state: "cv_done" });
+    useStore.setState({ jobs: { j1: job }, selectedId: "j1" });
+
+    render(<JobDetail />);
+
+    expect(screen.getByText("CV approved — starting the cover letter…")).toBeInTheDocument();
+  });
+
   it("renders FollowUpPane (not placeholder) for awaiting_input state", () => {
     const job = makeJob({ id: "j1", state: "awaiting_input" });
     useStore.setState({ jobs: { j1: job }, selectedId: "j1" });

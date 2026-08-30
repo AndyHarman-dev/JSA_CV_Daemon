@@ -359,7 +359,8 @@ class TestRunStageFreshCvAdjustContainsIntelBrief:
         """Fresh cover_letter with FakeAgentBackend: user Message row has [COMPANY_BRIEF]."""
         job = await _insert_job(session)
         transition(job, JobState.running, Stage.cv_adjust)
-        transition(job, JobState.cv_done, None)
+        transition(job, JobState.cv_review, None)
+        transition(job, JobState.cv_done, None)  # simulate approve-cv
         transition(job, JobState.running, Stage.cover_letter)
         await session.commit()
 

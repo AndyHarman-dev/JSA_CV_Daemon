@@ -447,6 +447,15 @@ export function JobDetail() {
       {(job.state === "review" || job.state === "approved") && (
         <ReviewPane jobId={job.id} />
       )}
+      {job.state === "cv_done" && (
+        // Brief transitional state between "Approve CV" succeeding (cv_review → cv_done)
+        // and the orchestrator actually dispatching cover_letter (which flips state back
+        // to running). Without this, the pane matches none of the branches above and
+        // renders blank with no confirmation the approval went through.
+        <div style={{ font: `400 13px/1.5 ${T.ui}`, color: T.ink3, padding: "11px 14px" }}>
+          {t("jobDetail.cvApprovedWaiting")}
+        </div>
+      )}
 
       {job.state === "unfit" && <UnfitModal job={job} />}
     </div>

@@ -683,7 +683,9 @@ async def mem_session_factory():
     await engine.dispose()
 
 
-async def _insert_running_job(sf, job_id: str = "aabbccdd00112233") -> str:
+async def _insert_running_job(
+    sf, job_id: str = "aabbccdd00112233", current_stage: Stage = Stage.cv_adjust
+) -> str:
     """Insert a job in running state for recovery tests."""
     async with sf() as session:
         job = Job(
@@ -696,7 +698,7 @@ async def _insert_running_job(sf, job_id: str = "aabbccdd00112233") -> str:
             jd_hash="hash0000deadbeef",
             cv_text="CV text",
             state=JobState.running,
-            current_stage=Stage.cv_adjust,
+            current_stage=current_stage,
         )
         session.add(job)
         await session.commit()
@@ -716,8 +718,19 @@ class TestRecoverySweep:
             assert job.state == JobState.pending
             assert job.current_stage is None
 
-    async def test_recovery_running_with_cv_doc_becomes_cv_done(self, mem_session_factory):
-        """A running job that has a cv_adjust document should revert to cv_done."""
+    async def test_recovery_running_cv_adjust_with_stale_cv_doc_becomes_pending(
+        self, mem_session_factory
+    ):
+        """A running(cv_adjust) job must rewind to pending, NEVER cv_done, even if a
+        cv_adjust Document already exists from an earlier job cycle.
+
+        A completed cv_adjust run always transitions atomically past `running` straight
+        to `cv_review` in the same checkpoint — being caught here mid-run means THIS
+        attempt did not complete. Treating a leftover Document as proof of completion
+        (the pre-two-lane-split heuristic) would silently bypass the cv_review approval
+        gate for a CV the user never actually approved this cycle. Regression test for
+        that gate-bypass — see jsa/db/repo.py::recovery_sweep.
+        """
         job_id = await _insert_running_job(mem_session_factory)
 
         async with mem_session_factory() as session:
@@ -735,12 +748,21 @@ class TestRecoverySweep:
 
         async with mem_session_factory() as session:
             job = await repo.get_job(session, job_id)
-            assert job.state == JobState.cv_done
+            assert job.state == JobState.pending
             assert job.current_stage is None
 
-    async def test_recovery_running_with_cl_doc_becomes_cl_done(self, mem_session_factory):
-        """A running job that has both a cv and a cl document should revert to cl_done."""
-        job_id = await _insert_running_job(mem_session_factory)
+    async def test_recovery_running_cover_letter_with_cl_doc_becomes_cl_done(
+        self, mem_session_factory
+    ):
+        """A running(cover_letter) job that has a cl document should revert to cl_done.
+
+        Reaching running(cover_letter) at all already required cv_done (the state
+        machine gates it), so landing on cl_done here cannot bypass the CV approval
+        gate — unlike a plain running(cv_adjust) crash, see the sibling test above.
+        """
+        job_id = await _insert_running_job(
+            mem_session_factory, current_stage=Stage.cover_letter
+        )
 
         async with mem_session_factory() as session:
             cv_doc = Document(

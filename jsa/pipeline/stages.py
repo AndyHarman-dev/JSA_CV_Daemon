@@ -979,13 +979,7 @@ async def _handle_final(
         # consumed. NULL (legacy rows) reads as "review".
         dest_state = JobState.review
         if stage == Stage.revising_cv:
-            rr_result = await session.execute(
-                select(RevisionRequest.origin_state).where(
-                    RevisionRequest.job_id == job.id,
-                    RevisionRequest.consumed_at.is_(None),
-                )
-            )
-            origin_state = rr_result.scalar_one_or_none()
+            origin_state = await repo.get_unconsumed_revision_origin(session, job.id)
             if origin_state == JobState.cv_review.value:
                 dest_state = JobState.cv_review
 

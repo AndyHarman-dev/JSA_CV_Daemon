@@ -612,11 +612,11 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
         )
         refreshed = await repo.get_job(session, "aaaa000000000001")
-        assert refreshed.state == JobState.cv_done
+        assert refreshed.state == JobState.cv_review
         assert refreshed.current_stage is None
 
     async def test_checkpoint_inserts_message_rows(self, session):
@@ -633,7 +633,7 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
             messages=messages,
         )
@@ -656,7 +656,7 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
             document=doc,
         )
@@ -755,11 +755,11 @@ class TestCheckpoint:
         await repo.checkpoint(
             session,
             job,
-            new_state=JobState.cv_done,
+            new_state=JobState.cv_review,
             new_stage=None,
             # messages not passed
         )
-        assert job.state == JobState.cv_done
+        assert job.state == JobState.cv_review
 
     async def test_checkpoint_replaces_stale_open_followup(self, session):
         """BF-8 Fix 2: if an open FollowUp already exists for (job_id, stage), checkpoint

@@ -109,6 +109,17 @@ describe("StageTimeline", () => {
     expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toBeEnabled();
   });
 
+  it("disables the CV_ADJUST button while no cv_adjust Document exists yet", () => {
+    const job = makeJob({ state: "pending" });
+    render(<StageTimeline job={job} />);
+
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).toHaveAttribute(
+      "title",
+      "CV not started yet"
+    );
+  });
+
   it("enables the COVER_LETTER button while the cover-letter lane is actively running — the click-back in verification step (f) must work mid-run, not just after review", () => {
     const job = makeJob({ state: "running", current_stage: "cover_letter" });
     render(<StageTimeline job={job} />);

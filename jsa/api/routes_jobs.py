@@ -340,6 +340,25 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
                 detail=f"Job {job_id!r} is at the CV gate (cv_review) — no cover letter exists yet",
             )
 
+        # Reject a second revision request while one is already pending. Without
+        # this, job.state stays review/cv_review until the orchestrator actually
+        # dispatches (only current_stage flips), so a double-click or a race lets
+        # two POSTs both pass the state check above. The DB's uq_revision_open
+        # partial unique index (job_id WHERE consumed_at IS NULL) would reject the
+        # second INSERT anyway, but only as an unhandled IntegrityError — this
+        # check turns that into a clean 409 instead.
+        existing = await session.execute(
+            select(RevisionRequest.id).where(
+                RevisionRequest.job_id == job_id,
+                RevisionRequest.consumed_at.is_(None),
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job {job_id!r} already has a pending revision request",
+            )
+
         # Map target to stage values
         if body.target == "cv":
             revision_target = Stage.cv_adjust
