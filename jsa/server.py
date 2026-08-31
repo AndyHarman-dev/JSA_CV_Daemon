@@ -17,6 +17,7 @@ from jsa.agents.base import AgentBackend
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.events.bus import bus
+from jsa.api.routes_backend_models import router as backend_models_router
 from jsa.api.routes_cv_structure import router as cv_structure_router
 from jsa.api.routes_jobs import router as jobs_router
 from jsa.api.routes_meta import router as meta_router
@@ -24,6 +25,7 @@ from jsa.api.routes_preferences import router as preferences_router
 from jsa.api.ws import router as ws_router
 from jsa.pipeline.orchestrator import Orchestrator
 from jsa.agents.registry import backend_for
+from jsa.store import backend_models as backend_models_store
 
 logger = logging.getLogger(__name__)
 
@@ -45,28 +47,42 @@ def make_backend_factory(
     `google-cli` takes no model at all). Both default to None, meaning "use the
     settings value". The `fit_assessment` stage is the one caller that passes them —
     see `Settings.fit_model` / `Settings.fit_timeout`.
+
+    Model precedence (when `model_override` is None): `settings.backend_models[name]`
+    (the runtime selection made via PUT /api/backend-models, re-read on every call so a
+    live change reaches the next dispatch) if set, else that backend's flat per-backend
+    default (`settings.model` / `settings.opencode_zen_model`). An explicit
+    `model_override` always wins over both — this is what keeps the fit gate's
+    `--fit-model` pinned regardless of runtime model-selection changes.
     """
+
+    def _model_for(name: str, default: str) -> str:
+        if model_override is not None:
+            return model_override
+        return settings.backend_models.get(name) or default
 
     def _backend_factory(name: str) -> AgentBackend:
         if name == "anthropic":
-            model = settings.model if model_override is None else model_override
+            model = _model_for("anthropic", settings.model)
             timeout = settings.anthropic_timeout if timeout_override is None else timeout_override
             return backend_for("anthropic", model=model, timeout=timeout)
 
         if name == "opencode-zen":
             # opencode-zen has its own model catalog (nemotron/gpt/gemini/claude
             # mirrors, not JSA's Claude-only `model` setting), so it never falls
-            # back to `settings.model` — only an explicit override applies.
-            model = settings.opencode_zen_model if model_override is None else model_override
+            # back to `settings.model` — only an explicit override or a runtime
+            # selection for "opencode-zen" applies.
+            model = _model_for("opencode-zen", settings.opencode_zen_model)
             timeout = settings.opencode_zen_timeout if timeout_override is None else timeout_override
             return backend_for("opencode-zen", model=model, timeout=timeout)
 
-        model = settings.model if model_override is None else model_override
         timeout = settings.agent_timeout if timeout_override is None else timeout_override
         if name == "claude-cli":
+            model = _model_for("claude-cli", settings.model)
             return backend_for(name, model=model, timeout=timeout)
         # google-cli: GoogleCliBackend.__init__ takes no `model` — the agy CLI has no
-        # model flag — so a model override is silently inapplicable to that backend.
+        # model flag — so a model override or runtime selection is silently
+        # inapplicable to that backend.
         return backend_for(name, timeout=timeout)
 
     return _backend_factory
@@ -127,6 +143,11 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
         session_factory = create_session_factory(engine)
         app.state.engine = engine
         app.state.session_factory = session_factory
+
+        # Seed the runtime model-selection dict from disk before building the factory, so
+        # a selection made in a previous run is honored from the very first dispatch.
+        _saved_models = await backend_models_store.load(settings)
+        settings.backend_models.update(_saved_models.selected)
 
         # Exposed for the job-less CV-structure infer endpoint (routes_cv_structure), which
         # needs a backend the same way the orchestrator does. Tests override this post-startup.
@@ -190,6 +211,7 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(cv_structure_router)
     app.include_router(preferences_router)
+    app.include_router(backend_models_router)
     app.include_router(ws_router)
 
     # Serve built frontend bundle if present.

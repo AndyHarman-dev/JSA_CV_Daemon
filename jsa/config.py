@@ -1,7 +1,7 @@
 """Application settings loaded from environment variables (prefix: JSA_)."""
 
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
     dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
     select_language: bool = False          # --select-language: show the full-screen boot gate (language picker + boot log) before the dashboard on first run
+    backend_models: Dict[str, str] = {}   # backend name -> selected model ID, seeded from
+                                          # backend_models.json at startup and mutated live by
+                                          # PUT /api/backend-models. Overrides the flat
+                                          # per-backend default (`model` / `opencode_zen_model`)
+                                          # in `make_backend_factory`. Like every field here it
+                                          # technically has a JSA_BACKEND_MODELS env alias (JSON
+                                          # string, via the shared `env_prefix`), but the intended
+                                          # write path is the persisted file / API, not an env var.
 
     @property
     def cv_structure_path(self) -> Path:
@@ -42,6 +50,12 @@ class Settings(BaseSettings):
         """Global app preferences JSON (currently just ``{"language": "en"}``). Lives next to
         the DB, derived from ``db_path`` the same way ``cv_structure_path`` is."""
         return self.db_path.parent / "preferences.json"
+
+    @property
+    def backend_models_path(self) -> Path:
+        """Persisted per-backend model selection + user catalog overrides. Lives next to the
+        DB, derived from ``db_path`` the same way ``preferences_path`` is."""
+        return self.db_path.parent / "backend_models.json"
 
     @field_validator("backends", mode="before")
     @classmethod
