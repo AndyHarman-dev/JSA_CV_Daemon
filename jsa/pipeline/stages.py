@@ -273,6 +273,18 @@ def _validate_final_content(
     return None
 
 
+def _schema_kwargs(schema: dict | None) -> dict:
+    """The ``structured_schema=`` kwarg dict for a start_session/restore_session call.
+
+    Empty when ``schema`` is ``None`` (sentinel mode) so CLI backends — which accept no
+    such parameter, per the contract on ``AgentBackend.supports_structured_output`` —
+    are never handed a kwarg they don't declare. Centralizes the
+    ``{"structured_schema": schema} if schema is not None else {}`` idiom that was
+    previously repeated at every call site.
+    """
+    return {"structured_schema": schema} if schema is not None else {}
+
+
 def _structured_schema_for(backend: AgentBackend, stage: Stage) -> dict | None:
     """The JSON schema to enforce for ``stage`` on ``backend``, or ``None``.
 
@@ -503,7 +515,7 @@ async def _start_session_with_retry(
     internal nudge already covers a malformed reply, so re-raising immediately
     preserves the pre-existing hard-fail behavior byte-for-byte.
     """
-    kwargs = {"structured_schema": schema} if schema is not None else {}
+    kwargs = _schema_kwargs(schema)
     attempts = 0
     while True:
         try:
@@ -721,7 +733,7 @@ async def run_stage(
             original_history = await _load_history(session, job.id, original_stage)
             combined_history = original_history + revision_turns
             combined_history = adapt_history(combined_history, structured=structured)
-            restore_kwargs = {"structured_schema": schema} if schema is not None else {}
+            restore_kwargs = _schema_kwargs(schema)
             handle = await general_purpose_backend.restore_session(
                 system_prompt, combined_history, revision_session_id, **restore_kwargs
             )
@@ -734,7 +746,7 @@ async def run_stage(
             history = await _load_history(session, job.id, original_stage)
             instruction = rev_req.instruction
             history = adapt_history(history, structured=structured)
-            restore_kwargs = {"structured_schema": schema} if schema is not None else {}
+            restore_kwargs = _schema_kwargs(schema)
             handle = await general_purpose_backend.restore_session(
                 system_prompt, history, revision_session_id, **restore_kwargs
             )
@@ -750,7 +762,7 @@ async def run_stage(
             # Resume after awaiting_input — send the user's answer as the next turn.
             answer_text = await _get_latest_answer(session, job.id, stage)
             history = adapt_history(history, structured=structured)
-            restore_kwargs = {"structured_schema": schema} if schema is not None else {}
+            restore_kwargs = _schema_kwargs(schema)
             handle = await general_purpose_backend.restore_session(
                 system_prompt, history, job.session_external_id, **restore_kwargs
             )
@@ -1064,7 +1076,7 @@ async def _run_fit_assessment(
         system_prompt, language=language_code, structured_model=schema, fit_verdict=True
     )
 
-    start_kwargs = {"structured_schema": schema} if schema is not None else {}
+    start_kwargs = _schema_kwargs(schema)
     try:
         handle, reply = await backend.start_session(system_prompt, initial_user_msg, **start_kwargs)
     except ProtocolError as exc:

@@ -1,5 +1,5 @@
 ---
-status: InProgress
+status: Done
 ---
 
 # Structured Output for API Backends — Sentinel as Fallback
@@ -820,3 +820,69 @@ not a footnote:
   its real-API schema acceptance for Anthropic remains UNPROVEN pending a key.
   Carry this forward explicitly — do not treat "1377 passed" as if it closed
   this gate.
+
+**2026-08-30**: context — implemented Phase 7 (docs), the final phase of this plan.
+actions — discovered this repo has no `ARCH.md`/`PLAN.md` despite CLAUDE.md's own
+header claiming architecture/status live there (`README.md`'s "Architecture"
+section is the de facto architecture doc, confirmed by grepping for both
+filenames repo-wide and finding neither); redirected Phase 7's "ARCH.md's
+pipeline section updated" instruction onto `README.md` instead of skipping it,
+since that's where the equivalent content actually lives. Edited `CLAUDE.md`:
+reframed the "Sentinel protocol" section header/body ("MANDATORY for all agent
+prompts" → "MANDATORY for CLI backends, and the structured-output downgrade
+target", with a note that OpenCode Zen's per-session downgrade lands there
+too); added a new "Structured output (API backends)" section (capability flag,
+turn models/schema, session-mode-vs-capability distinction incl. the
+fit-backend isolation, prompt-assembly composition root, Anthropic forced
+tool-use mechanism, OpenCode Zen attempt/downgrade semantics, the
+canonical-form/content-sniffing replay invariant with all enumerated
+`restore_session` call sites, the BF-19 self-heal-budget interaction, mode
+`LogEvent` observability, and the permanent parity-gate equivalence
+invariant); added a short cross-reference note inside the existing "Backend
+fallback chain (BF-19)" section pointing at the new section, per the plan's
+"amended BF-19 note" instruction, without duplicating or altering that
+section's existing three-exception-type content. Edited `README.md`'s
+Architecture section: reworded the "Sentinel protocol" bullet to scope it to
+CLI backends + downgraded sessions, and added a new "Structured output" bullet
+describing the two API backends' provider-enforced JSON mode and the
+canonical-storage transparency guarantee. Per the plan's explicit instruction,
+no prompt file (`PROMPT_CDADJUST.md`, `CVL_PROMPT.md`, `PROMPT_FIT_ASSESSMENT.md`)
+was touched — the runtime contract section (Phase 2's `assemble_system_prompt`)
+is what covers structured sessions, exactly as this project's own CLAUDE.md
+"Prompt files" rule (edited externally by the user, never programmatically
+overwritten) requires. decisions — one deviation from the plan's literal
+"ARCH.md" wording, documented above (retargeted to `README.md`, the file that
+actually plays that role in this repo); also fixed CLAUDE.md's own header
+line (previously claimed `ARCH.md`/`PLAN.md` exist) to point at where
+architecture/status actually live, and hardened the new OpenCode Zen
+paragraph with an explicit "do not fix `strict: false` to `true`" note — both
+prompted by an advisor pass on the finished phase, which caught that the
+original wording would read as an invitation to "correct" a deliberate Phase 4
+decision. verification — verified: `.venv/bin/python -m pytest -q -m "not
+integration"` → 1377 passed, 2 skipped, 6 deselected, 0 failed — identical to
+Phase 6's baseline, as expected for a docs-only phase.
+
+**Known loose end, surfaced by the same advisor pass, NOT part of Phase 7's
+scope:** `jsa/pipeline/stages.py` carries an uncommitted, mechanical DRY
+refactor left over from the Phase 5 session (extracts the repeated
+`{"structured_schema": schema} if schema is not None else {}` idiom, used at
+every `start_session`/`restore_session` call site, into a single
+`_schema_kwargs` helper — no behavior change; `py_compile` clean, and the
+1377-passed count above was produced with this diff already in the tree). It
+predates this session (present at conversation start) and was never
+committed. Flagged to the user rather than committed unilaterally, per this
+project's "only commit when asked" rule.
+
+**Plan status: Done.** All seven phases (turn models/canonical normalization,
+prompt-assembly root/replay adapter, Anthropic forced tool-use, OpenCode Zen
+structured mode + downgrade, pipeline wiring + mode-aware self-heal, the
+permanent parity gate, and these docs) are implemented. "Done" means every
+phase is implemented and passing against fakes — it does NOT mean the
+Anthropic real-API gate is closed: Phase 6's own text calls the real-API
+schema-acceptance assertions "non-negotiable before structured mode is
+trusted as a default," and they remain UNVERIFIED — skipped for lack of
+`ANTHROPIC_API_KEY` in this environment. `supports_structured_output = True`
+for `anthropic` today regardless, so any `--backend anthropic` user is
+currently on that unverified path. This is a pre-existing gap in
+integration-test coverage carried forward from Phase 6, not something this
+docs phase could resolve.

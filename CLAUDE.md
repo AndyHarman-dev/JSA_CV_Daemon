@@ -1,10 +1,10 @@
 # CLAUDE.md — JSA Project Conventions
 
-This file records non-derivable conventions for all agents working on this project. Architecture details live in `ARCH.md`; implementation status lives in `PLAN.md`. Only things that would be unclear from reading the code belong here.
+This file records non-derivable conventions for all agents working on this project. This repo has no separate `ARCH.md`/`PLAN.md` — architecture lives in `README.md`'s "Architecture" section, and implementation status/history lives in the relevant plan file under `.opencode/plans/`. Only things that would be unclear from reading the code belong here.
 
 ---
 
-## Sentinel protocol — MANDATORY for all agent prompts
+## Sentinel protocol — MANDATORY for CLI backends, and the structured-output downgrade target
 
 Every prompt file (`jsa/prompts/PROMPT_CDADJUST.md`, `jsa/prompts/CVL_PROMPT.md`) **must** instruct the model to terminate every reply with exactly one of:
 
@@ -21,6 +21,131 @@ or
 ```
 
 This is not optional — the pipeline parser (`jsa/agents/protocol.py`) will raise `ProtocolError` and mark the job `failed` if the sentinel is absent or malformed. When writing or editing prompt stubs, always include this instruction prominently at the end of the system prompt.
+
+**This is the only channel for CLI backends** (`claude-cli`, `google-cli` — `supports_structured_output = False`), and it is also **where a structured-capable API backend lands the moment it downgrades** (OpenCode Zen, per-session, on an unparseable structured reply — see "Structured output (API backends)" below). Prompt files are never edited to describe structured mode; that section is composed onto the prompt at runtime instead — see below.
+
+## Structured output (API backends)
+
+The two HTTP API backends (`anthropic`, `opencode-zen`) can bypass the sentinel grammar
+entirely and get a provider-enforced JSON object back instead. This is additive — the
+sentinel protocol above is unchanged and is not being replaced or deprecated for CLI
+backends.
+
+**Capability flag.** `AgentBackend.supports_structured_output: ClassVar[bool]`
+(`jsa/agents/base.py`) is hard-coded per backend, never runtime-detected:
+`AnthropicAPIBackend` and `OpenCodeZenBackend` are `True`; `ClaudeCliBackend` and
+`GoogleCliBackend` are `False` (and never accept a `structured_schema` kwarg — under
+`stages.py`'s conditional-kwarg wiring, no caller ever offers one to a backend that can't
+use it, so adding an accept-and-ignore parameter to the CLI backends would be dead code).
+
+**Turn models and schema.** `jsa/schema/turn_models.py` holds one flat, non-nullable
+Pydantic model per stage — `FitVerdict{verdict, reason}` (both fields required, `reason`
+has no default: a bare verdict with no justification is a schema violation, not just weak
+prose), `CvTurn{kind, question, payload}`, `ClTurn{kind, question, payload}` — each
+`ConfigDict(extra="forbid")` with a cross-field validator enforcing payload-iff-`kind
+== "final"` / question-iff-`kind == "question"`. `STAGE_TURN_MODELS` maps `Stage` to its
+model; `json_schema_for(stage)` emits the strict-schema-clean JSON (`additionalProperties:
+false`, every property in `required`) that both backends embed verbatim in their request.
+`parse_structured_reply`/`parse_structured_reply_for_schema` do `json.loads` + `kind`
+routing ONLY — all semantic/cross-field validation stays stage-side in
+`_validate_final_content`, so the existing self-heal correction budget keeps working
+unmodified for both modes.
+
+**Session mode, not just capability.** A structured-*capable* backend is not always
+running in structured *mode* for a given session — OpenCode Zen can downgrade
+mid-session (below). `stages.py` computes `schema = _structured_schema_for(backend,
+stage)` once per invocation and threads `structured = schema is not None` through prompt
+assembly, `adapt_history`, and the `structured_schema=` kwarg passed to
+`start_session`/`restore_session` (never to `send_message` — both backends resolve it
+from the handle when omitted). The **fit stage resolves its own mode from the actual
+fit-backend instance** (which may differ from the pipeline's general-purpose backend via
+`--fit-model`/`fit_model`, see "Separate fit-assessment model" below) — a `google-cli` fit
+override always stays sentinel-mode regardless of what the rest of the pipeline is doing.
+
+**Prompt assembly.** `jsa/pipeline/prompt_assembly.py::assemble_system_prompt(prompt_text,
+*, language, structured_model=None, fit_verdict=False)` is the single composition root for
+ALL runtime prompt mutation (language directive + structured-output contract) — it
+replaced the old `_with_language_directive` at both call sites in `stages.py`. Structured
+sessions get an appended contract section (the stage's schema, explicit precedence over
+the prompt file's sentinel-format section, and a line against embedding sentinel markers
+inside JSON string values); prompt *files themselves* are never edited to describe
+structured mode, honoring the "prompt files are edited externally by the user" rule above.
+
+**Anthropic: forced tool-use.** `AnthropicAPIBackend` (`jsa/agents/anthropic_api.py`)
+implements structured mode as a forced tool call — `tools=[{"name": "respond",
+"input_schema": schema}]` + `tool_choice` forced — not the SDK's native
+`output_config`/`response_format` surface (confirmed unusable: it mandates recursive
+`additionalProperties: false`, which the turn models' nested `$defs`, e.g. `CVDocument`'s
+sections/entries, don't satisfy). `stop_reason == "max_tokens"` under forced tool-use is a
+`ProtocolError("structured reply truncated")`, not a silent empty reply.
+
+**OpenCode Zen: attempt structured, per-session downgrade.**
+`OpenCodeZenSessionHandle.structured_enabled` starts `True` whenever a schema was actually
+supplied, and flips to `False` — **for the rest of that session only, never persisted to
+the DB** — the first time `parse_structured_reply_for_schema` fails to parse a reply as
+valid JSON with a recognized `kind` (semantic/validation failures do NOT downgrade). Once
+downgraded, the handle falls through to the pre-existing sentinel nudge
+(`_parse_with_nudge`) with a mode-conditional nudge string, and every subsequent POST in
+that session omits `response_format`. A restart re-attempts structured mode from scratch —
+the downgrade flag is scoped to session flakiness, not a durable verdict on the model. The
+downgrade decision is made strictly outside `_call_api`'s existing `_MAX_ATTEMPTS` transient
+retry loop (see "OpenCode Zen backend" above): a malformed structured reply downgrades
+after exactly one API call, and a transient/quota/timeout failure never touches the
+downgrade flag either way. **`response_format` is sent with `"strict": false`, deliberately —
+do not "fix" this to `true`.** `json_schema_for(stage)`'s top-level union model IS
+strict-schema-clean (`additionalProperties: false`, all fields `required`), but its nested
+`$defs` (`CVDocument`/`Contact`/`Section`/`Entry`/`CoverLetter`, pulled in from
+`jsa/schema/cv.py`/`cover_letter.py`) are `extra="ignore"` with defaulted optional fields
+and are NOT recursively strict — the same reason Anthropic's native `output_config` surface
+was rejected in favor of forced tool-use (see below). `strict: true` would risk a wire-level
+rejection from a strict-schema-enforcing proxy for no benefit: the per-session downgrade
+above already covers a model that ignores the schema outright.
+
+**Canonical-form invariant — the DB never stores provider wire format.** `Message` rows
+always persist normalized union-JSON plain text (or, in sentinel mode, the sentinel-wrapped
+text exactly as today) — never a raw `tool_use` block, never an OpenCode Zen envelope. On
+replay, each row's own format is detected **by content, not by a persisted session-mode
+flag** (there isn't one — the zen downgrade flag above is explicitly never persisted, so a
+resumed/rebuilt session has no reliable "this session's mode was X" to consult): a row
+starting with `<<<` is sentinel-wrapped, a row starting with `{` is canonical structured
+JSON. `jsa/schema/turn_models.py`'s `wrap_canonical_for_sentinel` /
+`unwrap_sentinel_to_canonical` / `adapt_history(history, *, structured: bool)` convert each
+row to match the *destination* session's actual mode at every `restore_session` call site
+in `stages.py` — fresh/resume `cv_adjust` and `cover_letter`, and both the
+fresh-revision and mid-revision-resume branches of `revising_cv`/`revising_cl` (the
+revision path matters because `backend_switch_reset` does NOT delete the original stage's
+Messages on a revision-stage BF-19 switch — see `jsa/db/repo.py`'s docstring — so a
+structured-mode `cv_adjust` history is a real, reachable replay target for a sentinel-only
+backend after a fallback switch). **The `structured_schema=` kwarg and the
+`adapt_history(structured=...)` flag at any one call site must always be computed from the
+same single destination-mode decision** — passing one without the other replays
+cross-format rows unadapted into the wrong-mode session.
+
+**BF-19 interaction.** A structured-mode `ProtocolError` raised by `run_stage` (fresh-session
+or resumed) is **not** an immediate hard fail — it spends the same
+`MAX_FINAL_CORRECTIONS`-budget self-heal mechanism sentinel-mode failures already get,
+via mode-aware correction text (no sentinel markers mentioned). Only once that budget is
+exhausted does it propagate to `_advance_backend_or_fail` like any other stage failure —
+see "Backend fallback chain (BF-19)" below. Two different recovery shapes exist depending
+on whether a session handle already exists: a fresh-session failure (no handle yet) retries
+by re-issuing the *whole* `start_session` call unmodified; a resumed/revision failure (handle
+exists) sends a corrective follow-up turn instead. `_run_fit_assessment`'s
+`ProtocolError`-only catch (see "Backend fallback chain (BF-19)" below) still applies
+unchanged to structured mode — a truncated or unparseable fit reply still fails closed to
+the `unfit` modal in one shot, it does not get the multi-turn correction budget fit stage
+never had.
+
+**Observability.** Every stage invocation logs a `LogEvent` naming its active mode:
+`structured`, `sentinel`, or `sentinel (downgraded)`.
+
+**Equivalence invariant (parity gate).** `tests/backend/test_mode_parity.py` asserts that
+for the same logical payload, a sentinel-mode reply and a structured-mode reply produce
+identical `Document.structured`, `Document.markdown`, `Job.fit_reason` + state, and
+`FollowUp.question` text. This is a **permanent** regression gate, not a one-time migration
+check — the sentinel path is not going away for CLI backends, so the two paths must keep
+agreeing on observable output indefinitely. (Raw `Message` text is explicitly out of scope
+for this equivalence — `wrap_canonical_for_sentinel` emits compact JSON where a real
+sentinel-mode reply is usually pretty-printed; that's a cosmetic difference, not a bug.)
 
 ---
 
@@ -80,6 +205,13 @@ chain's job. (`_handle_limit_reached` / `_handle_backend_timeout` /
 differ in these message strings — before the timeout fix, `AgentTimeout` had no wrapper at
 all and fell straight into `_run_one`'s generic `except Exception`, hard-failing the job on
 the very first backend even with a working fallback configured in `--backends`.)
+
+**Structured-mode note:** a `ProtocolError` from a structured session is not routed
+straight into this chain the way `AgentLimitReached`/`AgentTimeout`/
+`AgentBackendUnavailable` are — it first spends the self-heal correction budget (mode-aware
+wording, no sentinel mentioned) inside `run_stage`, and only reaches BF-19 once that budget
+is exhausted. See "Structured output (API backends)" above for the full mechanism; this
+does not change anything about the three exception types this section covers.
 
 **`_run_fit_assessment` (`jsa/pipeline/stages.py`) catches `ProtocolError` ONLY —
 `AgentTimeout`, `AgentLimitReached`, and `AgentBackendUnavailable` must propagate through
