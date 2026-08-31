@@ -616,3 +616,50 @@ Phase 1-2 was 1259 — +64 = 35 parity + 29 backend tests; ruff is configured in
 pyproject but not installed in either environment, so `py_compile` + the suite
 stand in for it). Real-API integration coverage remains deferred to Phase 6
 per plan (see the Phase 6 addendum).
+
+**2026-08-30**: context — verified Phase 3 landed clean (the system `python3`
+gave 379 false failures for lacking `pytest-asyncio`; the repo's `.venv` is the
+correct environment and reproduced Phase 3's own recorded 1323-passed
+baseline exactly; code re-read against this plan's Desired State found no
+discrepancies), then implemented Phase 4 (OpenCode Zen structured mode +
+per-session downgrade). actions — per an advisor consult, implemented inline
+(this file carries CLAUDE.md's most invariant-dense classification logic; a
+cold subagent risked re-breaking it) with the retry/downgrade boundary decided
+up front: `_parse_structured_with_downgrade` sits strictly outside `_call_api`'s
+`_MAX_ATTEMPTS` retry loop, so a malformed structured reply downgrades after
+exactly one API call and a transient/quota/timeout failure never touches the
+downgrade flag. `OpenCodeZenSessionHandle` gains `structured_schema` +
+`structured_enabled` (established at start/restore from whether a schema was
+actually supplied, never unconditional `True`); `_active_schema` collapses to
+`None` once downgraded regardless of what the caller keeps passing.
+`parse_structured_reply_for_schema` failures (unparseable JSON / missing-
+invalid `kind` only — semantic payload validation stays out of scope, per the
+plan) fall through to the existing `_parse_with_nudge` with a new mode-
+conditional nudge (`_DOWNGRADE_NUDGE_TEXT`). Tests: 22 new in
+`test_opencode_zen.py` (74 total), including the two crossed-case tests
+advisor asked for by name (transient-then-success leaves `structured_enabled`
+True; a retry keeps sending `response_format`), a mid-conversation downgrade
+test (advisor: the constructor-only test missed the `send_message` mutation
+path — the more likely real-world shape), and a pinned fit-verdict-downgrade
+test. decisions — two left open by the plan's prose, decided and documented
+in-code: (1) `strict: false` on `response_format` (the turn models' nested
+`$defs` aren't recursively strict; the downgrade path already covers a model
+that ignores the schema, so `false` costs nothing); (2) a 4xx
+`response_format` rejection is classified identically to any other 4xx
+(`AgentBackendUnavailable`, unretried) rather than downgrading — indistinguish-
+able from a bad model/config at the error-body level, and the existing 3-way
+classification already refuses to guess at upstream error-type strings;
+flagged in-code for Phase 6's integration tests. Mode `LogEvent` is explicitly
+NOT implemented here (backends have no DB session; it belongs in `stages.py`,
+Phase 5's territory — Phase 4 only produces the flag Phase 5 will read).
+Two more advisor findings resolved: an unterminated-sentinel edge case inside
+the downgrade nudge (documented in-code, left as-is — it still propagates to
+Phase 5's self-heal budget correctly, just doesn't also downgrade) and the
+fit-verdict stage's nudge cost (this backend is stage-agnostic and has no
+one-shot-fit awareness, so a malformed fit reply nudges like any other stage —
+pinned by a test, flagged for Phase 5 to decide whether that needs upstream
+handling). verification — verified: `pytest -q -m "not integration"` (via
+`.venv/bin/python`, the repo's correct venv — `venv` also works) → 1345
+passed, 2 skipped, 2 deselected, 0 failed (baseline 1323 + 22 new, no
+regressions); `py_compile` clean on both changed files (ruff still not
+installed in either venv, per Phase 3's own note).

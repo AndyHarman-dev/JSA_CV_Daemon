@@ -17,6 +17,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -30,10 +31,16 @@ from jsa.agents.base import (
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
+from jsa.schema.turn_models import parse_structured_reply_for_schema
 
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://opencode.ai/zen/v1/chat/completions"
+
+# Fixed response_format schema name — mirrors AnthropicAPIBackend's fixed tool name
+# ("respond"): the backend layer is stage-agnostic, so there is no per-stage name to
+# use here either.
+_RESPONSE_FORMAT_NAME = "structured_reply"
 
 # The free-tier models this backend proxies (nemotron-3-ultra-free by default) are
 # known to be flaky under upstream load: intermittent 5xx gateway errors, a JSON
@@ -60,6 +67,21 @@ _NUDGE_TEXT = (
     "<<<FINAL>>>\n<your final content>\n<<<END>>>"
 )
 
+# Mode-conditional variant used ONLY the turn a structured-mode session downgrades
+# (see _parse_structured_with_downgrade): the model was told a JSON-schema contract
+# applies this session, so the nudge must explicitly say that contract no longer
+# holds before restating the sentinel grammar — plain _NUDGE_TEXT's "was missing the
+# required sentinel block" would contradict what the model was actually instructed
+# to do moments ago.
+_DOWNGRADE_NUDGE_TEXT = (
+    "Disregard the structured-output/JSON-schema contract from earlier in this "
+    "session — it no longer applies. Restate your previous response using the "
+    "sentinel-block format instead, and end it with exactly one of:\n"
+    "<<<NEED_INPUT>>>\n<your question>\n<<<END>>>\n"
+    "or\n"
+    "<<<FINAL>>>\n<your final content>\n<<<END>>>"
+)
+
 
 @dataclass(kw_only=True)
 class OpenCodeZenSessionHandle(SessionHandle):
@@ -68,12 +90,37 @@ class OpenCodeZenSessionHandle(SessionHandle):
     external_id: str | None  # always None — REST API is stateless; history is in Message rows
     system_prompt: str       # stored so each send_message call can rebuild the messages array
     messages: list[dict] = field(default_factory=list)  # growing conversation list (no system entry)
+    # The schema established at start/restore time (None = this session never
+    # attempted structured mode — byte-identical to pre-Phase-4 behavior).
+    structured_schema: dict[str, Any] | None = None
+    # Per-session downgrade flag (NEVER persisted — a restart re-attempts structured,
+    # see the module docstring / structured-output plan's Locked decision #2). Only
+    # meaningful when structured_schema is not None; flips permanently to False the
+    # first time a structured reply is unparseable. Established at start/restore time
+    # from whether a schema was actually supplied — never defaulted to True
+    # unconditionally, or a restored session would claim structured mode while
+    # stages.py may have replayed sentinel-form history into it.
+    structured_enabled: bool = False
+
+
+def _active_schema(
+    handle: OpenCodeZenSessionHandle, explicit: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The schema actually in force for one call: None once the session has
+    downgraded, regardless of what the caller (stages.py) keeps passing in —
+    stages.py has no visibility into this backend-internal downgrade, so it will
+    keep supplying the stage's schema on every call; this is what makes that
+    inert post-downgrade."""
+    if not handle.structured_enabled:
+        return None
+    return explicit if explicit is not None else handle.structured_schema
 
 
 class OpenCodeZenBackend(AgentBackend):
     """AgentBackend implementation that calls the OpenCode Zen chat-completions API."""
 
     name = "opencode-zen"
+    supports_structured_output = True
 
     def __init__(self, model: str = "nemotron-3-ultra-free", timeout: float = 180.0) -> None:
         self._model = model
@@ -83,17 +130,22 @@ class OpenCodeZenBackend(AgentBackend):
         self,
         system_prompt: str,
         initial_user_msg: str,
+        structured_schema: dict[str, Any] | None = None,
     ) -> tuple[OpenCodeZenSessionHandle, AgentReply]:
         """Open a fresh session: send the initial user message and return the handle + first reply."""
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_api(system_prompt, messages)
-        reply = await self._parse_with_nudge(system_prompt, messages, raw)
+        raw = await self._call_api(system_prompt, messages, structured_schema)
+        reply, structured_enabled = await self._parse_structured_with_downgrade(
+            system_prompt, messages, raw, structured_schema
+        )
         messages.append({"role": "assistant", "content": reply.raw})
         handle = OpenCodeZenSessionHandle(
             id=str(uuid.uuid4()),
             external_id=None,
             system_prompt=system_prompt,
             messages=messages,
+            structured_schema=structured_schema,
+            structured_enabled=structured_enabled,
         )
         return handle, reply
 
@@ -102,10 +154,14 @@ class OpenCodeZenBackend(AgentBackend):
         system_prompt: str,
         history: list[HistoryTurn],
         external_id: str | None,
+        structured_schema: dict[str, Any] | None = None,
     ) -> OpenCodeZenSessionHandle:
         """Reconstruct a previously-ended session from persisted message history.
 
         Does NOT call the model — the restored handle is ready for send_message.
+        The session's structured mode is (re)established here from the caller's
+        schema argument, mirroring AnthropicSessionHandle — never defaulted to
+        True unconditionally (see OpenCodeZenSessionHandle.structured_enabled).
         """
         messages = [{"role": turn.role, "content": turn.content} for turn in history]
         handle = OpenCodeZenSessionHandle(
@@ -113,28 +169,110 @@ class OpenCodeZenBackend(AgentBackend):
             external_id=None,
             system_prompt=system_prompt,
             messages=messages,
+            structured_schema=structured_schema,
+            structured_enabled=structured_schema is not None,
         )
         return handle
 
-    async def send_message(self, handle: SessionHandle, text: str) -> AgentReply:
+    async def send_message(
+        self,
+        handle: SessionHandle,
+        text: str,
+        structured_schema: dict[str, Any] | None = None,
+    ) -> AgentReply:
         """Append a user turn, call the API, parse and store the assistant reply.
 
         Both turns are appended to handle.messages only after a successful API
-        call, keeping the list coherent if the call times out or raises.
+        call, keeping the list coherent if the call times out or raises. The
+        effective schema (see _active_schema) collapses to None once the session
+        has downgraded, regardless of what the caller keeps passing in.
         """
         if not isinstance(handle, OpenCodeZenSessionHandle):
             raise TypeError(
                 f"expected OpenCodeZenSessionHandle, got {type(handle).__name__}"
             )
+        schema = _active_schema(handle, structured_schema)
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_api(handle.system_prompt, pending_messages)
-        reply = await self._parse_with_nudge(handle.system_prompt, pending_messages, raw)
+        raw = await self._call_api(handle.system_prompt, pending_messages, schema)
+        reply, structured_enabled = await self._parse_structured_with_downgrade(
+            handle.system_prompt, pending_messages, raw, schema
+        )
         # Mutate only after success so handle stays consistent on error
+        handle.structured_enabled = structured_enabled
         handle.messages.append({"role": "user", "content": text})
         handle.messages.append({"role": "assistant", "content": reply.raw})
         return reply
 
-    async def _parse_with_nudge(self, system_prompt: str, messages: list[dict], raw: str) -> AgentReply:
+    async def _parse_structured_with_downgrade(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        raw: str,
+        schema: dict[str, Any] | None,
+    ) -> tuple[AgentReply, bool]:
+        """Parse ``raw`` per the session's current mode; downgrade to sentinel mode
+        on an unparseable/missing-``kind`` structured reply.
+
+        Called strictly AFTER ``_call_api`` has already returned successfully — a
+        transient/quota/timeout failure never reaches this method and therefore
+        never touches the downgrade flag (that classification lives entirely in
+        ``_call_api``/``_call_api_once`` and is untouched by this method). Only a
+        parse-layer ``ProtocolError`` from ``parse_structured_reply_for_schema``
+        (invalid JSON or a missing/invalid ``kind`` — see turn_models.py) triggers
+        a downgrade; that function deliberately does not run CV/cover-letter
+        semantic validation, so a real content problem in the payload never
+        reaches here either — it surfaces downstream in `_validate_final_content`
+        exactly like the sentinel path's failures do.
+
+        ``schema is None`` means this call was never in structured mode to begin
+        with (never requested, or already downgraded by an earlier turn in this
+        session) — go straight to the plain sentinel path, byte-identical to
+        pre-Phase-4 behavior.
+
+        Returns ``(reply, structured_enabled)`` — the caller persists the second
+        value onto the handle.
+
+        Edge case, deliberately left as-is rather than special-cased: if ``raw``
+        itself contains an open ``<<<`` marker with no ``<<<END>>>`` (a model
+        confusedly mixing sentinel text into its malformed JSON attempt),
+        ``_parse_with_nudge``'s first ``parse_reply(raw)`` call raises
+        ``"unterminated block"`` instead of ``"no sentinel block"`` and
+        re-raises immediately (its own "any other ProtocolError" rule) —
+        propagating out of this method BEFORE the ``return reply, False`` below
+        ever runs, so the caller's ``handle.structured_enabled`` write is
+        skipped and the session stays structured for its next turn. This is
+        acceptable, not a bug: the ProtocolError still propagates to Phase 5's
+        self-heal budget exactly as an ordinary structured-mode failure would,
+        it just means this specific double-malformed shape doesn't also
+        downgrade. Also applies uniformly to the fit-verdict schema — this
+        method has no per-stage knowledge, so a malformed fit reply nudges
+        (and thus costs a second API call) exactly like cv/cl turns do, even
+        though `_run_fit_assessment` treats the stage as one-shot; see
+        ``TestStructuredFitVerdict.test_malformed_fit_reply_still_nudges`` in
+        tests/backend/test_opencode_zen.py, pinned for Phase 5's attention.
+        """
+        if schema is None:
+            return await self._parse_with_nudge(system_prompt, messages, raw), False
+        try:
+            return parse_structured_reply_for_schema(raw, schema), True
+        except ProtocolError as exc:
+            logger.warning(
+                "OpenCode Zen structured reply unparseable (%s) — downgrading this "
+                "session to sentinel mode for its remaining turns",
+                exc,
+            )
+            reply = await self._parse_with_nudge(
+                system_prompt, messages, raw, nudge_text=_DOWNGRADE_NUDGE_TEXT
+            )
+            return reply, False
+
+    async def _parse_with_nudge(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        raw: str,
+        nudge_text: str = _NUDGE_TEXT,
+    ) -> AgentReply:
         """Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once.
 
         The free-tier models this backend proxies (e.g. the default
@@ -149,6 +287,14 @@ class OpenCodeZenBackend(AgentBackend):
         assistant turn, so a successful nudge is transparent to the caller — the
         intermediate nudge exchange itself is not persisted, same as the CLI backend.
         Any other ProtocolError, or a second failure, is re-raised immediately.
+
+        Also reached, via ``_parse_structured_with_downgrade``, on a structured-mode
+        reply that never wrapped its bare JSON in sentinels at all — ``parse_reply``
+        raises the same "no sentinel block" ProtocolError for that raw text, so the
+        trigger check below fires identically; only ``nudge_text`` differs (a
+        downgrade passes ``_DOWNGRADE_NUDGE_TEXT``). The follow-up POST below never
+        passes a ``structured_schema`` — a downgrade's nudge call must stay in
+        sentinel mode, and an already-sentinel-mode session never had one to omit.
         """
         try:
             return parse_reply(raw)
@@ -157,7 +303,7 @@ class OpenCodeZenBackend(AgentBackend):
                 raise
             nudge_messages = messages + [
                 {"role": "assistant", "content": raw},
-                {"role": "user", "content": _NUDGE_TEXT},
+                {"role": "user", "content": nudge_text},
             ]
             raw2 = await self._call_api(system_prompt, nudge_messages)
             return parse_reply(raw2)  # Propagate on second failure
@@ -170,7 +316,12 @@ class OpenCodeZenBackend(AgentBackend):
             )
         handle.messages.clear()
 
-    async def _call_api(self, system_prompt: str, messages: list[dict]) -> str:
+    async def _call_api(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        structured_schema: dict[str, Any] | None = None,
+    ) -> str:
         """POST to the OpenCode Zen endpoint, retrying transient overload/gateway
         failures on THIS backend up to _MAX_ATTEMPTS before giving up.
 
@@ -181,11 +332,17 @@ class OpenCodeZenBackend(AgentBackend):
         cv_adjust/cover_letter stage's wall-clock budget before BF-19 ever gets a
         chance to switch backends. Only the free-tier's known-flaky overload/gateway
         signals (raised as _TransientOpenCodeError by _call_api_once) get retried here.
+        ``structured_schema`` (when not None) is forwarded unchanged to every retry
+        attempt — this loop retries the SAME request, never changes its shape; the
+        structured→sentinel downgrade lives one layer up, entirely outside this loop
+        (see _parse_structured_with_downgrade), so a malformed structured reply never
+        burns retry budget here and a transient HTTP failure never touches the
+        downgrade flag.
         """
         last_exc: _TransientOpenCodeError | None = None
         for attempt in range(_MAX_ATTEMPTS):
             try:
-                return await self._call_api_once(system_prompt, messages)
+                return await self._call_api_once(system_prompt, messages, structured_schema)
             except _TransientOpenCodeError as exc:
                 last_exc = exc
                 if attempt < _MAX_ATTEMPTS - 1:
@@ -199,7 +356,12 @@ class OpenCodeZenBackend(AgentBackend):
             f"OpenCode Zen API still failing after {_MAX_ATTEMPTS} attempts: {last_exc}"
         ) from None
 
-    async def _call_api_once(self, system_prompt: str, messages: list[dict]) -> str:
+    async def _call_api_once(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        structured_schema: dict[str, Any] | None = None,
+    ) -> str:
         """Single POST to the OpenCode Zen chat-completions endpoint; classifies
         and raises on any failure. Never retries itself — see _call_api.
 
@@ -207,13 +369,43 @@ class OpenCodeZenBackend(AgentBackend):
         matching AnthropicAPIBackend's connection-pool hygiene. `await
         client.post(...)` is a real async operation, so Orchestrator.cancel_task()'s
         task.cancel() can interrupt it directly at this await point.
+
+        A 4xx caused specifically by ``response_format``/``json_schema`` being
+        unsupported by a given proxied model is, from the JSON error body alone,
+        indistinguishable from a genuinely bad model name or malformed request —
+        both are structured 4xx error bodies with no reliable ``type``/message
+        marker to key off (the existing 3-way classification below already commits
+        to never guessing at upstream error-type strings for exactly this reason).
+        Deliberately NOT special-cased here: it is classified identically to any
+        other 4xx, below — AgentBackendUnavailable, unretried, engaging BF-19 to
+        switch backends. This is narrower than "every structured-output failure
+        downgrades to sentinel" — a model that emits non-conforming JSON downgrades
+        (see _parse_structured_with_downgrade), but a proxy that rejects
+        response_format at the wire level takes the whole backend out of the
+        fallback chain instead. Flagged for Phase 6's integration tests to observe
+        whether this actually occurs against the free-tier proxy in practice.
         """
         api_key = os.environ.get("OPENCODE_API_KEY", "")
-        payload = {
+        payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "system", "content": system_prompt}, *messages],
             "max_tokens": 8192,
         }
+        if structured_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": _RESPONSE_FORMAT_NAME,
+                    # Not strict: the turn models' nested $defs (CVDocument/CoverLetter)
+                    # are deliberately NOT recursively strict (extra="ignore", defaulted
+                    # optional fields — see turn_models.py's module docstring), which a
+                    # strict:true json_schema mode would reject. The per-session
+                    # downgrade path already exists to handle a model/proxy that doesn't
+                    # honor the schema, so strict:false costs nothing here.
+                    "strict": False,
+                    "schema": structured_schema,
+                },
+            }
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
             response = await client.post(

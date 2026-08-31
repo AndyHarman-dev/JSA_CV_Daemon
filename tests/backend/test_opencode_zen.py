@@ -10,6 +10,7 @@ All tests are async; asyncio_mode = "auto" is set in pyproject.toml.
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -18,6 +19,8 @@ import pytest
 from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentTimeout, HistoryTurn
 from jsa.agents.opencode_zen import OpenCodeZenBackend, OpenCodeZenSessionHandle
 from jsa.agents.protocol import ProtocolError
+from jsa.db.models import Stage
+from jsa.schema.turn_models import json_schema_for
 
 
 @pytest.fixture(autouse=True)
@@ -637,3 +640,296 @@ class TestTypeErrorOnWrongHandle:
         backend = OpenCodeZenBackend()
         with pytest.raises(TypeError, match="OpenCodeZenSessionHandle"):
             await backend.end_session(wrong_handle)
+
+
+# ---------------------------------------------------------------------------
+# Structured output (Phase 4) — capability flag, request shape, replies,
+# per-session downgrade, and retry/downgrade independence.
+# ---------------------------------------------------------------------------
+
+CV_SCHEMA = json_schema_for(Stage.cv_adjust)
+FIT_SCHEMA = json_schema_for(Stage.fit_assessment)
+
+
+def _cv_payload() -> dict:
+    return {
+        "contact": {"name": "Jane Doe", "email": "jane.doe@example.com"},
+        "sections": [{"name": "Summary", "text": "Senior engineer."}],
+    }
+
+
+def _structured_final_body(payload: dict) -> dict:
+    return _completion_body(json.dumps({"kind": "final", "question": None, "payload": payload}))
+
+
+def _structured_question_body(question: str) -> dict:
+    return _completion_body(json.dumps({"kind": "question", "question": question, "payload": None}))
+
+
+class TestSupportsStructuredOutput:
+    def test_flag_is_true(self):
+        assert OpenCodeZenBackend.supports_structured_output is True
+
+
+class TestStructuredRequestShape:
+    async def test_response_format_sent_when_schema_given(self):
+        mock_client = _make_mock_client(_structured_final_body(_cv_payload()))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        call_kwargs = mock_client.post.call_args.kwargs
+        rf = call_kwargs["json"]["response_format"]
+        assert rf["type"] == "json_schema"
+        assert rf["json_schema"]["schema"] == CV_SCHEMA
+        assert rf["json_schema"]["strict"] is False
+
+    async def test_no_response_format_when_schema_none(self):
+        """None-schema → byte-identical to pre-Phase-4 payload shape."""
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            await backend.start_session("sys", "msg")
+        call_kwargs = mock_client.post.call_args.kwargs
+        assert "response_format" not in call_kwargs["json"]
+
+
+class TestStructuredFinalReply:
+    async def test_kind_final_and_content_is_payload(self):
+        payload = _cv_payload()
+        mock_client = _make_mock_client(_structured_final_body(payload))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            _, reply = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert reply.kind == "final"
+        assert json.loads(reply.content) == payload
+
+    async def test_raw_is_canonical_json_not_provider_envelope(self):
+        payload = _cv_payload()
+        mock_client = _make_mock_client(_structured_final_body(payload))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            _, reply = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert reply.raw.startswith("{")
+        assert json.loads(reply.raw) == {"kind": "final", "question": None, "payload": payload}
+
+    async def test_handle_structured_schema_and_enabled_stamped(self):
+        mock_client = _make_mock_client(_structured_final_body(_cv_payload()))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, _ = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert handle.structured_schema == CV_SCHEMA
+        assert handle.structured_enabled is True
+
+
+class TestStructuredQuestionReply:
+    async def test_kind_needs_input_and_question_populated(self):
+        mock_client = _make_mock_client(_structured_question_body("Which dates?"))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            _, reply = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert reply.kind == "needs_input"
+        assert reply.question == "Which dates?"
+        assert reply.content == "Which dates?"
+
+
+class TestStructuredFitVerdict:
+    async def test_fit_content_matches_sentinel_parser_shape(self):
+        body = _completion_body(json.dumps({"verdict": "UNFIT", "reason": "no relevant experience"}))
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            _, reply = await backend.start_session("sys", "msg", structured_schema=FIT_SCHEMA)
+        assert reply.kind == "final"
+        assert reply.content == "UNFIT\nno relevant experience"
+
+    async def test_malformed_fit_reply_still_nudges(self):
+        """Pinned per advisor: this method has no per-stage knowledge of the
+        fit_assessment stage's one-shot policy (_run_fit_assessment catches
+        ProtocolError and parks at the 'unfit' modal with no resume path) — a
+        malformed fit-schema reply downgrades-and-nudges exactly like a cv/cl
+        turn does, costing a second API call before the ProtocolError-or-recovery
+        outcome reaches the stage. Flagged for Phase 5's attention: whether the
+        fit stage should special-case this upstream is an open question this
+        phase deliberately does not resolve at the backend layer."""
+        mock_client = _make_mock_client_sequence(["not json at all", FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, reply = await backend.start_session("sys", "msg", structured_schema=FIT_SCHEMA)
+        assert reply.raw == FINAL_RAW
+        assert handle.structured_enabled is False
+        assert mock_client.post.call_count == 2
+
+
+class TestSemanticFailureDoesNotDowngrade:
+    async def test_structurally_valid_but_semantically_incomplete_payload_no_downgrade(self):
+        """parse_structured_reply_for_schema only checks isinstance(payload, dict) —
+        real CV-content validation happens downstream in _validate_final_content, not
+        here — so a structurally-valid-but-semantically-incomplete payload (missing
+        required CV fields) must parse successfully and must NOT trigger a downgrade
+        or a second API call."""
+        mock_client = _make_mock_client(_structured_final_body({}))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, reply = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert reply.kind == "final"
+        assert handle.structured_enabled is True
+        assert mock_client.post.call_count == 1
+
+
+class TestRestoreSessionStructured:
+    async def test_schema_given_enables_structured(self):
+        backend = OpenCodeZenBackend()
+        handle = await backend.restore_session(
+            "sys", [], external_id=None, structured_schema=CV_SCHEMA
+        )
+        assert handle.structured_schema == CV_SCHEMA
+        assert handle.structured_enabled is True
+
+    async def test_schema_none_disables_structured(self):
+        """A restored session is NOT unconditionally structured-enabled — it must be
+        established from the caller's schema argument, or a restore whose history
+        was replayed in sentinel form would claim structured mode it never earned."""
+        backend = OpenCodeZenBackend()
+        handle = await backend.restore_session("sys", [], external_id=None)
+        assert handle.structured_schema is None
+        assert handle.structured_enabled is False
+
+
+class TestDowngradeOnUnparseableStructuredReply:
+    async def test_non_json_reply_downgrades_and_nudge_recovers(self):
+        mock_client = _make_mock_client_sequence(["not json at all", FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, reply = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert reply.kind == "final"
+        assert reply.raw == FINAL_RAW
+        assert handle.structured_enabled is False
+        assert mock_client.post.call_count == 2
+
+    async def test_missing_kind_downgrades_and_nudge_recovers(self):
+        malformed = json.dumps({"question": None, "payload": _cv_payload()})  # no "kind"
+        mock_client = _make_mock_client_sequence([malformed, FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, reply = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert reply.kind == "final"
+        assert handle.structured_enabled is False
+
+    async def test_downgrade_nudge_uses_mode_conditional_wording(self):
+        mock_client = _make_mock_client_sequence(["not json at all", FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        nudge_call_kwargs = mock_client.post.call_args_list[1].kwargs
+        nudge_user_msg = nudge_call_kwargs["json"]["messages"][-1]["content"]
+        assert "no longer applies" in nudge_user_msg
+
+    async def test_downgrade_costs_exactly_one_api_call_before_the_nudge(self):
+        """The malformed structured reply must not burn the in-backend
+        _MAX_ATTEMPTS retry budget — downgrade is a parse-layer decision made
+        strictly after _call_api has already returned successfully, so the
+        malformed attempt plus the recovery nudge is exactly 2 calls, never 3+."""
+        mock_client = _make_mock_client_sequence(["not json at all", FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert mock_client.post.call_count == 2
+
+    async def test_nudge_call_omits_response_format(self):
+        mock_client = _make_mock_client_sequence(["not json at all", FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        nudge_call_kwargs = mock_client.post.call_args_list[1].kwargs
+        assert "response_format" not in nudge_call_kwargs["json"]
+
+    async def test_downgrade_persists_to_subsequent_send_message_calls(self):
+        """The downgrade flag sticks for the rest of the session: a later
+        send_message call must never re-attempt response_format, even though the
+        caller (stages.py) has no visibility into this backend-internal state and
+        keeps passing the stage's schema on every call."""
+        mock_client = _make_mock_client_sequence(["not json at all", FINAL_RAW, FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, _ = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+            await backend.send_message(handle, "follow-up", structured_schema=CV_SCHEMA)
+        third_call_kwargs = mock_client.post.call_args_list[2].kwargs
+        assert "response_format" not in third_call_kwargs["json"]
+        assert handle.structured_enabled is False
+
+    async def test_second_failure_after_downgrade_propagates_protocol_error(self):
+        """If the nudge's own reply also lacks a sentinel block, the ordinary
+        second-failure propagation applies unchanged."""
+        mock_client = _make_mock_client_sequence(["not json at all", "still not json"])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            with pytest.raises(ProtocolError):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+    async def test_downgrade_occurring_mid_conversation_on_send_message(self):
+        """The more likely real-world shape: the session STARTS structured and its
+        first turn parses fine; the downgrade only happens on a later send_message
+        turn. This is the path where handle.structured_enabled's mutation inside
+        send_message (as opposed to the constructor call in start_session) actually
+        matters, and where a leaked nudge turn would first become visible."""
+        mock_client = _make_mock_client_sequence(
+            [
+                json.dumps({"kind": "final", "question": None, "payload": _cv_payload()}),
+                "not json at all",  # second turn: malformed, triggers downgrade
+                FINAL_RAW,  # nudge recovery
+                FINAL_RAW,  # third turn: sentinel mode from here on
+            ]
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, first_reply = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+            assert handle.structured_enabled is True
+
+            second_reply = await backend.send_message(handle, "turn 2", structured_schema=CV_SCHEMA)
+            assert handle.structured_enabled is False
+            assert second_reply.raw == FINAL_RAW
+
+            third_reply = await backend.send_message(handle, "turn 3", structured_schema=CV_SCHEMA)
+        assert third_reply.raw == FINAL_RAW
+        third_call_kwargs = mock_client.post.call_args_list[3].kwargs
+        assert "response_format" not in third_call_kwargs["json"]
+        # No leaked nudge turns: 2 turns per send_message (user + assistant), none
+        # from the intermediate downgrade-nudge exchange.
+        assert len(handle.messages) == 6
+        assert [m["role"] for m in handle.messages] == [
+            "user", "assistant", "user", "assistant", "user", "assistant",
+        ]
+
+
+class TestRetryDowngradeIndependence:
+    async def test_transient_error_then_successful_structured_reply_stays_enabled(self):
+        """A 5xx followed by a valid structured reply must leave structured_enabled
+        True — the in-backend transient-retry loop and the parse-layer downgrade
+        must never interfere with each other."""
+        responses = [
+            (502, {"detail": "boom"}, None),
+            (200, _structured_final_body(_cv_payload()), None),
+        ]
+        mock_client = _make_mock_client_response_sequence(responses)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, reply = await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert reply.kind == "final"
+        assert handle.structured_enabled is True
+        assert mock_client.post.call_count == 2  # one in-loop retry, no downgrade nudge
+
+    async def test_retry_attempts_keep_sending_response_format(self):
+        """Each retry attempt inside _call_api retries the SAME request — the
+        schema must not silently drop out on a retried attempt."""
+        responses = [
+            (502, {"detail": "boom"}, None),
+            (200, _structured_final_body(_cv_payload()), None),
+        ]
+        mock_client = _make_mock_client_response_sequence(responses)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        for call in mock_client.post.call_args_list:
+            assert "response_format" in call.kwargs["json"]
