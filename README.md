@@ -74,7 +74,7 @@ flowchart LR
 
 - **Orchestrator** (`jsa/pipeline/orchestrator.py`) polls `list_runnable_jobs()` and dispatches work under an `asyncio.Semaphore(5)`, so at most 5 jobs run concurrently. Every blocking call (WeasyPrint, python-docx, pypdf, CLI subprocesses) is wrapped in `asyncio.to_thread`.
 - **Stage runner** (`jsa/pipeline/stages.py`) drives one stage (`fit_assessment`, `cv_adjust`, `cover_letter`, `revising_cv`, `revising_cl`) against an `AgentBackend`, expecting a reply that ends in the sentinel grammar below.
-- **Sentinel protocol** (`jsa/agents/protocol.py`) — every agent reply must terminate with exactly one of:
+- **Sentinel protocol** (`jsa/agents/protocol.py`) — the CLI backends (`claude-cli`, `google-cli`) and any downgraded API session terminate every reply with exactly one of:
   ```
   <<<NEED_INPUT>>>
   <question to the user>
@@ -87,6 +87,7 @@ flowchart LR
   <<<END>>>
   ```
   A missing or malformed sentinel raises `ProtocolError` and the job is marked `failed` — this is enforced, not advisory.
+- **Structured output** — the two API backends (`anthropic`, `opencode-zen`) skip the sentinel grammar and get a provider-enforced JSON object back instead (Anthropic via forced tool-use, OpenCode Zen via `response_format`), validated against a per-stage Pydantic schema (`jsa/schema/turn_models.py`). OpenCode Zen downgrades to sentinel mode per-session if a reply comes back unparseable; the database always stores the same normalized canonical text either way, so mixing modes across a BF-19 backend switch or a resumed session is transparent to the rest of the pipeline.
 - **State machine** (`jsa/pipeline/state_machine.py`) is the single source of truth for legal transitions; `Job.state` and `Job.current_stage` are never set directly.
 - **Checkpointing** — every state-changing write goes through `repo.checkpoint()`, a single atomic transaction that writes the new `Job` state, any `Message` rows, and any `Document` row together. This is what makes crash recovery lossless.
 - **Rendering** happens once, when a job *enters* `review` (on cover-letter completion or any revision) — not on approve. `approve` only flips `review → approved`; re-export is available on demand afterward.

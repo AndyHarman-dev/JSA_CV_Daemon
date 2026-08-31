@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
 
 
 class AgentTimeout(Exception):
@@ -62,6 +62,22 @@ class AgentBackend(ABC):
     cancellation. See jsa/agents/_subprocess.py's module docstring."""
 
     name: str                                   # "claude-cli" | "google-cli" | "anthropic" | "opencode-zen"
+
+    # True only for backends whose wire protocol can enforce a JSON schema on the
+    # model's reply (Anthropic forced tool-use, OpenCode Zen's response_format). CLI
+    # backends have no such channel and stay on the sentinel grammar unconditionally.
+    # Hard-coded per backend (not runtime-detected) — see the structured-output plan's
+    # "Locked decisions" #1.
+    #
+    # Contract: a backend that sets this True MUST accept an optional
+    # ``structured_schema: dict | None = None`` keyword on ``start_session`` and
+    # ``restore_session`` (anthropic, opencode-zen; also any structured-capable test
+    # fake — see tests/backend/fakes/fake_backend.py). ``jsa/pipeline/stages.py``
+    # passes that kwarg ONLY when it has a non-None schema for the backend in hand, so
+    # a backend that leaves this False (every CLI backend) is never asked to accept
+    # it — do not add an unused accept-and-ignore parameter to a backend that stays
+    # False; there is no call site that would ever supply it.
+    supports_structured_output: ClassVar[bool] = False
 
     @abstractmethod
     async def start_session(
