@@ -81,6 +81,22 @@ class FitVerdict(BaseModel):
     reason: str
 
 
+def _check_payload_iff_final(
+    kind: Literal["question", "final"], question: str | None, payload: Any
+) -> None:
+    """Shared iff-rule for ``CvTurn``/``ClTurn``: payload present iff final, question
+    present iff question. Raising ``ValueError`` inside a ``model_validator`` is how
+    Pydantic surfaces a validation failure, so this is called from each model's own
+    ``mode="after"`` validator rather than shared as a validator itself (pydantic
+    validators are bound per-model)."""
+    if kind == "final":
+        if payload is None:
+            raise ValueError("kind='final' requires a non-null `payload`")
+    else:  # kind == "question"
+        if question is None:
+            raise ValueError("kind='question' requires a non-null `question`")
+
+
 class CvTurn(BaseModel):
     """The cv_adjust / revising_cv stages' structured reply shape.
 
@@ -98,12 +114,7 @@ class CvTurn(BaseModel):
 
     @model_validator(mode="after")
     def _payload_iff_final(self) -> "CvTurn":
-        if self.kind == "final":
-            if self.payload is None:
-                raise ValueError("kind='final' requires a non-null `payload`")
-        else:  # kind == "question"
-            if self.question is None:
-                raise ValueError("kind='question' requires a non-null `question`")
+        _check_payload_iff_final(self.kind, self.question, self.payload)
         return self
 
 
@@ -118,12 +129,7 @@ class ClTurn(BaseModel):
 
     @model_validator(mode="after")
     def _payload_iff_final(self) -> "ClTurn":
-        if self.kind == "final":
-            if self.payload is None:
-                raise ValueError("kind='final' requires a non-null `payload`")
-        else:  # kind == "question"
-            if self.question is None:
-                raise ValueError("kind='question' requires a non-null `question`")
+        _check_payload_iff_final(self.kind, self.question, self.payload)
         return self
 
 
@@ -142,7 +148,11 @@ def json_schema_for(stage: Stage) -> dict[str, Any]:
     """The JSON schema a structured-output backend should enforce for ``stage``."""
     if stage is Stage.fit_assessment:
         return FitVerdict.model_json_schema()
-    return STAGE_TURN_MODELS[stage].model_json_schema()
+    try:
+        model = STAGE_TURN_MODELS[stage]
+    except KeyError:
+        raise ValueError(f"no structured turn model for stage {stage!r}") from None
+    return model.model_json_schema()
 
 
 def _parse_fit_structured(raw: str, data: Any) -> AgentReply:
@@ -158,21 +168,19 @@ def _parse_fit_structured(raw: str, data: Any) -> AgentReply:
     return AgentReply(raw=raw, content=content, kind="final", question=None)
 
 
-def parse_structured_reply(raw: str, stage: Stage) -> AgentReply:
-    """Parse a structured-output backend's raw reply text into an ``AgentReply``.
-
-    ``json.loads`` + ``kind`` routing only — see the module docstring's "Reply parsing"
-    section for why this deliberately does not run ``CvTurn``/``ClTurn`` model validation.
-    Raises ``ProtocolError`` on invalid JSON or an unrecognized/missing ``kind`` (or, for
-    ``fit_assessment``, an invalid ``verdict``/``reason``) — the same exception the
-    sentinel path raises on a malformed reply, so both paths converge on one failure type.
-    """
+def _load_structured_json(raw: str) -> Any:
     try:
-        data = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ProtocolError(f"structured reply unparseable: invalid JSON ({exc})") from exc
 
-    if stage is Stage.fit_assessment:
+
+def _route_structured_data(raw: str, data: Any, *, is_fit: bool) -> AgentReply:
+    """Shared routing core behind both ``parse_structured_reply`` (stage-keyed) and
+    ``parse_structured_reply_for_schema`` (schema-keyed, see below) — the two entry
+    points differ only in HOW they compute ``is_fit``, never in what happens after.
+    """
+    if is_fit:
         return _parse_fit_structured(raw, data)
 
     if not isinstance(data, dict):
@@ -191,6 +199,49 @@ def parse_structured_reply(raw: str, stage: Stage) -> AgentReply:
         return AgentReply(raw=raw, content=json.dumps(payload), kind="final", question=None)
 
     raise ProtocolError(f"structured reply unparseable: invalid 'kind' {kind!r}")
+
+
+def parse_structured_reply(raw: str, stage: Stage) -> AgentReply:
+    """Parse a structured-output backend's raw reply text into an ``AgentReply``.
+
+    ``json.loads`` + ``kind`` routing only — see the module docstring's "Reply parsing"
+    section for why this deliberately does not run ``CvTurn``/``ClTurn`` model validation.
+    Raises ``ProtocolError`` on invalid JSON or an unrecognized/missing ``kind`` (or, for
+    ``fit_assessment``, an invalid ``verdict``/``reason``) — the same exception the
+    sentinel path raises on a malformed reply, so both paths converge on one failure type.
+
+    Stage-keyed entry point: for callers holding the ``Stage`` enum (there are none in
+    production yet — see ``parse_structured_reply_for_schema`` below for who actually
+    calls this family of functions today). Kept because 33 tests in
+    ``test_turn_models.py`` already hang off this exact signature from Phase 1.
+    """
+    data = _load_structured_json(raw)
+    return _route_structured_data(raw, data, is_fit=(stage is Stage.fit_assessment))
+
+
+def parse_structured_reply_for_schema(raw: str, schema: dict[str, Any]) -> AgentReply:
+    """Schema-keyed sibling of ``parse_structured_reply``, for call sites that hold a
+    ``json_schema_for(stage)`` result rather than the ``Stage`` enum itself.
+
+    This is the one production backends actually call: ``AnthropicAPIBackend``
+    (Phase 3) receives ``structured_schema`` at call time — not ``Stage`` — because the
+    backend layer is deliberately stage-agnostic (it only knows "here is the schema to
+    enforce"), matching how the sentinel path's ``parse_reply(raw)`` already takes no
+    stage either. Routing is derived from the schema's own top-level ``properties``: the
+    turn-union models (``CvTurn``/``ClTurn``) always declare a ``kind`` property;
+    ``FitVerdict`` never does — so ``"kind" not in schema["properties"]`` is an exact,
+    schema-shape-based stand-in for ``stage is Stage.fit_assessment``, with no risk of
+    misclassifying an actual reply payload (the check runs against the fixed schema,
+    never against whatever the model happened to return).
+
+    Equivalence with ``parse_structured_reply`` for the same logical payload is asserted
+    by ``test_turn_models.py``'s ``TestSchemaKeyedParityWithStageKeyed`` — the two entry
+    points share ``_route_structured_data`` so they cannot silently diverge, but the test
+    pins the observable behavior anyway.
+    """
+    data = _load_structured_json(raw)
+    is_fit = "kind" not in schema.get("properties", {})
+    return _route_structured_data(raw, data, is_fit=is_fit)
 
 
 # ---------------------------------------------------------------------------

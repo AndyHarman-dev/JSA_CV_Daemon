@@ -371,6 +371,39 @@ Fit-capability trap (see above), self-heal double-application between wire-level
 vs semantic violations, and keeping sentinel CLI behavior byte-identical — all
 addressed explicitly.
 
+**Carry-forwards from Phase 3's advisor verification (2026-08-30, locked before
+Phase 5 writes its first line):**
+1. **Fresh-session ProtocolError has no handle.** `start_session` constructs the
+   handle only AFTER a successful parse, so a structured-mode ProtocolError from
+   the fresh paths (cv_adjust start, fit start) leaves nothing to `send_message`
+   a correction to — the naive `try/ProtocolError → budget` wrap falls through to
+   the orchestrator's generic except and hard-fails on the first backend (the
+   exact failure BF-19 exists to prevent). Budget attempts for fresh-session
+   failures must re-issue the WHOLE `start_session` (idempotent, same args);
+   budget attempts for `send_message` failures (resume/revision, handle exists)
+   are corrective re-sends. Two different recovery shapes — design both, and add
+   an end-to-end test for the fresh case, not just the send case.
+2. **One boolean must drive both the kwarg and the adapter.** At every
+   `restore_session` call site, the `structured_schema=` kwarg and
+   `adapt_history(structured=...)` must be computed from ONE destination-mode
+   decision — passing one without the other replays cross-format rows unadapted
+   and silently breaks the named invariant (highest risk on the BF-19
+   CLI→anthropic switch path). Pin with a test: sentinel rows restored into a
+   structured anthropic session arrive unwrapped.
+3. **Correction texts are sentinel-worded.** `_CV_CORRECTION`/`_CL_CORRECTION`/
+   `_CV_SUMMARY_NUDGE` (stages.py:250–269) all say "inside one
+   `<<<FINAL>>>…<<<END>>>` block" — in a structured session this contradicts the
+   prompt's structured contract and invites literal sentinel markers inside JSON
+   string values. Structured sessions need mode-conditional variants ("re-emit a
+   corrected object conforming to the schema"). `_reprompt` itself needs no
+   change — it already relies on the handle-carried schema.
+
+Also noted there (advisor, Phase 5 awareness): `_run_fit_assessment`'s existing
+`ProtocolError → unfit-modal` catch now also absorbs truncation/refusal-shaped
+structured errors — fail-closed to the modal is correct per the locked doctrine,
+and Phase 5 must NOT widen that except toward `AgentTimeout`/`AgentLimitReached`
+(CLAUDE.md documents that exact historical bug and its two regression tests).
+
 **Solutions**
 - Edits localized to `jsa/pipeline/stages.py` (plus new imports),
   `tests/backend/fakes/fake_backend.py`, and accept-and-ignore kwarg signatures on
@@ -395,6 +428,16 @@ and identical `FollowUp.question` text. Module docstring + commit message frame
 it as a PERMANENT equivalence invariant (not a deletion gate — the sentinel path
 lives forever for CLIs). Marked integration tests for real anthropic + zen
 (opt-in `pytest -m integration`).
+
+**Phase 3 advisor addendum (2026-08-30): the anthropic integration tests are
+non-negotiable before structured mode is trusted as a default.** Every Phase-3
+test stubs the SDK boundary, so nothing has yet verified that the REAL API (a)
+accepts pydantic's `model_json_schema()` output as a tool `input_schema` — it
+carries `"title"`, nested `$defs`, and `anyOf: [string, null]` nullables (a 400
+here means the whole mechanism is wrong), (b) that forced `tool_choice` actually
+yields `stop_reason="tool_use"` with these schemas, and (c) that the fit schema
+behaves. All three must be asserted by the marked integration tests in this
+phase.
 
 **Problems/Bugs**
 None new.
@@ -517,3 +560,59 @@ skipped, 2 deselected, 0 failed (full suite, not just the new files); the
 pre-existing `tests/backend/test_language_directive.py` (end-to-end
 `run_stage` coverage of the language directive) passed unchanged, serving as
 a second, independent regression signal beyond the new golden-fixture test.
+
+**2026-08-30**: context — implemented Phase 3 (Anthropic backend structured
+mode via forced tool-use), continuing the prior session that had consulted the
+advisor and applied the schema-keyed-parser half of `turn_models.py` before
+hitting its session limit (intake + locked guidance preserved in
+`phase 3 antropic backend.txt`). actions — completed
+`parse_structured_reply_for_schema` in `jsa/schema/turn_models.py` (schema-keyed
+sibling sharing the private `_route_structured_data` core with the stage-keyed
+`parse_structured_reply`; `is_fit` derived from the fixed schema's own
+properties — `"kind" not in schema["properties"]` — never from the reply
+payload); rewrote `jsa/agents/anthropic_api.py`: `supports_structured_output =
+True`, forced tool-use behind a two-function adapter (`_forced_tool_kwargs` +
+`_extract_structured_text`: `tools=[{"name":"respond","input_schema":schema}]`
++ `tool_choice` forced; `stop_reason == "max_tokens"` checked BEFORE extraction
+→ `ProtocolError("structured reply truncated")`; content blocks scanned for
+the tool_use block, never `content[0]`; canonical JSON via
+`json.dumps(input, ensure_ascii=False)`); `AnthropicSessionHandle` carries
+`structured_schema` (mode established at start/restore; `send_message` defaults
+to the handle's schema, an explicit non-None kwarg overrides for that call);
+all three session methods gain the additive `structured_schema=None` kwarg;
+sentinel path byte-identical to pre-phase (no tools kwargs, `content[0].text`,
+pinned by a wire-level parity test). Tests: `TestSchemaKeyedParityWithStageKeyed`
+(35: equivalence over all 5 stages, error parity, routing-derivation
+independence) + 10 new backend classes (29: request shape, final/question
+routing, canonical-raw invariant, scan-not-index, truncation incl.
+before-extraction ordering + handle coherence on error, no-tool-block,
+parse-level tool-input errors, fit-verdict routing via the schema, handle-
+carried + override semantics, exception mapping in structured mode, capability
+flag). decisions — advisor verification (done-gate) returned GO with zero
+deviations from the prior session's locked guidance; two LOW findings applied
+immediately (the explicit-override test; `ensure_ascii=False` so DB Message
+rows — which persist `reply.raw` — stay readable UTF-8; every consumer
+json.loads's it, so semantically irrelevant); any-tool_use-block matching (not
+`name == "respond"`) kept per advisor — with one tool offered and tool_choice
+forced, any tool_use IS respond, and name-matching adds rename fragility;
+truncation/no-tool-block ProtocolErrors propagate raw from the backend
+(recovery policy stays in `run_stage`, matching this backend's existing
+no-nudge philosophy). Three carry-forwards locked into Phase 5's
+Problems/Bugs above (fresh-session ProtocolError has no handle → budget must
+re-issue the whole start_session; one destination-mode boolean must drive both
+the schema kwarg and `adapt_history`; sentinel-worded correction texts need
+structured variants), and Phase 6 gained the non-negotiable real-API assertions
+(schema acceptance, forced-tool completion shape, fit schema). One pre-existing
+out-of-scope gap flagged as a follow-up (persisted to agent memory): anthropic
+maps only `RateLimitError` into the BF-19 family — `InternalServerError`/
+`APIConnectionError` propagate raw and hard-fail on the first backend. Also
+re-confirmed against the live SDK 0.104.1 during implementation: the native
+`output_config` structured-outputs mechanism exists but mandates recursive
+`additionalProperties: false` (unsatisfiable by the nested `$defs`), validating
+the locked forced-tool-use choice; `ToolParam` requires only `name` +
+`input_schema`. verification — verified: `pytest -q -m "not integration"` →
+1323 passed, 2 skipped, 2 deselected, 0 failed (full suite; baseline after
+Phase 1-2 was 1259 — +64 = 35 parity + 29 backend tests; ruff is configured in
+pyproject but not installed in either environment, so `py_compile` + the suite
+stand in for it). Real-API integration coverage remains deferred to Phase 6
+per plan (see the Phase 6 addendum).

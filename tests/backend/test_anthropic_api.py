@@ -9,12 +9,17 @@ All tests are async; asyncio_mode = "auto" is set in pyproject.toml.
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from jsa.agents.anthropic_api import AnthropicAPIBackend, AnthropicSessionHandle
-from jsa.agents.base import AgentTimeout, HistoryTurn
+from jsa.agents.base import AgentLimitReached, AgentTimeout, HistoryTurn
+from jsa.agents.protocol import ProtocolError
+from jsa.db.models import Stage
+from jsa.schema.cv import CVDocument
+from jsa.schema.turn_models import json_schema_for
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +38,38 @@ def _make_mock_client(text: str) -> MagicMock:
     """
     mock_response = MagicMock()
     mock_response.content = [MagicMock(text=text)]
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+    mock_client.close = AsyncMock()
+    return mock_client
+
+
+def _text_block(text: str) -> MagicMock:
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    return block
+
+
+def _tool_block(tool_input: dict) -> MagicMock:
+    block = MagicMock()
+    block.type = "tool_use"
+    block.input = tool_input
+    return block
+
+
+def _make_mock_block_client(
+    content_blocks: list,
+    stop_reason: str = "tool_use",
+) -> MagicMock:
+    """Mock client whose messages.create returns an arbitrary block list + stop_reason.
+
+    Used for structured-mode responses (tool_use blocks, truncation, missing
+    tool_use) — the caller composes the exact content-block scenario.
+    """
+    mock_response = MagicMock()
+    mock_response.stop_reason = stop_reason
+    mock_response.content = content_blocks
     mock_client = MagicMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
     mock_client.close = AsyncMock()
@@ -451,3 +488,430 @@ class TestTypeErrorOnWrongHandle:
         backend = AnthropicAPIBackend()
         with pytest.raises(TypeError, match="AnthropicSessionHandle"):
             await backend.end_session(wrong_handle)
+
+
+# ---------------------------------------------------------------------------
+# 11 — Structured mode: forced tool-use request shape
+# ---------------------------------------------------------------------------
+
+CV_SCHEMA = json_schema_for(Stage.cv_adjust)
+FIT_SCHEMA = json_schema_for(Stage.fit_assessment)
+TOOL_USE_KWARGS = {"tools": [{"name": "respond", "input_schema": CV_SCHEMA}],
+                   "tool_choice": {"type": "tool", "name": "respond"}}
+
+
+def _cv_payload() -> dict:
+    return {
+        "contact": {"name": "Jane Doe", "email": "jane.doe@example.com"},
+        "sections": [{"name": "Summary", "text": "Senior engineer."}],
+    }
+
+
+class TestStructuredForcedToolRequest:
+    async def test_tools_and_tool_choice_sent_when_schema_given(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": _cv_payload()})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["tools"] == [{"name": "respond", "input_schema": CV_SCHEMA}]
+        assert call_kwargs["tool_choice"] == {"type": "tool", "name": "respond"}
+
+    async def test_no_tools_kwargs_when_schema_none(self):
+        """None-schema → sentinel parity at the wire level: no tools/tool_choice sent."""
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            await backend.start_session("sys", "msg")
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert "tools" not in call_kwargs
+        assert "tool_choice" not in call_kwargs
+
+    async def test_model_max_tokens_system_unchanged_in_structured_mode(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": _cv_payload()})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend(model="claude-opus-4-7")
+            await backend.start_session(
+                "my system", "msg", structured_schema=CV_SCHEMA
+            )
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["model"] == "claude-opus-4-7"
+        assert call_kwargs["max_tokens"] == 8192
+        assert call_kwargs["system"] == "my system"
+
+
+# ---------------------------------------------------------------------------
+# 12 — Structured mode: final reply through the tool_use block
+# ---------------------------------------------------------------------------
+
+class TestStructuredFinalReply:
+    async def test_kind_final_and_content_is_reserialized_payload(self):
+        payload = _cv_payload()
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": payload})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            _, reply = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        assert reply.kind == "final"
+        assert json.loads(reply.content) == payload
+
+    async def test_raw_is_canonical_json_not_provider_envelope(self):
+        payload = _cv_payload()
+        tool_input = {"kind": "final", "question": None, "payload": payload}
+        mock_client = _make_mock_block_client([_tool_block(tool_input)])
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            _, reply = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        # Canonical-form invariant: raw is bare union-JSON text (persisted verbatim
+        # into Message rows), never a tool_use block or provider envelope.
+        assert reply.raw.startswith("{")
+        assert json.loads(reply.raw) == tool_input
+
+    async def test_handle_assistant_turn_is_canonical_json(self):
+        payload = _cv_payload()
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": payload})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle, _ = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        assistant_turn = handle.messages[1]
+        assert assistant_turn["role"] == "assistant"
+        # Starts with "{" — the property the replay adapter's content-based
+        # detection (jsa/schema/turn_models.py) keys off.
+        assert assistant_turn["content"].startswith("{")
+
+    async def test_handle_structured_schema_stamped(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": _cv_payload()})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle, _ = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        assert handle.structured_schema == CV_SCHEMA
+
+    async def test_content_validates_downstream_as_cvdocument(self):
+        """The structured path's content is byte-compatible with the sentinel path:
+        the same CVDocument validation the sentinel path runs succeeds on it."""
+        payload = _cv_payload()
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": payload})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            _, reply = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        assert CVDocument.model_validate(json.loads(reply.content)).contact.name == "Jane Doe"
+
+
+# ---------------------------------------------------------------------------
+# 13 — Structured mode: question reply
+# ---------------------------------------------------------------------------
+
+class TestStructuredQuestionReply:
+    async def test_kind_needs_input_and_question_populated(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "question", "question": "Which dates?", "payload": None})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            _, reply = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        assert reply.kind == "needs_input"
+        assert reply.question == "Which dates?"
+        assert reply.content == "Which dates?"
+
+
+# ---------------------------------------------------------------------------
+# 14 — Structured mode: tool_use block is scanned, not indexed at content[0]
+# ---------------------------------------------------------------------------
+
+class TestStructuredScanNotFirstBlock:
+    async def test_text_block_before_tool_block_still_extracted(self):
+        """A model under forced tool-use may emit preamble text before the tool
+        call — extraction must scan for the tool_use block, not read content[0]."""
+        mock_client = _make_mock_block_client(
+            [_text_block("Let me look at the JD first..."), _tool_block(
+                {"kind": "final", "question": None, "payload": _cv_payload()}
+            )]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            _, reply = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        assert reply.kind == "final"
+        assert json.loads(reply.content) == _cv_payload()
+
+
+# ---------------------------------------------------------------------------
+# 15 — Structured mode: truncation + missing tool_use block
+# ---------------------------------------------------------------------------
+
+class TestStructuredTruncation:
+    async def test_max_tokens_stop_reason_raises_truncation_protocol_error(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final"})], stop_reason="max_tokens"
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="truncated"):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+    async def test_truncation_checked_before_extraction(self):
+        """stop_reason is checked BEFORE scanning content: even an empty block
+        list with max_tokens reports truncation, not 'no tool_use block'."""
+        mock_client = _make_mock_block_client([], stop_reason="max_tokens")
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="truncated"):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+    async def test_truncated_reply_not_appended_to_handle(self):
+        """send_message mutates handle.messages only after success — a truncation
+        ProtocolError leaves the conversation list coherent."""
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final"})], stop_reason="max_tokens"
+        )
+        handle = AnthropicSessionHandle(
+            id="t", external_id=None, system_prompt="sys",
+            messages=[{"role": "user", "content": "first"}],
+            structured_schema=CV_SCHEMA,
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="truncated"):
+                await backend.send_message(handle, "follow-up")
+        assert handle.messages == [{"role": "user", "content": "first"}]
+
+    async def test_no_tool_use_block_raises_protocol_error(self):
+        mock_client = _make_mock_block_client(
+            [_text_block("I cannot answer that.")], stop_reason="end_turn"
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="no tool_use block"):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+
+# ---------------------------------------------------------------------------
+# 16 — Structured mode: model violated its own tool schema (parse-level errors)
+# ---------------------------------------------------------------------------
+
+class TestStructuredParseErrorsFromToolInput:
+    async def test_invalid_kind_in_tool_input(self):
+        mock_client = _make_mock_block_client([_tool_block({"kind": "bogus"})])
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="kind"):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+    async def test_missing_kind_in_tool_input(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"question": None, "payload": _cv_payload()})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="kind"):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+    async def test_final_without_payload_in_tool_input(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": None})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="payload"):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+
+# ---------------------------------------------------------------------------
+# 17 — Structured mode: fit verdict (schema-keyed routing — no Stage in the backend)
+# ---------------------------------------------------------------------------
+
+class TestStructuredFitVerdict:
+    async def test_fit_verdict_content_reuses_fit_parser_shape(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"verdict": "FIT", "reason": "JD and profile align on backend depth"})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            _, reply = await backend.start_session(
+                "sys", "msg", structured_schema=FIT_SCHEMA
+            )
+        assert reply.kind == "final"
+        # The exact "VERDICT\nreason" shape _parse_fit_verdict (stages.py) consumes.
+        assert reply.content == "FIT\nJD and profile align on backend depth"
+
+    async def test_unfit_verdict_round_trips(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"verdict": "UNFIT", "reason": "requires 15+ years, candidate has 4"})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            _, reply = await backend.start_session(
+                "sys", "msg", structured_schema=FIT_SCHEMA
+            )
+        assert reply.content == "UNFIT\nrequires 15+ years, candidate has 4"
+
+    async def test_missing_reason_in_tool_input_rejected(self):
+        mock_client = _make_mock_block_client([_tool_block({"verdict": "FIT"})])
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ProtocolError, match="reason"):
+                await backend.start_session(
+                    "sys", "msg", structured_schema=FIT_SCHEMA
+                )
+
+
+# ---------------------------------------------------------------------------
+# 18 — Structured mode: the handle carries the session's schema
+# ---------------------------------------------------------------------------
+
+class TestStructuredHandleCarriesSchema:
+    async def test_send_message_without_kwarg_stays_structured(self):
+        """The session's mode is established at start_session and carried on the
+        handle — follow-up send_message calls keep forced tool-use with no kwarg."""
+        payload = _cv_payload()
+        # Two separate clients: start_session reply, then the send_message reply.
+        first = _make_mock_block_client(
+            [_tool_block({"kind": "question", "question": "Which dates?", "payload": None})]
+        )
+        second = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": payload})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=first):
+            backend = AnthropicAPIBackend()
+            handle, reply = await backend.start_session(
+                "sys", "msg", structured_schema=CV_SCHEMA
+            )
+        assert reply.kind == "needs_input"
+        with patch("anthropic.AsyncAnthropic", return_value=second):
+            reply2 = await backend.send_message(handle, "2020-2023")
+        assert reply2.kind == "final"
+        assert json.loads(reply2.content) == payload
+        call_kwargs = second.messages.create.call_args.kwargs
+        assert call_kwargs["tools"] == [{"name": "respond", "input_schema": CV_SCHEMA}]
+        assert call_kwargs["tool_choice"] == {"type": "tool", "name": "respond"}
+
+    async def test_restore_session_stamps_schema(self):
+        backend = AnthropicAPIBackend()
+        history = [HistoryTurn(role="user", content="q")]
+        handle = await backend.restore_session(
+            "sys", history, external_id=None, structured_schema=CV_SCHEMA
+        )
+        assert handle.structured_schema == CV_SCHEMA
+
+    async def test_restored_structured_session_send_message_forces_tool(self):
+        first = _make_mock_client(FINAL_RAW)  # only used to have a patchable client
+        second = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": _cv_payload()})]
+        )
+        backend = AnthropicAPIBackend()
+        history = [
+            HistoryTurn(role="user", content="q"),
+            HistoryTurn(role="assistant", content='{"kind": "question", "question": "Q?", "payload": None}'),
+        ]
+        handle = await backend.restore_session(
+            "sys", history, external_id=None, structured_schema=CV_SCHEMA
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=second):
+            reply = await backend.send_message(handle, "the answer")
+        assert reply.kind == "final"
+        assert "tools" in second.messages.create.call_args.kwargs
+
+    async def test_restore_session_without_schema_defaults_sentinel(self):
+        mock_client = _make_mock_client(FINAL_RAW)
+        backend = AnthropicAPIBackend()
+        handle = await backend.restore_session("sys", [], external_id=None)
+        assert handle.structured_schema is None
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            reply = await backend.send_message(handle, "hello")
+        assert reply.kind == "final"
+        assert "tools" not in mock_client.messages.create.call_args.kwargs
+
+    async def test_explicit_kwarg_overrides_handle_schema(self):
+        """The documented override branch: a non-None kwarg wins over the handle's
+        schema for that call, while the handle's own schema is left untouched."""
+        payload = {"verdict": "FIT", "reason": "aligns on backend depth"}
+        mock_client = _make_mock_block_client([_tool_block(payload)])
+        handle = AnthropicSessionHandle(
+            id="t", external_id=None, system_prompt="sys",
+            messages=[{"role": "user", "content": "q"}],
+            structured_schema=CV_SCHEMA,
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            reply = await backend.send_message(
+                handle, "text", structured_schema=FIT_SCHEMA
+            )
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["tools"] == [{"name": "respond", "input_schema": FIT_SCHEMA}]
+        assert reply.kind == "final"
+        assert reply.content == "FIT\naligns on backend depth"
+        # The handle's session mode itself is not mutated by a one-call override.
+        assert handle.structured_schema == CV_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# 19 — Structured mode: exception mapping untouched
+# ---------------------------------------------------------------------------
+
+class TestStructuredExceptionMapping:
+    async def test_timeout_raises_agent_timeout_in_structured_mode(self):
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(999)
+
+        mock_client = MagicMock()
+        mock_client.messages.create = hang
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend(timeout=0.01)
+            with pytest.raises(AgentTimeout):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+    async def test_rate_limit_raises_agent_limit_reached_in_structured_mode(self):
+        import anthropic
+
+        rate_limit_error = anthropic.RateLimitError(
+            message="Rate limit exceeded",
+            response=MagicMock(),
+            body={},
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=rate_limit_error)
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentLimitReached):
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+
+
+# ---------------------------------------------------------------------------
+# 20 — Structured-mode capability flag
+# ---------------------------------------------------------------------------
+
+class TestSupportsStructuredOutput:
+    def test_class_flag_is_true(self):
+        assert AnthropicAPIBackend.supports_structured_output is True
+
+    def test_registry_instance_flag_is_true(self):
+        from jsa.agents.registry import backend_for
+        assert backend_for("anthropic").supports_structured_output is True

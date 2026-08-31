@@ -30,6 +30,7 @@ from jsa.schema.turn_models import (
     FitVerdict,
     json_schema_for,
     parse_structured_reply,
+    parse_structured_reply_for_schema,
 )
 
 
@@ -231,3 +232,95 @@ class TestParseStructuredReplyFit:
     def test_non_object_top_level_raises_protocol_error(self):
         with pytest.raises(ProtocolError):
             parse_structured_reply(json.dumps("FIT"), Stage.fit_assessment)
+
+
+# ---------------------------------------------------------------------------
+# parse_structured_reply_for_schema — schema-keyed sibling MUST behave exactly
+# like the stage-keyed entry point (this is what production backends call:
+# AnthropicAPIBackend receives structured_schema, never a Stage). The two share
+# _route_structured_data so they cannot silently diverge; this class pins the
+# observable equivalence anyway (AgentReply is a frozen dataclass, so == is
+# field-wise).
+# ---------------------------------------------------------------------------
+
+_TURN_STAGES = [
+    Stage.cv_adjust,
+    Stage.revising_cv,
+    Stage.cover_letter,
+    Stage.revising_cl,
+]
+
+
+class TestSchemaKeyedParityWithStageKeyed:
+    @pytest.mark.parametrize("stage", _TURN_STAGES)
+    def test_final_reply_equivalent(self, stage):
+        cv = _cv_dict() if stage in (Stage.cv_adjust, Stage.revising_cv) else _cl_dict()
+        raw = json.dumps({"kind": "final", "question": None, "payload": cv})
+        assert parse_structured_reply_for_schema(
+            raw, json_schema_for(stage)
+        ) == parse_structured_reply(raw, stage)
+
+    @pytest.mark.parametrize("stage", _TURN_STAGES)
+    def test_question_reply_equivalent(self, stage):
+        raw = json.dumps({"kind": "question", "question": "Which dates?", "payload": None})
+        assert parse_structured_reply_for_schema(
+            raw, json_schema_for(stage)
+        ) == parse_structured_reply(raw, stage)
+
+    @pytest.mark.parametrize("verdict", ["FIT", "UNFIT"])
+    def test_fit_verdict_equivalent(self, verdict):
+        raw = json.dumps({"verdict": verdict, "reason": "aligns on backend depth"})
+        assert parse_structured_reply_for_schema(
+            raw, json_schema_for(Stage.fit_assessment)
+        ) == parse_structured_reply(raw, Stage.fit_assessment)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "not json{",
+            json.dumps({"question": None, "payload": {}}),      # missing kind
+            json.dumps({"kind": "bogus"}),                       # invalid kind
+            json.dumps({"kind": "final", "payload": None}),      # final w/o payload
+            json.dumps([1, 2, 3]),                               # non-object top level
+        ],
+        ids=["invalid-json", "missing-kind", "invalid-kind", "final-no-payload", "non-object"],
+    )
+    @pytest.mark.parametrize("stage", _TURN_STAGES)
+    def test_protocol_error_parity_turn(self, raw, stage):
+        with pytest.raises(ProtocolError):
+            parse_structured_reply(raw, stage)
+        with pytest.raises(ProtocolError):
+            parse_structured_reply_for_schema(raw, json_schema_for(stage))
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "not json{",
+            json.dumps({"verdict": "FIT"}),                      # missing reason
+            json.dumps({"verdict": "MAYBE", "reason": "unsure"}),  # invalid verdict
+            json.dumps("FIT"),                                   # non-object top level
+        ],
+        ids=["invalid-json", "missing-reason", "invalid-verdict", "non-object"],
+    )
+    def test_protocol_error_parity_fit(self, raw):
+        with pytest.raises(ProtocolError):
+            parse_structured_reply(raw, Stage.fit_assessment)
+        with pytest.raises(ProtocolError):
+            parse_structured_reply_for_schema(raw, json_schema_for(Stage.fit_assessment))
+
+    def test_routing_is_derived_from_schema_shape_not_payload(self):
+        """The is_fit decision reads the fixed schema's properties, never the reply:
+        a turn-union schema (has "kind") routes a fit-shaped payload to the turn
+        branch (and vice versa) — derivation and payload are independent."""
+        fit_schema = json_schema_for(Stage.fit_assessment)
+        turn_schema = json_schema_for(Stage.cv_adjust)
+        # fit payload through a turn schema → invalid kind, NOT fit routing
+        with pytest.raises(ProtocolError, match="kind"):
+            parse_structured_reply_for_schema(
+                json.dumps({"verdict": "FIT", "reason": "x"}), turn_schema
+            )
+        # turn payload through a fit schema → invalid verdict, NOT turn routing
+        with pytest.raises(ProtocolError, match="verdict"):
+            parse_structured_reply_for_schema(
+                json.dumps({"kind": "final", "payload": _cv_dict()}), fit_schema
+            )
