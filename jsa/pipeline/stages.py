@@ -44,7 +44,7 @@ from jsa.events.schema import (
 from jsa.pipeline.checkpoints import checkpoint
 from jsa.pipeline.prompt_assembly import assemble_system_prompt
 from jsa.prompts import loader
-from jsa.schema.turn_models import adapt_history
+from jsa.schema.turn_models import adapt_history, json_schema_for
 from jsa.store import cv_structure as cv_structure_store
 from jsa.store import preferences as preferences_store
 
@@ -183,6 +183,8 @@ def _parse_structured(
     label: str,
     job_id: str | None = None,
     language: str = "en",
+    *,
+    structured: bool = False,
 ) -> BaseModel:
     """Parse a FINAL payload as JSON and validate it against ``model``.
 
@@ -195,15 +197,29 @@ def _parse_structured(
     ``language`` is passed through as validation context (``{"language": language}``);
     only ``CVDocument``'s content-kind guard reads it (to pick the right per-language
     letter-formula pattern) — other models ignore the unused context key harmlessly.
+
+    ``structured`` (default ``False``) selects only the trailing re-emit sentence's
+    wording — the sentinel-mode text (``structured=False``) is byte-identical to before
+    this parameter existed, since it is also the job's persisted ``error`` column on a
+    hard fail that existing tests may pin. A structured-mode session never sees a
+    sentinel-block instruction; the schema is enforced on the wire (forced tool-use /
+    ``response_format``), not by prompt wording, so the trailing sentence only needs to
+    tell the model to re-emit via its structured reply shape instead.
     """
     text = _strip_code_fence(content)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         _capture_failed_payload(label, job_id, content, f"invalid JSON: {exc}")
+        reemit = (
+            "Re-emit ONLY a single JSON object conforming to the schema as your "
+            "structured reply's `payload`."
+            if structured
+            else "Re-emit ONLY a single JSON object conforming to the schema inside "
+            "<<<FINAL>>>...<<<END>>>."
+        )
         raise FinalContentError(
-            f"{label} FINAL block was not valid JSON ({exc}). Re-emit ONLY a single JSON "
-            "object conforming to the schema inside <<<FINAL>>>...<<<END>>>."
+            f"{label} FINAL block was not valid JSON ({exc}). {reemit}"
         ) from exc
     try:
         return model.model_validate(data, context={"language": language})
@@ -215,14 +231,18 @@ def _parse_structured(
         reasons = "; ".join(
             e.get("msg", "").removeprefix("Value error, ") for e in exc.errors()
         ) or "the payload did not conform to the schema"
+        reemit = (
+            "Re-emit a corrected JSON object as your structured reply's `payload`."
+            if structured
+            else "Re-emit a corrected JSON object inside <<<FINAL>>>...<<<END>>>."
+        )
         raise FinalContentError(
-            f"{label} JSON did not match the required schema: {reasons}. Re-emit a corrected "
-            "JSON object inside <<<FINAL>>>...<<<END>>>."
+            f"{label} JSON did not match the required schema: {reasons}. {reemit}"
         ) from exc
 
 
 def _validate_final_content(
-    stage: Stage, content: str, job: Job, language: str = "en"
+    stage: Stage, content: str, job: Job, language: str = "en", *, structured: bool = False
 ) -> BaseModel | None:
     """Parse + validate a FINAL payload for the given stage.
 
@@ -234,13 +254,64 @@ def _validate_final_content(
 
     ``language`` (default ``"en"``) is threaded through to ``_parse_structured`` for the
     ``CVDocument`` content-kind guard's per-language letter-formula matching.
+
+    ``structured`` (default ``False``) is threaded through to ``_parse_structured`` for
+    its mode-aware re-emit wording — both call sites (``_self_heal_final`` and
+    ``_handle_final``) must pass the SAME value for a given stage invocation, or the
+    self-heal loop's correction and the authoritative gate's hard-fail error would
+    describe two different reply shapes.
     """
     job_id = job.id if job is not None else None
     if stage in (Stage.cv_adjust, Stage.revising_cv):
-        return _parse_structured(content, CVDocument, "cv_adjust", job_id, language)
+        return _parse_structured(
+            content, CVDocument, "cv_adjust", job_id, language, structured=structured
+        )
     if stage in (Stage.cover_letter, Stage.revising_cl):
-        return _parse_structured(content, CoverLetter, "cover_letter", job_id, language)
+        return _parse_structured(
+            content, CoverLetter, "cover_letter", job_id, language, structured=structured
+        )
     return None
+
+
+def _structured_schema_for(backend: AgentBackend, stage: Stage) -> dict | None:
+    """The JSON schema to enforce for ``stage`` on ``backend``, or ``None``.
+
+    ``None`` covers both "this backend cannot enforce structured output" (CLI backends;
+    ``supports_structured_output`` is a hard-coded per-backend ClassVar, see
+    ``jsa/agents/base.py``) and, by construction, "sentinel mode" everywhere downstream
+    — every call site in this module treats ``schema is not None`` as the single
+    destination-mode boolean (the structured-output plan's advisor-locked invariant:
+    one boolean drives the ``structured_schema`` kwarg, ``adapt_history``, the self-heal
+    wording, and the wire-level retry budget alike).
+    """
+    return json_schema_for(stage) if backend.supports_structured_output else None
+
+
+async def _log_session_mode(
+    job: Job, stage: Stage, schema: dict | None, handle: SessionHandle
+) -> None:
+    """Log the session's actual mode once, right after it is established.
+
+    Logged AFTER the call that establishes it (start_session, or restore_session +
+    its first send_message) rather than from ``schema`` alone — OpenCode Zen's
+    per-session downgrade means a schema was requested but the session may already be
+    sentinel-only by the time this runs, and only the handle (not the schema argument)
+    reflects that outcome. ``getattr(..., True)`` defaults a handle with no
+    ``structured_enabled`` attribute (AnthropicSessionHandle, any CLI SessionHandle) to
+    "not downgraded" — the only backend that can downgrade is OpenCode Zen, and it
+    always sets the attribute.
+    """
+    if schema is None:
+        mode = "sentinel"
+    elif getattr(handle, "structured_enabled", True) is False:
+        mode = "sentinel (downgraded)"
+    else:
+        mode = "structured"
+    await bus.publish(
+        event_to_dict(
+            LogEvent(job_id=job.id, level="info", text=f"Stage {stage.value}: session mode = {mode}")
+        )
+    )
 
 
 # How many times to re-prompt the same session when a FINAL block fails content
@@ -277,6 +348,47 @@ _CV_SUMMARY_NUDGE = (
     "commentary, no code fences."
 )
 
+# Structured-mode counterparts of the three sentinel-worded texts above. A structured
+# session's shape is enforced on the wire (forced tool-use / response_format), not by
+# prompt text, so these describe the {kind, payload} reply shape instead of a sentinel
+# block — never mention <<<FINAL>>>/<<<END>>> to a session that was told those markers
+# "don't apply this session" (see prompt_assembly.py's structured contract).
+_CV_CORRECTION_STRUCTURED = (
+    "Your previous reply's `payload` was not a valid CV object. Re-emit now: a JSON object "
+    "with `kind: \"final\"` and a `payload` conforming to the CV schema — a `contact` "
+    "object (name plus email and/or phone) and an ordered `sections` array mirroring the "
+    "base CV's sections. Leave `question` null. No prose or commentary outside the JSON "
+    "object."
+)
+_CL_CORRECTION_STRUCTURED = (
+    "Your previous reply's `payload` was not a valid cover-letter object. Re-emit now: a "
+    "JSON object with `kind: \"final\"` and a `payload` conforming to the cover-letter "
+    "schema — an optional `salutation`, a `paragraphs` array holding the letter's body "
+    "paragraphs, and an optional `signoff`. Leave `question` null."
+)
+_CV_SUMMARY_NUDGE_STRUCTURED = (
+    "Your CV `payload` is valid but is missing a Summary section. Re-emit the SAME CV with "
+    "one change: add a section named \"Summary\" to `sections`, with a `text` value holding "
+    "a 2–3 sentence professional summary tailored to this role and drawn from the "
+    "candidate's own experience (do not invent facts). If a base CV structure was provided, "
+    "insert it wherever that structure placed (or would place) a Summary; otherwise put it "
+    "first. Keep everything else, including the order of every other section, identical. "
+    "Emit a JSON object with `kind: \"final\"` and the complete CV as `payload`; leave "
+    "`question` null."
+)
+
+# Wire-level correction: a structured backend's reply couldn't even be parsed into the
+# {kind, question, payload} union (invalid JSON, missing/invalid `kind`) — distinct from
+# the semantic corrections above, which fire on a well-formed-but-invalid `payload`. Used
+# only by _send_message_with_wire_retry, never nested inside the semantic self-heal loop
+# (see that function's docstring for why nesting the two budgets is deliberately avoided).
+_STRUCTURED_WIRE_CORRECTION = (
+    "Your previous reply could not be parsed as a valid structured object — it must be a "
+    "single JSON object with a `kind` field (`\"question\"` or `\"final\"`) plus "
+    "`question`/`payload` set accordingly. Re-emit a corrected reply now, answering the "
+    "same request as before:\n\n{original}"
+)
+
 
 async def _self_heal_final(
     *,
@@ -287,6 +399,7 @@ async def _self_heal_final(
     reply: AgentReply,
     accumulated_messages: list[dict],
     language: str = "en",
+    structured: bool = False,
 ) -> tuple[AgentReply, list[dict]]:
     """Re-prompt the open session when a FINAL block fails content validation.
 
@@ -294,6 +407,18 @@ async def _self_heal_final(
     "task complete" summary, or file-write announcement instead of the artifact. On
     each failure we send a precise correction on the *same* session (preserving full
     context) and re-validate, up to MAX_FINAL_CORRECTIONS times.
+
+    ``structured`` (default ``False``) selects the sentinel- vs structured-worded
+    correction texts and is threaded into ``_validate_final_content`` so its
+    ``FinalContentError`` message matches. This is a purely SEMANTIC budget — a
+    well-formed reply whose `payload`/content fails CV/CL schema validation. A
+    wire-level failure (the reply couldn't even be parsed into {kind, payload} at all)
+    is a different budget, handled before this function ever runs — see
+    _send_message_with_wire_retry / _start_session_with_retry. If ``backend.send_message``
+    below raises ProtocolError (a wire-level failure surfacing mid-correction), it is
+    deliberately NOT caught here and propagates — nesting the wire budget inside the
+    semantic budget is the "self-heal double-application" this plan's Problems/Bugs
+    section calls out; one budget per turn.
 
     Returns the (possibly updated) reply and accumulated messages. The caller then
     dispatches normally: a recovered FINAL proceeds; a correction that turns into
@@ -303,11 +428,11 @@ async def _self_heal_final(
     if stage not in (Stage.cv_adjust, Stage.revising_cv, Stage.cover_letter, Stage.revising_cl):
         return reply, accumulated_messages
 
-    correction = (
-        _CV_CORRECTION if stage in (Stage.cv_adjust, Stage.revising_cv) else _CL_CORRECTION
-    )
-
     is_cv_stage = stage in (Stage.cv_adjust, Stage.revising_cv)
+    if structured:
+        correction = _CV_CORRECTION_STRUCTURED if is_cv_stage else _CL_CORRECTION_STRUCTURED
+    else:
+        correction = _CV_CORRECTION if is_cv_stage else _CL_CORRECTION
 
     async def _reprompt(message: str, label: str) -> None:
         nonlocal reply
@@ -327,10 +452,12 @@ async def _self_heal_final(
         accumulated_messages.append({"role": "user", "content": message})
         accumulated_messages.append({"role": "assistant", "content": reply.raw})
 
+    summary_nudge = _CV_SUMMARY_NUDGE_STRUCTURED if structured else _CV_SUMMARY_NUDGE
+
     attempts = 0
     while reply.kind == "final":
         try:
-            obj = _validate_final_content(stage, reply.content, job, language)
+            obj = _validate_final_content(stage, reply.content, job, language, structured=structured)
         except FinalContentError as exc:
             if attempts >= MAX_FINAL_CORRECTIONS:
                 break  # budget exhausted; _handle_final re-validates, raises, fails the job
@@ -346,11 +473,110 @@ async def _self_heal_final(
         if is_cv_stage and isinstance(obj, CVDocument) and not cv_has_summary(obj) \
                 and attempts < MAX_FINAL_CORRECTIONS:
             attempts += 1
-            await _reprompt(_CV_SUMMARY_NUDGE, "valid CV missing a Summary section")
+            await _reprompt(summary_nudge, "valid CV missing a Summary section")
             continue
         return reply, accumulated_messages
 
     return reply, accumulated_messages
+
+
+async def _start_session_with_retry(
+    backend: AgentBackend,
+    system_prompt: str,
+    initial_user_msg: str,
+    schema: dict | None,
+    stage: Stage,
+    job: Job,
+) -> tuple[SessionHandle, AgentReply]:
+    """Start a fresh session, retrying a structured-mode wire-level ProtocolError.
+
+    Fresh-session recovery shape #1 (see the plan's Phase 3 carry-forwards): there is
+    no handle yet on failure, so a corrective follow-up message cannot be sent — the
+    only lever is to re-issue the IDENTICAL start_session call (same args) up to
+    MAX_FINAL_CORRECTIONS times. Deliberately not amended per attempt: this call's
+    `initial_user_msg` is exactly what the caller persists into `accumulated_messages`
+    on success, and amending it on a retry would either desync the persisted row from
+    what was actually sent, or leak the amendment into every later replay of this
+    session's first turn.
+
+    Sentinel mode (``schema is None``) never retries here — a CLI backend's own
+    internal nudge already covers a malformed reply, so re-raising immediately
+    preserves the pre-existing hard-fail behavior byte-for-byte.
+    """
+    kwargs = {"structured_schema": schema} if schema is not None else {}
+    attempts = 0
+    while True:
+        try:
+            return await backend.start_session(system_prompt, initial_user_msg, **kwargs)
+        except ProtocolError:
+            if schema is None or attempts >= MAX_FINAL_CORRECTIONS:
+                raise
+            attempts += 1
+            await bus.publish(
+                event_to_dict(
+                    LogEvent(
+                        job_id=job.id,
+                        level="warning",
+                        text=(
+                            f"Stage {stage.value}: structured reply unparseable on session "
+                            f"start; retrying (attempt {attempts}/{MAX_FINAL_CORRECTIONS})"
+                        ),
+                    )
+                )
+            )
+
+
+async def _send_message_with_wire_retry(
+    backend: AgentBackend,
+    handle: SessionHandle,
+    text: str,
+    schema: dict | None,
+    stage: Stage,
+    job: Job,
+) -> tuple[AgentReply, list[dict]]:
+    """Send ``text``, retrying a structured-mode wire-level ProtocolError with a
+    corrective re-send.
+
+    Fresh-session recovery shape #2: unlike _start_session_with_retry, a handle
+    exists here, so the correction is a real follow-up turn (_STRUCTURED_WIRE_CORRECTION,
+    embedding the original ``text`` so the model still answers the original request).
+
+    Both backends that can raise this (anthropic, opencode-zen) mutate their own
+    ``handle.messages`` only AFTER a successful call — a failed attempt is never
+    persisted there. This function mirrors that: it returns exactly one
+    {"user", "assistant"} pair, for whichever text (the original or a correction)
+    actually succeeded, so the caller's ``accumulated_messages`` never carries an
+    orphaned user turn with no assistant reply after it.
+
+    Sentinel mode (``schema is None``) never retries here, matching
+    _start_session_with_retry.
+    """
+    sent_text = text
+    attempts = 0
+    while True:
+        try:
+            reply = await backend.send_message(handle, sent_text)
+            return reply, [
+                {"role": "user", "content": sent_text},
+                {"role": "assistant", "content": reply.raw},
+            ]
+        except ProtocolError:
+            if schema is None or attempts >= MAX_FINAL_CORRECTIONS:
+                raise
+            attempts += 1
+            await bus.publish(
+                event_to_dict(
+                    LogEvent(
+                        job_id=job.id,
+                        level="warning",
+                        text=(
+                            f"Stage {stage.value}: structured reply unparseable; "
+                            f"re-prompting agent (attempt {attempts}/{MAX_FINAL_CORRECTIONS})"
+                        ),
+                    )
+                )
+            )
+            sent_text = _STRUCTURED_WIRE_CORRECTION.format(original=text)
 
 
 async def _read_base_structure(cv_structure_path: Path | None) -> CVDocument | None:
@@ -438,6 +664,15 @@ async def run_stage(
         )
         return
 
+    # Single destination-mode decision for this whole stage invocation, computed once
+    # and reused everywhere: the assemble_system_prompt/start_session structured_model
+    # kwarg, adapt_history's destination flag, the wire-level retry budget, and the
+    # self-heal/validation wording all key off this one `schema`/`structured` pair —
+    # never two independently-computed expressions that happen to agree today (see the
+    # structured-output plan's Phase 5 advisor carry-forward #2).
+    schema = _structured_schema_for(general_purpose_backend, stage)
+    structured = schema is not None
+
     if stage in (Stage.revising_cv, Stage.revising_cl):
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
         revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
@@ -485,28 +720,27 @@ async def run_stage(
             answer_text = await _get_latest_answer(session, job.id, stage)
             original_history = await _load_history(session, job.id, original_stage)
             combined_history = original_history + revision_turns
-            # structured=False hardcoded — Phase 5 wires the real destination-mode
-            # decision (backend.supports_structured_output + active session mode);
-            # today every destination is sentinel-mode, so this is a no-op adapter.
-            combined_history = adapt_history(combined_history, structured=False)
-            handle = await general_purpose_backend.restore_session(system_prompt, combined_history, revision_session_id)
-            reply = await general_purpose_backend.send_message(handle, answer_text)
-            accumulated_messages = [
-                {"role": "user", "content": answer_text},
-                {"role": "assistant", "content": reply.raw},
-            ]
+            combined_history = adapt_history(combined_history, structured=structured)
+            restore_kwargs = {"structured_schema": schema} if schema is not None else {}
+            handle = await general_purpose_backend.restore_session(
+                system_prompt, combined_history, revision_session_id, **restore_kwargs
+            )
+            reply, accumulated_messages = await _send_message_with_wire_retry(
+                general_purpose_backend, handle, answer_text, schema, stage, job
+            )
         else:
             # Fresh revision: restore the original stage's session and send the
             # revision instruction.
             history = await _load_history(session, job.id, original_stage)
             instruction = rev_req.instruction
-            history = adapt_history(history, structured=False)  # see structured=False note above
-            handle = await general_purpose_backend.restore_session(system_prompt, history, revision_session_id)
-            reply = await general_purpose_backend.send_message(handle, instruction)
-            accumulated_messages = [
-                {"role": "user", "content": instruction},
-                {"role": "assistant", "content": reply.raw},
-            ]
+            history = adapt_history(history, structured=structured)
+            restore_kwargs = {"structured_schema": schema} if schema is not None else {}
+            handle = await general_purpose_backend.restore_session(
+                system_prompt, history, revision_session_id, **restore_kwargs
+            )
+            reply, accumulated_messages = await _send_message_with_wire_retry(
+                general_purpose_backend, handle, instruction, schema, stage, job
+            )
     elif stage in (Stage.cv_adjust, Stage.cover_letter):
         # Determine fresh vs resume by checking whether Message rows exist for
         # this job+stage.  The orchestrator already transitioned the job to
@@ -515,14 +749,15 @@ async def run_stage(
         if history:
             # Resume after awaiting_input — send the user's answer as the next turn.
             answer_text = await _get_latest_answer(session, job.id, stage)
-            history = adapt_history(history, structured=False)  # see structured=False note above
-            handle = await general_purpose_backend.restore_session(system_prompt, history, job.session_external_id)
-            reply = await general_purpose_backend.send_message(handle, answer_text)
+            history = adapt_history(history, structured=structured)
+            restore_kwargs = {"structured_schema": schema} if schema is not None else {}
+            handle = await general_purpose_backend.restore_session(
+                system_prompt, history, job.session_external_id, **restore_kwargs
+            )
             # Only the new turns are new; prior messages already persisted.
-            accumulated_messages = [
-                {"role": "user", "content": answer_text},
-                {"role": "assistant", "content": reply.raw},
-            ]
+            reply, accumulated_messages = await _send_message_with_wire_retry(
+                general_purpose_backend, handle, answer_text, schema, stage, job
+            )
         else:
             # Fresh session. cover_letter gets a company-research brief and the approved
             # tailored CV (the two-lane split's whole point: write the letter against what
@@ -549,8 +784,12 @@ async def run_stage(
                 brief = None
                 cv_block = await _base_structure_cv_block(cv_structure_path)
             initial_user_msg = _build_initial_user_msg(job, brief, cv_block)
-            fresh_system_prompt = assemble_system_prompt(system_prompt, language=language_code)
-            handle, reply = await general_purpose_backend.start_session(fresh_system_prompt, initial_user_msg)
+            fresh_system_prompt = assemble_system_prompt(
+                system_prompt, language=language_code, structured_model=schema
+            )
+            handle, reply = await _start_session_with_retry(
+                general_purpose_backend, fresh_system_prompt, initial_user_msg, schema, stage, job
+            )
             # Accumulate all messages for this session (system, user, assistant reply)
             accumulated_messages = [
                 {"role": "system", "content": fresh_system_prompt},
@@ -571,6 +810,8 @@ async def run_stage(
     elif stage == Stage.cover_letter:
         job.cl_session_id = handle.external_id
 
+    await _log_session_mode(job, stage, schema, handle)
+
     # Self-heal: if a FINAL block fails content validation (e.g. the agent emitted a
     # change-log or "done" summary instead of the artifact), re-prompt the SAME session
     # to re-emit a clean artifact before the reply is dispatched below. Recovered →
@@ -584,6 +825,7 @@ async def run_stage(
         reply=reply,
         accumulated_messages=accumulated_messages,
         language=language_code,
+        structured=structured,
     )
 
     # Guard against a stale result: the agent turn above may have run for a long
@@ -644,6 +886,7 @@ async def run_stage(
         accumulated_messages=accumulated_messages,
         output_dir=output_dir,
         language=language_code,
+        structured=structured,
     )
 
     await bus.publish(
@@ -808,11 +1051,22 @@ async def _run_fit_assessment(
     """
     initial_user_msg = _build_fit_user_msg(job, base_structure)
     job.retry_count = 0
+    # The fit gate may run on a DIFFERENT backend instance than the rest of the
+    # pipeline (Settings.fit_model — see CLAUDE.md → "Separate fit-assessment model"),
+    # so its structured-mode decision must be derived from THIS `backend` param, never
+    # from the caller's general_purpose_backend — computing it here, where the resolved
+    # instance already lives, makes that structurally guaranteed rather than a call-site
+    # convention someone could get wrong (the fit-capability trap the plan's Phase 5
+    # Problems/Bugs section names explicitly).
+    schema = _structured_schema_for(backend, Stage.fit_assessment)
     # Always a fresh start_session (no resume path for this stage) — safe to inject here.
-    system_prompt = assemble_system_prompt(system_prompt, language=language_code, fit_verdict=True)
+    system_prompt = assemble_system_prompt(
+        system_prompt, language=language_code, structured_model=schema, fit_verdict=True
+    )
 
+    start_kwargs = {"structured_schema": schema} if schema is not None else {}
     try:
-        handle, reply = await backend.start_session(system_prompt, initial_user_msg)
+        handle, reply = await backend.start_session(system_prompt, initial_user_msg, **start_kwargs)
     except ProtocolError as exc:
         # A malformed / sentinel-less reply is "unparseable" → fail to the modal
         # (closed), consistent with the verdict contract, rather than failing the
@@ -846,6 +1100,8 @@ async def _run_fit_assessment(
     current_state = await repo.get_state_fresh(session, job.id)
     if current_state != JobState.running:
         raise StaleJobResult(job.id, current_state)
+
+    await _log_session_mode(job, Stage.fit_assessment, schema, handle)
 
     accumulated_messages = [
         {"role": "system", "content": system_prompt},
@@ -903,8 +1159,15 @@ async def _handle_final(
     accumulated_messages: list[dict],
     output_dir: Path | None = None,
     language: str = "en",
+    structured: bool = False,
 ) -> None:
-    """Finalize the stage: compute next state, version document, write checkpoint."""
+    """Finalize the stage: compute next state, version document, write checkpoint.
+
+    ``structured`` must be the SAME value ``run_stage`` passed to ``_self_heal_final``
+    for this invocation — both feed ``_validate_final_content``, and a mismatch would
+    mean the self-heal loop and this authoritative gate disagree about which reply
+    shape is expected.
+    """
     # A successful FINAL means any soft retry worked — reset the retry counter.
     # checkpoint() calls session.add(job) + commit, so this persists atomically.
     job.retry_count = 0
@@ -912,7 +1175,7 @@ async def _handle_final(
     # Authoritative content gate before writing anything to the DB. If the model
     # emitted a change-log/summary instead of the artifact (and self-heal could not
     # recover it), this raises FinalContentError → propagates to _run_one → job failed.
-    structured_obj = _validate_final_content(stage, reply.content, job, language)
+    structured_obj = _validate_final_content(stage, reply.content, job, language, structured=structured)
 
     # Determine document stage (revision docs stored under original stage)
     if stage == Stage.revising_cv:

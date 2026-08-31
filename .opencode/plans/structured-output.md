@@ -663,3 +663,160 @@ handling). verification — verified: `pytest -q -m "not integration"` (via
 passed, 2 skipped, 2 deselected, 0 failed (baseline 1323 + 22 new, no
 regressions); `py_compile` clean on both changed files (ruff still not
 installed in either venv, per Phase 3's own note).
+
+**2026-08-30**: context — verified Phase 4 landed clean (re-ran the suite against
+the repo's `.venv`, matched its recorded 1345 baseline), then implemented Phase 5
+(pipeline wiring, mode-aware self-heal, structured ProtocolError budget) per two
+advisor consults up front — one on the overall shape, one specifically to check
+whether "always pass `structured_schema` explicitly at every call site" (my first
+reading of the plan's own Solutions bullet) was safe, which surfaced that ~20
+test-local `FakeAgentBackend` subclasses across BF-19/dismiss-race/orchestrator
+tests have nothing to do with structured output and would all need a signature
+change to tolerate an unconditionally-passed kwarg. actions — computed one
+`schema = _structured_schema_for(general_purpose_backend, stage)` /
+`structured = schema is not None` pair once per `run_stage` invocation (fit
+computes its own inside `_run_fit_assessment`, from the resolved `fit_backend`
+instance — the "fit-capability trap" the plan's Problems/Bugs section named) and
+threaded it through every affected call site: `assemble_system_prompt`'s
+`structured_model` kwarg on both fresh-session branches; `adapt_history`'s
+`structured` flag at all three `restore_session` call sites (previously
+hardcoded `False`); a **conditional** `{"structured_schema": schema} if schema is
+not None else {}` kwargs dict at every `start_session`/`restore_session` call
+(never at `send_message` — both structured backends resolve it from the handle
+when omitted); `_validate_final_content`'s new `structured: bool` param, threaded
+into `_parse_structured`'s trailing re-emit sentence only (JSON-decode and
+schema-violation branches each got a mode-conditional last sentence, sentinel
+branch byte-identical — pinned by `TestParseStructuredModeAwareWording`'s two
+byte-identity tests); `_self_heal_final`'s three correction texts got structured-
+mode siblings (`_CV_CORRECTION_STRUCTURED`/`_CL_CORRECTION_STRUCTURED`/
+`_CV_SUMMARY_NUDGE_STRUCTURED`, no `<<<...>>>` mentions). Added two new recovery
+helpers for the "two different recovery shapes" the Phase 3 carry-forwards
+flagged: `_start_session_with_retry` (fresh-session shape — no handle exists yet,
+so a failed attempt is retried with the IDENTICAL `start_session` args, literally,
+up to `MAX_FINAL_CORRECTIONS` times — never amended, since the caller persists
+this exact `initial_user_msg` into `accumulated_messages` on success) and
+`_send_message_with_wire_retry` (resume/revision shape — a handle exists, so the
+retry is a real corrective follow-up turn, `_STRUCTURED_WIRE_CORRECTION`,
+embedding the original text; returns exactly one `{user, assistant}` pair for
+whichever attempt succeeded, since neither backend persists a failed attempt to
+its own `handle.messages` either). Both budgets are a no-op (immediate re-raise,
+zero retries) whenever `schema is None` — sentinel-mode behavior is untouched.
+Added `_log_session_mode` (LogEvent naming `structured` / `sentinel` / `sentinel
+(downgraded)`, read from the handle's `structured_enabled` with a `True` default
+so Anthropic/CLI handles — which have no such attribute — never mislabel as
+downgraded), called once per stage invocation right after the handle exists (not
+from `schema` alone, since OpenCode Zen's downgrade isn't knowable until the
+parse runs). Added a base.py comment documenting the
+`supports_structured_output=True` ⇒ must-accept-`structured_schema` contract in
+place of a Solutions-bullet literal reading. New test file
+`tests/backend/test_structured_pipeline_phase5.py` (27 tests): helper unit tests,
+the two retry helpers' three cases each, and integration tests through
+`run_stage` — fresh cv_adjust and cover_letter on a structured fake (schema
+received, contract present in the system prompt, sentinel-mode fake has no
+contract, Document written correctly for both `CvTurn` and `ClTurn`), the
+fit-capability-trap test (fit backend's OWN capability decides its mode,
+independent of a structured general-purpose backend, both directions), the
+newly-unlocked sentinel→structured replay direction at both the `cv_adjust`
+resume and the `revising_cv` mid-revision-resume call sites (previously
+impossible when `adapt_history`'s flag was hardcoded `False` — this complements,
+doesn't replace, Phase 2's existing structured→sentinel coverage in
+`test_replay_adapter.py`), fresh-revision structured wiring, the fresh-session
+retry-then-succeed and budget-exhausted paths end-to-end (job never checkpoints
+past an exhausted budget), and the structured-worded self-heal correction text
+actually reaching the model (asserted no `<<<` substring). decisions — three
+deviations from the plan's literal Phase 5 Solutions bullet, all advisor-driven
+and documented in the code: (1) `structured_schema` is passed CONDITIONALLY
+(omitted entirely when `None`), not unconditionally at every call site — the
+"always pass explicitly" reading would have forced signature changes onto ~20
+unrelated test doubles for a legibility gain that a `grep` for the kwarg already
+provides just as well; (2) `base.py`'s abstract methods, `claude_cli.py`, and
+`google_cli.py` were deliberately NOT given an accept-and-ignore
+`structured_schema` parameter — under the conditional-kwarg design no caller
+ever supplies it to a backend with `supports_structured_output=False`, so the
+parameter would be genuinely dead code the project's own CLAUDE.md tells us not
+to add; the real contract is now a code comment on `supports_structured_output`
+itself, covering the two backends that actually need it (anthropic, opencode-zen)
+plus `fake_backend.py`, which — being the one shared test double structured
+tests actually flip to `True` — DOES accept-and-record the kwarg on all three
+methods; (3) the wire-level correction resend (`_send_message_with_wire_retry`)
+discards the failed attempt from `accumulated_messages` entirely rather than
+logging it alongside the correction — matches both backends' own "mutate
+handle.messages only on success" contract, so the persisted history never
+carries a user turn with no assistant reply after it. A first draft of the
+fresh-cv_adjust test asserted `"Structured output contract" in
+backend.captured_initial_msg or True` — an advisor pass on the finished phase
+caught that the trailing `or True` made the assertion unconditionally pass AND
+that the contract lives in the system prompt, not the captured user message;
+fixed by adding a `_SystemPromptCapturingBackend` (mirroring
+`test_language_directive.py`'s pattern) and a paired negative test (sentinel-mode
+fresh session has no contract section). Two more coverage gaps the same advisor
+pass named were filled before considering Phase 5 done: zero structured coverage
+existed for the revision call sites (the two `restore_session` sites plus two
+`_send_message_with_wire_retry` calls got the most edits in this phase) and for
+`cover_letter`/`ClTurn` specifically — both now covered by dedicated tests.
+verification — verified: `.venv/bin/python -m pytest -q -m "not integration"` →
+1372 passed, 2 skipped, 2 deselected, 0 failed (baseline 1345 + 27 new, zero
+regressions; one `test_dev_tunnel.py` threading test failed on one run and
+passed in isolation and on a full re-run — confirmed pre-existing flakiness
+unrelated to any file this phase touched, not a regression).
+
+**2026-08-30**: context — implemented Phase 6 (parity gate + integration) per this
+plan, immediately after Phase 5 in the same session. actions — added
+`tests/backend/test_mode_parity.py` (5 tests, always run in the default suite):
+for the same logical payload, a sentinel-mode `FakeAgentBackend` vs a
+`FakeAgentBackend(supports_structured_output=True)` produce identical
+`Document.structured` + `Document.markdown` for both `cv_adjust` (CvTurn) and
+`cover_letter` (ClTurn), identical `FollowUp.question` text for a NEED_INPUT/
+question reply, and identical `Job.fit_reason` + state for both the FIT
+direction (`fit_reason` discarded to `None` on both paths, per
+`_run_fit_assessment`'s existing design) and the UNFIT direction (the reason
+text itself, not just the state, must match — this is the direction that
+actually persists). Each pair runs against two independent in-memory SQLite
+sessions (`session_pair` fixture) so the two runs can't interfere. Deliberately
+asserts nothing about raw `Message` content, per the plan's own note from
+Phase 1-2's Change Log: `wrap_canonical_for_sentinel` emits compact JSON where a
+real sentinel-mode FINAL is usually pretty-printed, so the two paths' raw text
+differs by construction even for the same logical payload — only the four
+observable outputs the plan names are in scope. Added
+`tests/backend/integration/test_structured_output_live.py` (4 tests, marked
+`@pytest.mark.integration`, skipped by default): three against the real
+Anthropic API — `model_json_schema()` output (title, nested `$defs`, `anyOf:
+[X, null]` nullables) accepted as a forced tool's `input_schema` for
+`cv_adjust`/`cover_letter`/`fit_assessment`, each asserting a successful
+`AgentReply` (which is itself proof `stop_reason == "tool_use"`, since
+`_extract_structured_text` raises `ProtocolError` on anything else) — and one
+against the real OpenCode Zen API, observing (not assuming) whether the
+free-tier model honors `response_format` or the per-session downgrade engages,
+per the open question flagged in `opencode_zen.py`'s `_call_api_once`
+docstring; either outcome is a pass, matching the downgrade path's own design
+intent. decisions — one test bug an advisor pass caught before considering the
+phase done: `assert a.fit_reason == b.fit_reason is None` is a Python chained
+comparison (`(a == b) and (b is None)`) — it happened to assert the right thing
+here but doesn't read as asserting `a is None`; split into two explicit
+assertions. verification — mixed, and the mixed result is itself a finding,
+not a footnote:
+- `.venv/bin/python -m pytest -q -m "not integration"` → 1377 passed, 2
+  skipped, 6 deselected, 0 failed (baseline 1372 + 5 new parity tests; 6
+  deselected = the 2 pre-existing OpenCode-Zen-live tests + the 4 new ones,
+  all `-m integration`).
+- The OpenCode Zen live test FAILED against the real API right now: `OpenCode
+  Zen API error: Error from provider (Console): Upstream request failed: [404]
+  Provider returned error`. Diagnosed as a pre-existing, provider-side issue
+  and NOT a regression from this phase's code: re-ran the already-committed,
+  untouched `tests/backend/integration/test_opencode_zen_live.py` (Phase 0,
+  predates this whole plan) in isolation and its own non-structured happy-path
+  test fails with the byte-identical error against the same free-tier model
+  right now. Not something to fix in this plan — the free model itself appears
+  unavailable/renamed upstream at the moment.
+- **The three Anthropic integration tests SKIPPED — no `ANTHROPIC_API_KEY` is
+  configured in this environment (only `OPENCODE_API_KEY` is set in the
+  repo-root `.env`).** The plan's own Phase 3 addendum calls these assertions
+  "non-negotiable before structured mode is trusted as a default" —
+  specifically, that the real API accepts pydantic's `model_json_schema()`
+  shape as a tool `input_schema` at all (a 400 there would mean the forced-
+  tool-use mechanism, locked in Phase 3, is wrong). **This is an explicit open
+  risk, not a footnote:** structured mode is fully wired and verified
+  end-to-end against fakes (Phase 5's tests, this phase's parity tests), but
+  its real-API schema acceptance for Anthropic remains UNPROVEN pending a key.
+  Carry this forward explicitly — do not treat "1377 passed" as if it closed
+  this gate.
