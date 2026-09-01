@@ -2,7 +2,11 @@ import pytest
 
 from jsa.agents.anthropic_api import AnthropicAPIBackend
 from jsa.agents.claude_cli import ClaudeCliBackend
+from jsa.agents.gemini_api import GeminiBackend
 from jsa.agents.google_cli import GoogleCliBackend
+from jsa.agents.mistral import MistralBackend
+from jsa.agents.opencode_go import OpenCodeGoBackend
+from jsa.agents.openrouter import OpenRouterBackend
 from jsa.config import Settings
 from jsa.server import make_backend_factory
 
@@ -35,6 +39,75 @@ def test_make_backend_factory_not_a_backend():
 
     with pytest.raises(KeyError):
         backend("harry-potter")
+
+
+class TestNewBackendsFactory:
+    """Phase 4: the four new backends get explicit _backend_factory branches, each
+    resolving through the same _model_for precedence as the existing four."""
+
+    def test_make_backend_factory_mistral(self):
+        settings = Settings()
+        backend = make_backend_factory(settings)
+
+        agent = backend("mistral")
+        assert isinstance(agent, MistralBackend)
+        assert agent._model == settings.mistral_model
+
+    def test_make_backend_factory_openrouter(self):
+        settings = Settings()
+        backend = make_backend_factory(settings)
+
+        agent = backend("openrouter")
+        assert isinstance(agent, OpenRouterBackend)
+        assert agent._model == settings.openrouter_model
+
+    def test_make_backend_factory_gemini(self):
+        settings = Settings()
+        backend = make_backend_factory(settings)
+
+        agent = backend("gemini")
+        assert isinstance(agent, GeminiBackend)
+        assert agent._model == settings.gemini_model
+
+    def test_make_backend_factory_opencode_go(self):
+        settings = Settings()
+        backend = make_backend_factory(settings)
+
+        agent = backend("opencode-go")
+        assert isinstance(agent, OpenCodeGoBackend)
+        assert agent._model == settings.opencode_go_model
+
+    def test_runtime_selection_applies_to_new_backends(self):
+        settings = Settings(backend_models={"mistral": "some-other-model"})
+        backend = make_backend_factory(settings)
+
+        agent = backend("mistral")
+        assert agent._model == "some-other-model"
+
+    def test_explicit_override_wins_for_new_backends(self):
+        settings = Settings(backend_models={"gemini": "some-other-model"})
+        backend = make_backend_factory(settings, model_override="pinned-model")
+
+        agent = backend("gemini")
+        assert agent._model == "pinned-model"
+
+
+class TestSettingsDefaultsMatchBackendClassDefaults:
+    """config.py hardcodes each new backend's default model as a literal (matching the
+    existing precedent for `model`/`opencode_zen_model`) rather than importing the
+    class -- this guards the two literals from silently drifting apart."""
+
+    def test_mistral_default_matches_class(self):
+        assert Settings().mistral_model == MistralBackend.default_model
+
+    def test_openrouter_default_matches_class(self):
+        assert Settings().openrouter_model == OpenRouterBackend.default_model
+
+    def test_gemini_default_matches_class(self):
+        assert Settings().gemini_model == GeminiBackend.default_model
+
+    def test_opencode_go_default_matches_class(self):
+        assert Settings().opencode_go_model == OpenCodeGoBackend.default_model
 
 
 class TestModelPrecedence:

@@ -26,6 +26,7 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     jd: "Job description",
     state: "review",
     current_stage: null,
+    backend_name: null,
     language: null,
     fit_reason: null,
     error: null,

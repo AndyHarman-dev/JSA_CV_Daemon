@@ -2,7 +2,7 @@
 
 JSA is a CLI-launched local web application that automates tailored job-application document generation. You supply a CSV of job openings and your CV; for each row a three-stage AI pipeline (**fit assessment → CV adjustment → cover letter**) produces tailored documents that you review in a browser UI, request revisions on, and export to PDF/DOCX.
 
-Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vite frontend — driven by whichever AI backend you point it at (Claude CLI, Google `agy` CLI, or the Anthropic REST API).
+Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vite frontend — driven by whichever AI backend you point it at, from eight supported backends (Claude CLI, Google `agy` CLI, Anthropic REST API, OpenCode Zen, Mistral, OpenRouter, Google Gemini REST API, OpenCode-GO).
 
 <p align="center">
   <img src="assets/JSA_Screens_JSA_DAEMON_JOB_FOCUSED_REVIEW_STAGE.png" alt="JSA dashboard — job focused on the review stage, with a queue sidebar, pipeline progress bar, and PDF preview" width="820">
@@ -19,7 +19,7 @@ Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vi
 - Browser UI with live pipeline progress, PDF document preview, and PDF/DOCX export
 - Standalone CV Structure Editor: infer a structured JSON representation of your base CV and edit it directly — this JSON is what `cv_adjust` tailors per job
 - Multi-language output and UI: one global preference drives the pipeline's output language (CV/cover-letter JSON, clarifying questions, change-log, fit-assessment reasons) *and* the frontend's own chrome, picked from a 20-language catalog
-- Three AI backends: Claude CLI, Google `agy` CLI, Anthropic REST API — configurable as an ordered fallback chain
+- Eight AI backends: Claude CLI, Google `agy` CLI, Anthropic REST API, OpenCode Zen, Mistral, OpenRouter, Google Gemini REST API, OpenCode-GO — configurable as an ordered fallback chain, each with a runtime-selectable model (no restart) via the header's backend dropdown
 - All data stored locally in SQLite (`~/.jsa/jsa.sqlite`)
 
 ---
@@ -54,14 +54,22 @@ flowchart LR
     DB --> ORC["Orchestrator<br/>asyncio.Semaphore(5)"]
     ORC --> RUN["Stage runner<br/>run_stage()"]
     RUN --> BE{"Agent backend<br/>fallback chain"}
-    BE -->|1st| CLI1["claude-cli"]
-    BE -->|2nd| CLI2["google-cli"]
-    BE -->|3rd| API1["anthropic"]
-    BE -->|4th| API2["opencode-zen"]
+    BE -->|configurable order| CLI1["claude-cli"]
+    BE -.-> CLI2["google-cli"]
+    BE -.-> API1["anthropic"]
+    BE -.-> API2["opencode-zen"]
+    BE -.-> API3["mistral"]
+    BE -.-> API4["openrouter"]
+    BE -.-> API5["gemini"]
+    BE -.-> API6["opencode-go"]
     CLI1 --> PARSE["protocol.parse_reply()<br/>sentinel grammar"]
     CLI2 --> PARSE
     API1 --> PARSE
     API2 --> PARSE
+    API3 --> PARSE
+    API4 --> PARSE
+    API5 --> PARSE
+    API6 --> PARSE
     PARSE --> SM["state_machine.transition()"]
     SM --> CKPT["repo.checkpoint()<br/>atomic: Job + Message + Document"]
     CKPT --> DB
@@ -74,7 +82,7 @@ flowchart LR
 
 - **Orchestrator** (`jsa/pipeline/orchestrator.py`) polls `list_runnable_jobs()` and dispatches work under an `asyncio.Semaphore(5)`, so at most 5 jobs run concurrently. Every blocking call (WeasyPrint, python-docx, pypdf, CLI subprocesses) is wrapped in `asyncio.to_thread`.
 - **Stage runner** (`jsa/pipeline/stages.py`) drives one stage (`fit_assessment`, `cv_adjust`, `cover_letter`, `revising_cv`, `revising_cl`) against an `AgentBackend`, expecting a reply that ends in the sentinel grammar below.
-- **Sentinel protocol** (`jsa/agents/protocol.py`) — the CLI backends (`claude-cli`, `google-cli`) and any downgraded API session terminate every reply with exactly one of:
+- **Sentinel protocol** (`jsa/agents/protocol.py`) — the CLI backends (`claude-cli`, `google-cli`), any structured-capable backend's downgraded session, and `opencode-go`'s `/messages`-protocol models (sentinel-only always — see below) terminate every reply with exactly one of:
   ```
   <<<NEED_INPUT>>>
   <question to the user>
@@ -87,7 +95,7 @@ flowchart LR
   <<<END>>>
   ```
   A missing or malformed sentinel raises `ProtocolError` and the job is marked `failed` — this is enforced, not advisory.
-- **Structured output** — the two API backends (`anthropic`, `opencode-zen`) skip the sentinel grammar and get a provider-enforced JSON object back instead (Anthropic via forced tool-use, OpenCode Zen via `response_format`), validated against a per-stage Pydantic schema (`jsa/schema/turn_models.py`). OpenCode Zen downgrades to sentinel mode per-session if a reply comes back unparseable; the database always stores the same normalized canonical text either way, so mixing modes across a BF-19 backend switch or a resumed session is transparent to the rest of the pipeline.
+- **Structured output** — the structured-capable API backends (`anthropic`, `opencode-zen`, `mistral`, `openrouter`, `gemini`, and `opencode-go`'s `/chat/completions`-protocol models) skip the sentinel grammar and get a provider-enforced JSON object back instead (Anthropic via forced tool-use, everyone else via `response_format`/`responseSchema`), validated against a per-stage Pydantic schema (`jsa/schema/turn_models.py`). Each downgrades to sentinel mode per-session if a reply comes back unparseable; `opencode-go`'s `/messages`-protocol models (e.g. `qwen3.8-max`) never attempt structured mode at all — forced tool-use doesn't take on that gateway path. The database always stores the same normalized canonical text either way, so mixing modes across a BF-19 backend switch or a resumed session is transparent to the rest of the pipeline.
 - **State machine** (`jsa/pipeline/state_machine.py`) is the single source of truth for legal transitions; `Job.state` and `Job.current_stage` are never set directly.
 - **Checkpointing** — every state-changing write goes through `repo.checkpoint()`, a single atomic transaction that writes the new `Job` state, any `Message` rows, and any `Document` row together. This is what makes crash recovery lossless.
 - **Rendering** happens once, when a job *enters* `review` (on cover-letter completion or any revision) — not on approve. `approve` only flips `review → approved`; re-export is available on demand afterward.
@@ -120,7 +128,7 @@ stateDiagram-v2
 
 ### Backend fallback chain
 
-Backends implement a common `AgentBackend` ABC (`jsa/agents/base.py`) and are tried in order via `--backends claude-cli,google-cli,anthropic,opencode-zen` (or the equivalent `JSA_BACKENDS` env var). On a hard failure (rate limit, session expiry) the orchestrator fails over to the next backend in the chain and resumes the job from its last checkpoint — the UI surfaces which backend is currently active:
+Backends implement a common `AgentBackend` ABC (`jsa/agents/base.py`) and are tried in order via `--backends claude-cli,google-cli,anthropic,opencode-zen,mistral,openrouter,gemini,opencode-go` (or the equivalent `JSA_BACKENDS` env var, any subset/order). On a hard failure (rate limit, session expiry) the orchestrator fails over to the next backend in the chain and resumes the job from its last checkpoint — the UI surfaces which backend is currently active, and clicking a backend row opens a submenu to pick that backend's model at runtime (no restart):
 
 <p align="center">
   <img src="assets/JSA_Screens_Backend_Queue.png" alt="Backend failover queue dropdown showing Claude CLI as the active backend" width="360">
@@ -206,8 +214,8 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | `--csv` | required | — | Path to the jobs CSV file |
 | `--cv` | optional | — | Path to a CV (`.pdf` or `.docx`) — used **once**, to seed the CV Structure Editor's `cv_structure.json` if it doesn't exist yet. Ignored (with a printed note) once a structure exists. The editor is the source of truth from then on — see [CV Structure Editor](#cv-structure-editor) |
 | `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where rendered PDF/DOCX files are written |
-| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (single), backward-compat alias for `--backends`: `claude-cli` \| `google-cli` \| `anthropic` \| `opencode-zen` |
-| `--backends` | `claude-cli` | `JSA_BACKENDS` | Comma-separated ordered backend fallback chain, e.g. `claude-cli,google-cli` |
+| `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (single), backward-compat alias for `--backends`: `claude-cli` \| `google-cli` \| `anthropic` \| `opencode-zen` \| `mistral` \| `openrouter` \| `gemini` \| `opencode-go` |
+| `--backends` | `claude-cli` | `JSA_BACKENDS` | Comma-separated ordered backend fallback chain, e.g. `claude-cli,google-cli,mistral` |
 | `--db` | `~/.jsa/jsa.sqlite` | `JSA_DB_PATH` | SQLite database path |
 | `--port` | `8765` | `JSA_PORT` | Port for the local web server |
 | `--no-browser` | false | — | Skip opening the browser automatically |
@@ -273,6 +281,42 @@ Optional environment variables for the `anthropic` backend:
 | `JSA_AGENT_TIMEOUT` | `600` | Per-request timeout for CLI backends (`claude-cli`, `google-cli`) |
 | `JSA_FIT_MODEL` | none | Model for the fit-assessment stage only; see [CLI flags](#cli-flags) |
 | `JSA_FIT_TIMEOUT` | none | Per-reply timeout for the fit-assessment stage only; see [CLI flags](#cli-flags) |
+
+### `mistral`
+
+Uses the Mistral chat-completions API directly. Requires the `MISTRAL_API_KEY` environment variable.
+
+```bash
+export MISTRAL_API_KEY=...
+jsa --csv jobs.csv --cv resume.pdf --backend mistral
+```
+
+### `openrouter`
+
+Uses [OpenRouter](https://openrouter.ai)'s OpenAI-compatible chat-completions API — itself a multi-provider aggregator, so it widens the fallback chain's provider diversity per backend more than any other entry here. Requires the `OPENROUTER_API_KEY` environment variable. Model IDs are namespaced (`vendor/model`, e.g. `nvidia/nemotron-3-nano-30b-a3b`).
+
+```bash
+export OPENROUTER_API_KEY=...
+jsa --csv jobs.csv --cv resume.pdf --backend openrouter
+```
+
+### `gemini`
+
+Uses Google's native Gemini `generateContent` REST API directly (not the `agy` CLI `google-cli` uses, and not an OpenAI-compat shim). Requires `GEMINI_API_KEY` (or `GOOGLE_API_KEY` as a fallback).
+
+```bash
+export GEMINI_API_KEY=...
+jsa --csv jobs.csv --cv resume.pdf --backend gemini
+```
+
+### `opencode-go`
+
+Uses [OpenCode Zen's Go tier](https://opencode.ai/docs/en/go/) — a separate model catalog from `opencode-zen`, spanning two wire protocols per model (most are OpenAI-compatible `/chat/completions`; a few premium models are Anthropic-shape `/messages` and run sentinel-only, without structured output). Requires `OPENCODE_GO_API_KEY` (or `OPENCODE_API_KEY` as a fallback — distinct from the `opencode-zen` backend's own key usage).
+
+```bash
+export OPENCODE_GO_API_KEY=...
+jsa --csv jobs.csv --cv resume.pdf --backend opencode-go
+```
 
 New backends register in `jsa/agents/registry.py` by adding an entry to `_REGISTRY`, keyed by the CLI-flag string, and subclassing `AgentBackend`.
 
@@ -511,7 +555,7 @@ jsa/                   Python package
   server.py             FastAPI app factory
   db/                    SQLAlchemy models (Job, Message, Document, FollowUp, RevisionRequest), engine, repository
   ingest/                CSV and CV loaders
-  agents/                AgentBackend ABC, four backends (claude_cli, google_cli, anthropic_api, opencode_zen), registry, sentinel protocol parser
+  agents/                AgentBackend ABC, eight backends (claude_cli, google_cli, anthropic_api, opencode_zen, mistral, openrouter, gemini_api, opencode_go), registry, model_catalog, sentinel protocol parser
   prompts/               Prompt files (edit these) + loader (no caching)
   pipeline/              Orchestrator, stage runners (stages.py), state machine, CV structure inference
   render/                PDF (WeasyPrint) and DOCX (python-docx) renderers

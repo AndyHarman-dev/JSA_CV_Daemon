@@ -28,6 +28,7 @@ vi.mock("../ws", () => ({
 vi.mock("../api", () => ({
   api: {
     config: vi.fn().mockReturnValue(new Promise(() => {})), // never resolves — avoids act warnings
+    getBackendModels: vi.fn().mockReturnValue(new Promise(() => {})), // ditto
     getJobs: vi.fn().mockResolvedValue([]),
     getJob: vi.fn().mockResolvedValue(null),
     getDocument: vi.fn().mockResolvedValue({ markdown: "# Doc", version: 1 }),
@@ -59,6 +60,7 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     jd: "A great job",
     state: "pending",
     current_stage: null,
+    backend_name: null,
     error: null,
     retry_count: 0,
     updated_at: "2026-01-01T00:00:00Z",

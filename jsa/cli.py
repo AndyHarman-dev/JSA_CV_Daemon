@@ -34,7 +34,10 @@ faulthandler.enable()
 
 app = typer.Typer(help="JSA — Job Search Assistant")
 
-_VALID_BACKENDS = {"claude-cli", "google-cli", "anthropic", "opencode-zen"}  # kept for fast validation before registry import
+_VALID_BACKENDS = {
+    "claude-cli", "google-cli", "anthropic", "opencode-zen",
+    "mistral", "openrouter", "gemini", "opencode-go",
+}  # kept for fast validation before registry import; test-guarded against jsa.agents.registry._REGISTRY drift
 
 
 def _start_tunnel(port: int) -> None:
@@ -98,8 +101,8 @@ def main(
         readable=True,
     ),
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory for generated PDFs"),
-    backend: Optional[str] = typer.Option(None, "--backend", help="AI backend (single): claude-cli | google-cli | anthropic | opencode-zen (backward-compat alias for --backends)"),
-    backends: Optional[str] = typer.Option(None, "--backends", help="Comma-separated ordered backend chain, e.g. claude-cli,google-cli"),
+    backend: Optional[str] = typer.Option(None, "--backend", help="AI backend (single): claude-cli | google-cli | anthropic | opencode-zen | mistral | openrouter | gemini | opencode-go (backward-compat alias for --backends)"),
+    backends: Optional[str] = typer.Option(None, "--backends", help="Comma-separated ordered backend chain, e.g. claude-cli,mistral,openrouter"),
     fit_model: Optional[str] = typer.Option(None, "--fit-model", help="Model for the fit-assessment stage only (e.g. a cheaper/faster one). Defaults to the same model as every other stage. No effect on google-cli, which has no model flag."),
     fit_timeout: Optional[float] = typer.Option(None, "--fit-timeout", help="Per-reply timeout in seconds for the fit-assessment stage only. Defaults to the backend's normal timeout."),
     db: Optional[Path] = typer.Option(None, "--db", help="SQLite database path"),

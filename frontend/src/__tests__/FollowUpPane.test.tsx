@@ -22,6 +22,7 @@ function makeFullJob(overrides: Partial<FullJobDTO> = {}): FullJobDTO {
     tier: "A",
     state: "awaiting_input",
     current_stage: null,
+    backend_name: null,
     error: null,
     updated_at: "2026-01-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",

@@ -21,10 +21,164 @@ const BACKEND_LABELS: Record<string, string> = {
   "google-cli": "GOOGLE CLI",
   anthropic: "ANTHROPIC API",
   "opencode-zen": "OPENCODE ZEN",
+  mistral: "MISTRAL",
+  openrouter: "OPENROUTER",
+  gemini: "GEMINI API",
+  "opencode-go": "OPENCODE GO",
 };
 
 function backendLabel(id: string): string {
   return BACKEND_LABELS[id] ?? id.toUpperCase();
+}
+
+// Filter input is only worth its footprint once a catalog gets long (e.g. OpenRouter's
+// namespaced `vendor/model` list) -- see plan Phase 6 solution 5b.
+const MODEL_FILTER_THRESHOLD = 12;
+
+type ModelMenuState =
+  | { status: "loading"; models: [] }
+  | { status: "ok"; models: string[]; source: "live" | "catalog" }
+  | { status: "error"; models: [] };
+
+// Width of the failover-queue panel this submenu anchors beside (Header's panel is a fixed
+// 240px) plus a small gap -- kept as a sibling of that panel, not a child, because the panel's
+// own `panelBase` sets `clip-path` for the chamfered-corner skin, which clips any absolutely
+// positioned descendant that extends past its own 240px box (confirmed via a live Playwright
+// screenshot during Phase 6 verification: a submenu nested inside the panel rendered zero
+// pixels). Positioning by a fixed left offset from the shared `backendMenuRef` ancestor sidesteps
+// that clip entirely.
+const QUEUE_PANEL_WIDTH = 240;
+const SUBMENU_GAP = 6;
+
+function ModelSubmenu({
+  top,
+  menu,
+  selected,
+  filter,
+  onFilterChange,
+  onSelect,
+  t,
+}: {
+  top: number;
+  menu: ModelMenuState | undefined;
+  selected: string | undefined;
+  filter: string;
+  onFilterChange: (value: string) => void;
+  onSelect: (model: string) => void;
+  t: (key: string) => string;
+}) {
+  const models = menu?.models ?? [];
+  const q = filter.trim().toLowerCase();
+  const filtered = q ? models.filter((m) => m.toLowerCase().includes(q)) : models;
+  const showFilter = models.length > MODEL_FILTER_THRESHOLD;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: QUEUE_PANEL_WIDTH + SUBMENU_GAP,
+        top,
+        width: 240,
+        zIndex: 31,
+        ...panelBase(T, { chamfer: 10 }),
+        boxShadow: T.shadowMd,
+        padding: 5,
+      }}
+    >
+      {cornerMarks(T, T.bd2, 8)}
+      <div
+        style={{
+          font: `600 9.5px ${T.mono}`,
+          letterSpacing: ".12em",
+          color: T.ink3,
+          textTransform: "uppercase",
+          padding: "5px 9px 7px",
+        }}
+      >
+        {t("header.modelMenuTitle")}
+      </div>
+      {showFilter && (
+        <div style={{ padding: "0 6px 6px" }}>
+          <input
+            autoFocus
+            value={filter}
+            onChange={(e) => onFilterChange(e.target.value)}
+            placeholder={t("header.modelFilterPlaceholder")}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "5px 8px",
+              background: T.sunk,
+              border: `1px solid ${T.bd}`,
+              borderRadius: T.btnRadius,
+              font: `400 12px ${T.ui}`,
+              color: T.ink,
+              outline: "none",
+            }}
+          />
+        </div>
+      )}
+      <div style={{ maxHeight: 220, overflowY: "auto" }}>
+        {menu?.status === "loading" && (
+          <div style={{ padding: "10px 9px", font: `400 11px ${T.ui}`, color: T.ink3 }}>…</div>
+        )}
+        {menu?.status === "error" && (
+          <div style={{ padding: "10px 9px", font: `400 11px ${T.ui}`, color: T.danger }}>
+            {t("header.modelSelectFailed")}
+          </div>
+        )}
+        {menu?.status === "ok" &&
+          filtered.map((model) => {
+            const isSelected = model === selected;
+            return (
+              <button
+                key={model}
+                type="button"
+                className="jghost"
+                onClick={() => onSelect(model)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "100%",
+                  padding: "6px 9px",
+                  border: "none",
+                  borderRadius: T.btnRadius,
+                  background: isSelected ? T.aSoft : "transparent",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span
+                  style={{
+                    font: `500 11.5px ${T.mono}`,
+                    color: T.ink,
+                    flex: 1,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {model}
+                </span>
+                {isSelected && <Icon name="check" size={12} color={T.accent2} />}
+              </button>
+            );
+          })}
+      </div>
+      {menu?.status === "ok" && menu.source === "catalog" && (
+        <div
+          style={{
+            font: `400 10px/1.4 ${T.ui}`,
+            color: T.ink3,
+            padding: "6px 9px 3px",
+            borderTop: `1px solid ${T.bd}`,
+            marginTop: 3,
+          }}
+        >
+          {t("header.modelsFromCatalog")}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function CountChip({ label, count, color }: { label: string; count: number; color: string }) {
@@ -66,6 +220,15 @@ export function Header() {
   const backendMenuRef = useRef<HTMLDivElement>(null);
   const t = useT();
 
+  // Per-backend runtime model selection (Phase 6 of the multi-backend-model-select plan).
+  const [supportsModelSelection, setSupportsModelSelection] = useState<Record<string, boolean>>({});
+  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
+  const [openModelMenuFor, setOpenModelMenuFor] = useState<string | null>(null);
+  const [modelMenus, setModelMenus] = useState<Record<string, ModelMenuState>>({});
+  const [modelFilter, setModelFilter] = useState("");
+  const [submenuTop, setSubmenuTop] = useState(0);
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
   useEffect(() => {
     api
       .config()
@@ -98,10 +261,97 @@ export function Header() {
       ];
       return { status: "ok", active: lastBackendSwitch.to_backend, list: reordered };
     });
+    // The queue reorders around the switched-to backend -- a submenu measured against the
+    // old row position would now be pinned at a stale offset. Closing it is simpler and
+    // safer than re-measuring, and matches every other close path's behavior.
+    setOpenModelMenuFor(null);
   }, [lastBackendSwitch]);
 
-  // Close the backend dropdown when clicking outside of it.
-  useOutsideClick(backendMenuRef, backendMenuOpen, () => setBackendMenuOpen(false));
+  // Reconcile the active-backend indicator against ground truth (job.backend_name),
+  // not just live WS events. `lastBackendSwitch` above only catches a failover that
+  // happens while this client is connected -- a page reload, or a WS gap spanning a
+  // switch, left the indicator pinned at the boot-time `/api/config` snapshot forever,
+  // since `settings.backend` is never mutated after startup and `Job.backend_name` used
+  // to never reach the frontend at all. Reconciling from the most recently updated job
+  // that has actually dispatched on a backend closes that gap on every jobs refresh
+  // (initial load, WS reconnect's refetchAll, or just a running job's own updates).
+  useEffect(() => {
+    if (backendState.status !== "ok") return;
+    const withBackend = Object.values(jobs).filter((j) => j.backend_name);
+    if (withBackend.length === 0) return;
+    const latest = withBackend.reduce((a, b) => (a.updated_at > b.updated_at ? a : b));
+    const trueActive = latest.backend_name as string;
+    if (trueActive === backendState.active) return;
+    const reordered = [trueActive, ...backendState.list.filter((id) => id !== trueActive)];
+    setBackendState({ status: "ok", active: trueActive, list: reordered });
+    setOpenModelMenuFor(null);
+  }, [jobs, backendState]);
+
+  useEffect(() => {
+    api
+      .getBackendModels()
+      .then((res) => {
+        setSupportsModelSelection(res.supports_model_selection);
+        setSelectedModels(res.selected);
+      })
+      .catch(() => {
+        // Leave both maps empty -- every row then renders as selection-unsupported,
+        // which is the safe (fail-closed) default rather than a crash.
+      });
+  }, []);
+
+  // Close the backend dropdown when clicking outside of it -- also collapses any open
+  // model submenu, since it renders as a sibling within this same ref'd wrapper.
+  useOutsideClick(backendMenuRef, backendMenuOpen, () => {
+    setBackendMenuOpen(false);
+    setOpenModelMenuFor(null);
+  });
+
+  function toggleModelMenu(backend: string) {
+    setModelFilter("");
+    setOpenModelMenuFor((prev) => {
+      const next = prev === backend ? null : backend;
+      if (next) {
+        const rowEl = rowRefs.current[next];
+        const containerEl = backendMenuRef.current;
+        if (rowEl && containerEl) {
+          setSubmenuTop(rowEl.getBoundingClientRect().top - containerEl.getBoundingClientRect().top);
+        }
+      }
+      if (next && !modelMenus[next]) {
+        setModelMenus((m) => ({ ...m, [next]: { status: "loading", models: [] } }));
+        api
+          .getBackendModelsFor(next)
+          .then((res) => {
+            setModelMenus((m) => ({
+              ...m,
+              [next]: { status: "ok", models: res.models, source: res.source },
+            }));
+          })
+          .catch(() => {
+            setModelMenus((m) => ({ ...m, [next]: { status: "error", models: [] } }));
+          });
+      }
+      return next;
+    });
+  }
+
+  async function selectModel(backend: string, model: string) {
+    const previous = selectedModels[backend];
+    setSelectedModels((s) => ({ ...s, [backend]: model }));
+    setOpenModelMenuFor(null);
+    try {
+      await api.putBackendModel(backend, model);
+    } catch (err) {
+      console.error("putBackendModel failed, reverting:", err);
+      setSelectedModels((s) => {
+        const next = { ...s };
+        if (previous === undefined) delete next[backend];
+        else next[backend] = previous;
+        return next;
+      });
+    }
+  }
 
   const jobList = Object.values(jobs);
 
@@ -215,7 +465,12 @@ export function Header() {
           <button
             type="button"
             className="jghost"
-            onClick={() => setBackendMenuOpen((open) => !open)}
+            onClick={() =>
+              setBackendMenuOpen((open) => {
+                if (open) setOpenModelMenuFor(null);
+                return !open;
+              })
+            }
             title={t("header.backendMenuTitle")}
             style={{
               display: "inline-flex",
@@ -299,16 +554,26 @@ export function Header() {
               {backendState.list.map((id, i) => {
                 const isActive = i === 0;
                 const color = isActive ? T.accent2 : T.ink3;
+                const canSelect = supportsModelSelection[id] === true;
+                const isMenuOpen = openModelMenuFor === id;
                 return (
                   <div
                     key={id}
+                    ref={(el) => {
+                      rowRefs.current[id] = el;
+                    }}
+                    role={canSelect ? "button" : undefined}
+                    tabIndex={canSelect ? 0 : undefined}
+                    title={canSelect ? t("header.modelMenuTitle") : undefined}
+                    onClick={canSelect ? () => toggleModelMenu(id) : undefined}
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: 9,
                       padding: "7px 9px",
                       borderRadius: T.btnRadius,
-                      background: isActive ? T.aSoft : "transparent",
+                      background: isActive ? T.aSoft : isMenuOpen ? T.sunk : "transparent",
+                      cursor: canSelect ? "pointer" : "default",
                     }}
                   >
                     <span style={{ font: `600 10px ${T.mono}`, color: T.ink3, width: 14, flex: "none" }}>
@@ -340,6 +605,42 @@ export function Header() {
                     <span style={{ font: `500 12px ${T.ui}`, color: isActive ? T.ink : T.ink2, flex: 1 }}>
                       {backendLabel(id)}
                     </span>
+                    {canSelect ? (
+                      <>
+                        <span
+                          style={{
+                            font: `500 9.5px ${T.mono}`,
+                            color: T.ink3,
+                            maxWidth: 78,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {selectedModels[id] ?? "—"}
+                        </span>
+                        <span
+                          style={{
+                            color: T.ink3,
+                            display: "flex",
+                            transform: isMenuOpen ? "rotate(90deg)" : "none",
+                            transition: "transform .12s",
+                          }}
+                        >
+                          <Icon name="chevron" size={9} />
+                        </span>
+                      </>
+                    ) : (
+                      <span
+                        style={{
+                          font: `400 9.5px ${T.mono}`,
+                          color: T.ink3,
+                          fontStyle: "italic",
+                        }}
+                      >
+                        {t("header.noModelSelection")}
+                      </span>
+                    )}
                     <span style={{ font: `500 9px ${T.mono}`, color, letterSpacing: ".05em" }}>
                       {isActive ? t("header.active") : t("header.standby")}
                     </span>
@@ -358,6 +659,19 @@ export function Header() {
                 {t("header.failoverExplain")}
               </div>
             </div>
+          )}
+          {backendMenuOpen && openModelMenuFor && (
+            <ModelSubmenu
+              top={submenuTop}
+              menu={modelMenus[openModelMenuFor]}
+              selected={selectedModels[openModelMenuFor]}
+              filter={modelFilter}
+              onFilterChange={setModelFilter}
+              onSelect={(model) => {
+                void selectModel(openModelMenuFor, model);
+              }}
+              t={t}
+            />
           )}
         </div>
 

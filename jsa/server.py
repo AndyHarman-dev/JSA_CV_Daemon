@@ -43,10 +43,11 @@ def make_backend_factory(
 
     The two overrides exist so a caller can swap the model and/or timeout *without*
     re-deriving the per-backend argument mapping (anthropic takes `anthropic_timeout`,
-    CLI backends take `agent_timeout`, opencode-zen takes `opencode_zen_timeout`, and
-    `google-cli` takes no model at all). Both default to None, meaning "use the
-    settings value". The `fit_assessment` stage is the one caller that passes them —
-    see `Settings.fit_model` / `Settings.fit_timeout`.
+    CLI backends take `agent_timeout`, opencode-zen/mistral/openrouter/gemini/
+    opencode-go each take their own dedicated `<name>_timeout`, and `google-cli`
+    takes no model at all). Both default to None, meaning "use the settings value".
+    The `fit_assessment` stage is the one caller that passes them — see
+    `Settings.fit_model` / `Settings.fit_timeout`.
 
     Model precedence (when `model_override` is None): `settings.backend_models[name]`
     (the runtime selection made via PUT /api/backend-models, re-read on every call so a
@@ -75,6 +76,26 @@ def make_backend_factory(
             model = _model_for("opencode-zen", settings.opencode_zen_model)
             timeout = settings.opencode_zen_timeout if timeout_override is None else timeout_override
             return backend_for("opencode-zen", model=model, timeout=timeout)
+
+        if name == "mistral":
+            model = _model_for("mistral", settings.mistral_model)
+            timeout = settings.mistral_timeout if timeout_override is None else timeout_override
+            return backend_for("mistral", model=model, timeout=timeout)
+
+        if name == "openrouter":
+            model = _model_for("openrouter", settings.openrouter_model)
+            timeout = settings.openrouter_timeout if timeout_override is None else timeout_override
+            return backend_for("openrouter", model=model, timeout=timeout)
+
+        if name == "gemini":
+            model = _model_for("gemini", settings.gemini_model)
+            timeout = settings.gemini_timeout if timeout_override is None else timeout_override
+            return backend_for("gemini", model=model, timeout=timeout)
+
+        if name == "opencode-go":
+            model = _model_for("opencode-go", settings.opencode_go_model)
+            timeout = settings.opencode_go_timeout if timeout_override is None else timeout_override
+            return backend_for("opencode-go", model=model, timeout=timeout)
 
         timeout = settings.agent_timeout if timeout_override is None else timeout_override
         if name == "claude-cli":

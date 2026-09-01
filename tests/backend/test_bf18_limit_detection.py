@@ -7,6 +7,9 @@ Tests cover:
 4. GoogleCliBackend._parse_with_nudge detects limit keywords and raises AgentLimitReached.
 5. AnthropicAPIBackend._call_api catches anthropic.RateLimitError and raises AgentLimitReached.
 6. Orchestrator._run_one catches AgentLimitReached and marks the job failed with the correct message.
+7. The four multi-backend-model-select backends (mistral, openrouter, opencode-go's
+   /chat/completions path, gemini) classify rate-limit / permanent-4xx / exhausted-5xx /
+   timeout into the same three BF-19-recognized exception types.
 """
 
 from __future__ import annotations
@@ -23,7 +26,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from jsa.agents.anthropic_api import AnthropicAPIBackend
 from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentReply, AgentTimeout
 from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
+from jsa.agents.gemini_api import GeminiBackend
 from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
+from jsa.agents.mistral import MistralBackend
+from jsa.agents.opencode_go import OpenCodeGoBackend
+from jsa.agents.openrouter import OpenRouterBackend
 from jsa.db import repo
 from jsa.db.models import Base, Job, JobState, Stage
 from jsa.pipeline.orchestrator import Orchestrator
@@ -720,3 +727,137 @@ class TestOrchestratorLimitDetection:
 
         assert job1_final.state == JobState.failed
         assert "Backend limit reached" in (job1_final.error or "")
+
+
+# ---------------------------------------------------------------------------
+# Test 7: the four multi-backend-model-select backends (mistral, openrouter,
+# opencode-go's /chat/completions path, gemini) classify a rate limit, a
+# permanent 4xx, an exhausted-retry 5xx, and a timeout into the same three
+# BF-19-recognized exception types (AgentLimitReached / AgentBackendUnavailable
+# / AgentTimeout). Full request/response-shape coverage for each backend
+# already lives in its own dedicated test file (test_mistral.py /
+# test_openrouter.py / test_opencode_go.py / test_gemini_api.py, plus the
+# shared machinery in test_openai_compat.py) — this class exists so the file
+# this plan's Phase 7 named ("add per-backend classification cases so all
+# four join the BF-19 chain correctly") actually references all four.
+# ---------------------------------------------------------------------------
+
+
+def _openai_compat_body(text) -> dict:
+    return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
+
+def _make_mock_client(json_body: dict, status_code: int = 200) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.json = MagicMock(return_value=json_body)
+    mock_response.text = str(json_body)
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.aclose = AsyncMock()
+    return mock_client
+
+
+@pytest.fixture
+def _new_backend_no_retry_delay(monkeypatch):
+    async def _instant_sleep(_seconds):
+        return None
+    monkeypatch.setattr("jsa.agents._openai_compat.asyncio.sleep", _instant_sleep)
+
+
+@pytest.mark.parametrize(
+    "make_backend",
+    [
+        lambda: MistralBackend(),
+        lambda: OpenRouterBackend(),
+        lambda: OpenCodeGoBackend(),  # default model (glm-5.3) is the /chat/completions protocol
+    ],
+    ids=["mistral", "openrouter", "opencode-go-chat"],
+)
+class TestOpenAICompatibleNewBackendsClassification:
+    """Mistral, OpenRouter, and OpenCode-GO's chat protocol all inherit
+    OpenAICompatBackend's _call_api_once unchanged — one parametrized class
+    proves the three-way classification actually fires through each concrete
+    subclass, not just the shared base tested via MistralBackend alone."""
+
+    async def test_429_raises_agent_limit_reached(self, make_backend, _new_backend_no_retry_delay):
+        mock_client = _make_mock_client({}, status_code=429)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = make_backend()
+            with pytest.raises(AgentLimitReached):
+                await backend.start_session("sys", "hi")
+
+    async def test_permanent_4xx_raises_agent_backend_unavailable(self, make_backend, _new_backend_no_retry_delay):
+        mock_client = _make_mock_client(
+            {"error": {"message": "invalid model", "type": "invalid_request_error"}},
+            status_code=400,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = make_backend()
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.start_session("sys", "hi")
+
+    async def test_exhausted_5xx_raises_agent_backend_unavailable(self, make_backend, _new_backend_no_retry_delay):
+        mock_client = _make_mock_client({}, status_code=502)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = make_backend()
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.start_session("sys", "hi")
+        assert mock_client.post.await_count == 3  # _MAX_ATTEMPTS
+
+    async def test_timeout_raises_agent_timeout(self, make_backend, _new_backend_no_retry_delay):
+        import httpx as httpx_module
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=httpx_module.TimeoutException("timed out"))
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = make_backend()
+            with pytest.raises(AgentTimeout):
+                await backend.start_session("sys", "hi")
+
+
+class TestGeminiClassification:
+    """GeminiBackend overrides only _call_api_once (its wire shape has nothing
+    in common with the OpenAI-compatible body), so its classification needs
+    its own error-envelope shape rather than reusing the parametrized class
+    above."""
+
+    async def test_429_raises_agent_limit_reached(self, _new_backend_no_retry_delay):
+        mock_client = _make_mock_client({}, status_code=429)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            with pytest.raises(AgentLimitReached):
+                await backend.start_session("sys", "hi")
+
+    async def test_permanent_4xx_raises_agent_backend_unavailable(self, _new_backend_no_retry_delay):
+        mock_client = _make_mock_client(
+            {"error": {"code": 400, "message": "bad model", "status": "INVALID_ARGUMENT"}},
+            status_code=400,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.start_session("sys", "hi")
+
+    async def test_exhausted_5xx_raises_agent_backend_unavailable(self, _new_backend_no_retry_delay):
+        mock_client = _make_mock_client(
+            {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}},
+            status_code=503,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.start_session("sys", "hi")
+        assert mock_client.post.await_count == 3  # _MAX_ATTEMPTS
+
+    async def test_timeout_raises_agent_timeout(self, _new_backend_no_retry_delay):
+        import httpx as httpx_module
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=httpx_module.TimeoutException("timed out"))
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            with pytest.raises(AgentTimeout):
+                await backend.start_session("sys", "hi")

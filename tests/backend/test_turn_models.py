@@ -28,6 +28,7 @@ from jsa.schema.turn_models import (
     ClTurn,
     CvTurn,
     FitVerdict,
+    inline_defs,
     json_schema_for,
     parse_structured_reply,
     parse_structured_reply_for_schema,
@@ -324,3 +325,68 @@ class TestSchemaKeyedParityWithStageKeyed:
             parse_structured_reply_for_schema(
                 json.dumps({"kind": "final", "payload": _cv_dict()}), fit_schema
             )
+
+
+# ---------------------------------------------------------------------------
+# inline_defs — Gemini's $defs/$ref/additionalProperties dereferencer
+# (multi-backend-model-select plan, Phase 3; GeminiBackend is the only caller).
+# ---------------------------------------------------------------------------
+
+
+def _find_keys(obj, banned: set[str]) -> set[str]:
+    """Every banned key found anywhere in obj, recursively."""
+    found: set[str] = set()
+    if isinstance(obj, dict):
+        found |= banned & obj.keys()
+        for v in obj.values():
+            found |= _find_keys(v, banned)
+    elif isinstance(obj, list):
+        for v in obj:
+            found |= _find_keys(v, banned)
+    return found
+
+
+class TestInlineDefs:
+    _BANNED = {"$defs", "$ref", "additionalProperties", "title", "default"}
+
+    @pytest.mark.parametrize("stage", [Stage.cv_adjust, Stage.cover_letter, Stage.fit_assessment])
+    def test_no_banned_keys_survive(self, stage):
+        schema = json_schema_for(stage)
+        inlined = inline_defs(schema)
+        assert _find_keys(inlined, self._BANNED) == set()
+
+    def test_nested_ref_inside_anyof_is_resolved(self):
+        """The turn union's `payload` field is `anyOf: [CVDocument, null]` — a $ref
+        buried inside an anyOf array, not a bare top-level $ref. The original probe
+        script's first inliner attempt missed exactly this shape (see the plan's
+        Change Log, probe #4c)."""
+        schema = json_schema_for(Stage.cv_adjust)
+        inlined = inline_defs(schema)
+        payload_schema = inlined["properties"]["payload"]
+        # Resolved: the CVDocument object shape (with "contact"/"sections"
+        # properties) must appear somewhere under payload's anyOf branches.
+        branches = payload_schema.get("anyOf", [payload_schema])
+        assert any("contact" in b.get("properties", {}) for b in branches)
+
+    def test_description_is_preserved(self):
+        """Only $defs/$ref/additionalProperties/title/default are stripped —
+        description (which Gemini's schema subset does accept) must survive."""
+        schema = json_schema_for(Stage.fit_assessment)
+        inlined = inline_defs(schema)
+        assert inlined["description"] == schema["description"]
+        assert inlined["properties"]["verdict"]["enum"] == schema["properties"]["verdict"]["enum"]
+
+    def test_no_defs_schema_is_a_safe_no_op(self):
+        """FitVerdict is flat (no nested $defs) — inline_defs must not choke on a
+        schema that never had anything to inline."""
+        schema = json_schema_for(Stage.fit_assessment)
+        assert "$defs" not in schema
+        inlined = inline_defs(schema)
+        assert inlined["required"] == schema["required"]
+
+    def test_unresolvable_ref_returns_empty_object_not_a_crash(self):
+        """A cycle guard / missing-key guard: an unknown $ref key must not raise —
+        it degrades to an empty object so the function stays total."""
+        schema = {"type": "object", "properties": {"x": {"$ref": "#/$defs/Missing"}}}
+        inlined = inline_defs(schema)
+        assert inlined["properties"]["x"] == {}

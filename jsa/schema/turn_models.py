@@ -155,6 +155,45 @@ def json_schema_for(stage: Stage) -> dict[str, Any]:
     return model.model_json_schema()
 
 
+def inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Recursively inline every ``$ref`` in ``schema`` against its own ``$defs``,
+    dropping ``$defs``, ``additionalProperties``, ``title`` and ``default`` from the
+    result (Gemini's ``responseSchema`` is a restricted OpenAPI subset that rejects
+    all four).
+
+    Multi-backend-model-select plan, Phase 0 probe #4 (2026-08-31): both
+    ``generationConfig.responseSchema`` and ``responseJsonSchema`` reject the raw
+    ``json_schema_for(Stage.cv_adjust)`` output (nested ``$defs`` for
+    ``CVDocument``/``Contact``/``Section``/``Entry``) on every current Gemini model
+    tried, but accept it once inlined — confirmed live. This is the plan's
+    pre-committed fallback #1: send the inlined form rather than fight the
+    restriction, the same call already made for Anthropic's forced tool-use
+    (``input_schema`` has no recursive-strictness requirement) and for OpenCode
+    Zen/Mistral/OpenRouter's ``response_format`` (``"strict": false`` — see
+    ``_openai_compat.py``'s module docstring). ``GeminiBackend`` is the only caller.
+
+    A cycle guard (each ``$defs`` key inlines at most once per branch) returns an
+    empty object rather than recursing forever on a self-referential schema — none
+    of the turn models are actually cyclic; this just keeps the function total.
+    """
+    defs = schema.get("$defs", {})
+    _DROP = ("$defs", "additionalProperties", "title", "default")
+
+    def _inline(node: Any, seen: frozenset[str]) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                key = node["$ref"].rsplit("/", 1)[-1]
+                if key in seen or key not in defs:
+                    return {}
+                return _inline(defs[key], seen | {key})
+            return {k: _inline(v, seen) for k, v in node.items() if k not in _DROP}
+        if isinstance(node, list):
+            return [_inline(v, seen) for v in node]
+        return node
+
+    return _inline(schema, frozenset())
+
+
 def _parse_fit_structured(raw: str, data: Any) -> AgentReply:
     if not isinstance(data, dict):
         raise ProtocolError("structured reply unparseable: expected a JSON object")

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JSA_")
 
     output_dir: Path = Path("output")
-    backend: str = "claude-cli"          # claude-cli | google-cli | anthropic | opencode-zen (kept for backward compat)
+    backend: str = "claude-cli"          # claude-cli | google-cli | anthropic | opencode-zen | mistral | openrouter | gemini | opencode-go (kept for backward compat)
     backends: List[str] = ["claude-cli"]  # Ordered chain; backends[0] is the primary
     db_path: Path = Path.home() / ".jsa" / "jsa.sqlite"
     port: int = 8765
@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     agent_timeout: float = 600.0         # Timeout for CLI backends (claude-cli, google-cli), via JSA_AGENT_TIMEOUT
     opencode_zen_model: str = "nemotron-3-ultra-free"  # Model ID for opencode-zen, via JSA_OPENCODE_ZEN_MODEL
     opencode_zen_timeout: float = 180.0  # Per-reply timeout in seconds, via JSA_OPENCODE_ZEN_TIMEOUT
+    mistral_model: str = "mistral-small-2603"  # Must match MistralBackend.default_model; via JSA_MISTRAL_MODEL
+    mistral_timeout: float = 180.0       # Per-reply timeout in seconds, via JSA_MISTRAL_TIMEOUT
+    openrouter_model: str = "nvidia/nemotron-3-nano-30b-a3b"  # Must match OpenRouterBackend.default_model; via JSA_OPENROUTER_MODEL
+    openrouter_timeout: float = 180.0    # Per-reply timeout in seconds, via JSA_OPENROUTER_TIMEOUT
+    gemini_model: str = "gemini-3.1-flash-lite"  # Must match GeminiBackend.default_model; via JSA_GEMINI_MODEL
+    gemini_timeout: float = 180.0        # Per-reply timeout in seconds, via JSA_GEMINI_TIMEOUT
+    opencode_go_model: str = "glm-5.3"   # Must match OpenCodeGoBackend.default_model; via JSA_OPENCODE_GO_MODEL
+    opencode_go_timeout: float = 180.0   # Per-reply timeout in seconds, via JSA_OPENCODE_GO_TIMEOUT
     fit_model: str | None = None         # Model for the fit_assessment stage only, via JSA_FIT_MODEL / --fit-model.
                                          # None → the fit stage uses the same model as every other stage (`model`).
     fit_timeout: float | None = None     # Per-reply timeout for the fit_assessment stage only, via JSA_FIT_TIMEOUT.

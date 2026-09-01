@@ -68,6 +68,7 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "jd": job.jd,
         "state": job.state.value if job.state is not None else None,
         "current_stage": job.current_stage.value if job.current_stage is not None else None,
+        "backend_name": job.backend_name,
         "language": job.language,
         "fit_reason": job.fit_reason,
         "error": job.error,

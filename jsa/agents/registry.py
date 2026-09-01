@@ -26,7 +26,25 @@ def backend_for(name: str, **kwargs: object) -> "AgentBackend":
         raise KeyError(
             f"Unknown backend {name!r}. Available backends: {available}"
         )
-    return _REGISTRY[name](**kwargs)
+    try:
+        return _REGISTRY[name](**kwargs)
+    except ValueError as exc:
+        # A backend constructor validating its own config (e.g. OpenCodeGoBackend
+        # rejecting a model outside its known dual-protocol table) is exactly the
+        # "bad model/config" case CLAUDE.md's BF-19 section assigns to
+        # AgentBackendUnavailable. Without this, a bad runtime model selection
+        # (PUT /api/backend-models does not validate against the catalog) raises a
+        # plain ValueError from inside Orchestrator._run_one's try block, which is
+        # caught by its generic `except Exception` and hard-fails the job on the
+        # very first backend with no BF-19 fallback-chain engagement — the same
+        # failure shape CLAUDE.md's OpenCode Zen section documents as already fixed
+        # for HTTP-level errors. Re-raising here closes that gap at construction
+        # time too, for every backend, not just the ones with HTTP error bodies.
+        from jsa.agents.base import AgentBackendUnavailable
+
+        raise AgentBackendUnavailable(
+            f"Backend {name!r} rejected its configuration: {exc}"
+        ) from exc
 
 
 # Register CLI backends
@@ -43,3 +61,13 @@ register("anthropic", AnthropicAPIBackend)
 from jsa.agents.opencode_zen import OpenCodeZenBackend  # noqa: E402
 
 register("opencode-zen", OpenCodeZenBackend)
+
+from jsa.agents.mistral import MistralBackend  # noqa: E402
+from jsa.agents.openrouter import OpenRouterBackend  # noqa: E402
+from jsa.agents.gemini_api import GeminiBackend  # noqa: E402
+from jsa.agents.opencode_go import OpenCodeGoBackend  # noqa: E402
+
+register("mistral", MistralBackend)
+register("openrouter", OpenRouterBackend)
+register("gemini", GeminiBackend)
+register("opencode-go", OpenCodeGoBackend)

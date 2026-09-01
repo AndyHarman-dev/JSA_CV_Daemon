@@ -23,6 +23,7 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     jd: "jd",
     state: "unfit",
     current_stage: null,
+    backend_name: null,
     fit_reason: "Role needs 15+ years; CV shows 4.",
     error: null,
     retry_count: 0,

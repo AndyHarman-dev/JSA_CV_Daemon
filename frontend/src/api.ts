@@ -174,4 +174,27 @@ export const api = {
       body: JSON.stringify({ language }),
     });
   },
+
+  // --- Per-backend runtime model selection (global, persisted; see jsa/api/routes_backend_models.py) ---
+
+  getBackendModels(): Promise<{
+    selected: Record<string, string>;
+    supports_model_selection: Record<string, boolean>;
+  }> {
+    return apiFetch("/api/backend-models");
+  },
+
+  getBackendModelsFor(
+    backend: string
+  ): Promise<{ backend: string; models: string[]; selected: string | null; source: "live" | "catalog" }> {
+    return apiFetch(`/api/backend-models/${encodeURIComponent(backend)}`);
+  },
+
+  putBackendModel(backend: string, model: string): Promise<{ backend: string; model: string }> {
+    return apiFetch("/api/backend-models", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backend, model }),
+    });
+  },
 };

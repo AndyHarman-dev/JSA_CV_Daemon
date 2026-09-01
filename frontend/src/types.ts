@@ -14,6 +14,7 @@ export interface JobDTO {
   jd: string;
   state: JobState;
   current_stage: Stage | null;
+  backend_name: string | null;
   language: string | null;
   fit_reason: string | null;
   error: string | null;

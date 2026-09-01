@@ -15,7 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from jsa.agents.model_catalog import SUPPORTS_MODEL_SELECTION, merged_catalog
+from jsa.agents.model_catalog import SUPPORTS_MODEL_SELECTION, list_models
 from jsa.agents.registry import _REGISTRY
 from jsa.store import backend_models
 
@@ -46,12 +46,12 @@ async def get_backend_models_for(request: Request, backend: str) -> dict:
         raise HTTPException(status_code=404, detail=f"Unknown backend: {backend!r}")
 
     models = await backend_models.load(_settings(request))
-    catalog = merged_catalog(models.catalog)
+    listed, source = await list_models(backend, catalog_overrides=models.catalog)
     return {
         "backend": backend,
-        "models": catalog.get(backend, []),
+        "models": listed,
         "selected": models.selected.get(backend),
-        "source": "catalog",
+        "source": source,
     }
 
 

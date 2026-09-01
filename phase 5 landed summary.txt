@@ -1,0 +1,73 @@
+# Phase 5 Summary — CV/cover-letter two-lane split (frontend)
+
+## Context
+Staying on the same branch, proceeded with phase 5 from
+`.claude/plans/let-s-write-a-careful-velvet-mccarthy.md`. Goal: frontend work for
+the CV/cover-letter two-lane split; user does the visual click-through afterwards.
+The phase 5 gate: no frontend regressions on frontend tests plus a visual check
+clicking the interactive buttons. Work tracked as a claude-stat task (#76).
+
+## What changed (all staged, nothing committed)
+
+- **types.ts / store.ts** — added the `cv_review` state and a new `viewedStage`
+  (`"cv" | "cl" | null`) store field that drives which artifact the ReviewPane
+  shows, independent of which pipeline stage is actually running. `viewedStage`
+  resets to `null` on every job switch (`selectJob`) so a stale view never carries
+  to a different job; `null` means "follow the pipeline". Added `setViewedStage`.
+
+- **StageTimeline.tsx** — the CV_ADJUST and COVER_LETTER dots are now real
+  clickable `<button>`s wired to `viewedStage` (click again to toggle/clear). The
+  CV_DONE step was relabeled CV_REVIEW. The COVER_LETTER button stays disabled
+  until that lane is actually reachable. Rewrote the node rendering to avoid a
+  dynamic-tag TS pitfall (extracted shared `nodeStyle`/`nodeContent`, branched with
+  a real conditional element).
+
+- **ReviewPane.tsx** — new `mode` prop, `"cv-gate" | "final"` (defaults to
+  `"final"` so the existing review/approved call site is unaffected). In
+  `"cv-gate"`: CV-only tab (CL tab hidden), approve calls `api.approveCv` (not
+  `approve`), and the revise ChatBox is restricted to the CV target (no cv/cl
+  selector). Read-only state strictly follows `job.state`
+  (`running`/`awaiting_input`), never `viewedStage`.
+
+- **JobDetail.tsx** — mounts the CV-gate pane (`mode="cv-gate"`) at `cv_review`,
+  and a read-only CV view when jumping back to the CV mid-run.
+
+- **api.ts / ChatBox.tsx / chrome.tsx / JobList.tsx / Header.tsx** — supporting
+  plumbing. Notably JobList/Header were NOT in the plan's file list but were
+  needed, otherwise a `cv_review` job would have silently vanished from the
+  sidebar.
+
+- **i18n** — 5 new keys (`stateMeta.cvReview`, `stageTimeline.cvReview`,
+  `stageTimeline.clNotStarted`, `reviewPane.approveCvButton`,
+  `reviewPane.readOnlyNotice`) translated into all 18 locales via
+  `translate-ui.sh --backend cli` (no API key set, used the CLI backend);
+  `--check` passes.
+
+## Important deviations / advisor-caught fixes
+An `advisor()` pass (Opus 5) before handoff caught three real bugs the unit tests
+had missed, all fixed and re-covered by new tests:
+
+1. **Disabled COVER_LETTER dot during its own first run** — replaced the heuristic
+   `coverLetterDocLikelyExists` with `disabled = step.viewKey === "cl" &&
+   activeIdx < 3` so the click-back works mid-run, not just after review.
+2. **Blocking question suppressed when jumping to the CV mid-cover-letter-run** —
+   the CV jump-back now applies ONLY to `running`, never `awaiting_input`, so
+   FollowUpPane (and the agent's question) is never hidden while the job waits on
+   the user. Also broadened the jump-back to run from any in-flight cv/cl stage,
+   not just the cover-letter lane.
+3. **Dead click on CV_ADJUST during its own run** — clicking the currently-active
+   CV dot now renders the (read-only) CV pane rather than doing nothing.
+
+## Verification
+- Frontend tests: 272/272 pass (after adding StageTimeline, ReviewPane, and
+  JobDetail cv-gate / regression tests).
+- `tsc` clean; `npm run build` clean; `jsa/static` bundle regenerated.
+- Translation catalogs in sync; `--check` verifies.
+- Plan's Change Log updated with an addendum noting the advisor-caught fixes; all
+  changes staged.
+
+## Handoff
+Implementation complete and verified; remaining step is the user's manual browser
+click-through (plan step 3): launch a job, watch it park at CV_REVIEW, revise/
+approve it, jump back to the CV while the cover-letter lane runs. One open
+housekeeping item: whether to mark claude-stat task #76 done.

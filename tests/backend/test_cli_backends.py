@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from jsa.agents.base import AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackendUnavailable, AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
 from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
 from jsa.agents.registry import backend_for
@@ -43,6 +43,39 @@ def _ok(stdout: bytes = _FINAL_BYTES, returncode: int = 0, stderr: bytes = b"") 
 # ---------------------------------------------------------------------------
 # 14 — AgentTimeout is importable from jsa.agents.base and is an Exception
 # ---------------------------------------------------------------------------
+
+class TestValidBackendsDriftGuard:
+    """jsa.cli's _VALID_BACKENDS is a hardcoded literal (fast-fail before the registry
+    import) -- it must never drift from jsa.agents.registry._REGISTRY, or a newly
+    registered backend would be rejected by --backend/--backends before pydantic's
+    registry-driven _validate_backends ever runs (CLAUDE.md -> Phase 4 "Problems")."""
+
+    def test_valid_backends_matches_registry(self):
+        from jsa.agents.registry import _REGISTRY
+        from jsa.cli import _VALID_BACKENDS
+
+        assert _VALID_BACKENDS == set(_REGISTRY)
+
+
+class TestBackendForConvertsConstructorValueError:
+    """PUT /api/backend-models never validates a model against the catalog before
+    persisting it, so a bad runtime selection reaches a backend constructor that
+    validates its own config (e.g. OpenCodeGoBackend rejecting a model outside its
+    known dual-protocol table) with no earlier gate. backend_for() must convert that
+    ValueError into AgentBackendUnavailable -- one of BF-19's three typed exceptions
+    -- so Orchestrator._run_one's generic `except Exception` doesn't hard-fail the
+    job on the very first backend with no fallback-chain engagement."""
+
+    def test_bad_model_selection_raises_agent_backend_unavailable_not_value_error(self):
+        with pytest.raises(AgentBackendUnavailable):
+            backend_for("opencode-go", model="not-a-real-model")
+
+    def test_agent_backend_unavailable_wraps_the_original_value_error(self):
+        with pytest.raises(AgentBackendUnavailable) as exc_info:
+            backend_for("opencode-go", model="not-a-real-model")
+
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
 
 class TestAgentTimeout:
     def test_agent_timeout_is_importable(self):

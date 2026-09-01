@@ -1,0 +1,1525 @@
+ ▐▛███▛█   Claude Code v2.1.250
+▝▜██████▀  Sonnet 5 · Claude Pro
+  ▝▝ ▝▝    ~/VSCodeProjects/JSA
+
+
+❯ /clear                                                                        
+
+❯ Staying on the same branch proceed with phase 5 - @/Users/wiam/VSCodeProjects 
+  /JSA/.claude/plans/let-s-write-a-careful-velvet-mccarthy.md                   
+                                                                                
+  The phase 5 gate is no frontend regressions on the frontend tests and a       
+  visual check in the application with clicking on the interactive buttons.     
+                                                                                
+  Your goal to do the front-end work, stage everything to work and I will do    
+  the visual check.                                                             
+  ⎿  Read .claude/plans/let-s-write-a-careful-velvet-mccarthy.md (458 lines)
+
+⏺ User answered Claude's questions:
+  ⎿  · Track this Phase 5 frontend work as a claude-stat task? → Yes, track it
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Based on similar work (task #75, phases 1-4, took ~1h24m wall), phase 5 being
+  frontend-only should take roughly 45min-1h15m. Let me verify phases 1-4
+  landed, then dive into the frontend files.
+
+  Read 4 files, ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now let's check the backend routes for approve-cv (Phase 4) to confirm exact
+  response shape, and check the existing tests for ReviewPane/StageTimeline.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+⏺ Good — approveCv returns {pdf_path, docx_path}. Now let's check existing test
+  files for StageTimeline and ReviewPane, plus i18n strings.en.json relevant
+  section.
+
+  Searched for 6 patterns, read 5 files, listed 1 directory, ran 9 shell commands (ctrl+o to expand)
+⏺ Good, no API key but the claude CLI is available — I'll use --backend cli for
+  translation. Now let's implement the changes, starting with types.ts.
+
+⏺ Update(frontend/src/types.ts)
+  ⎿  Added 2 lines, removed 2 lines
+      1  export type JobState =
+      2 -  | "queued" | "pending" | "running" | "awaiting_input" | "fit_d
+        -one" | "unfit" | "cv_done"                                      
+      3 -  | "cl_done" | "review" | "approved" | "failed" | "dismissed"; 
+      2 +  | "queued" | "pending" | "running" | "awaiting_input" | "fit_d
+        +one" | "unfit" | "cv_review"                                    
+      3 +  | "cv_done" | "cl_done" | "review" | "approved" | "failed" | "
+        +dismissed";                                                     
+      4  
+      5  export type Stage =
+      6    | "fit_assessment" | "cv_adjust" | "cover_letter" | "revising_
+         cv" | "revising_cl";
+
+⏺ Now let's implement. Starting with chrome.tsx and i18n for the state badge.
+
+⏺ Update(frontend/src/theme/chrome.tsx)
+  ⎿  Added 1 line
+      67      awaiting_input: { label: "stateMeta.awaitingInput", code: "
+          WAIT", color: T.a },
+      68      fit_done: { label: "stateMeta.fitDone", code: "CHK", color:
+           T.accent2 },
+      69      unfit: { label: "stateMeta.unfit", code: "FLAG", color: T.a
+           },
+      70 +    cv_review: { label: "stateMeta.cvReview", code: "CV_RVW", c
+         +olor: T.violet },                                              
+      71      cv_done: { label: "stateMeta.cvDone", code: "CV_OK", color:
+           T.accent2 },
+      72      cl_done: { label: "stateMeta.clDone", code: "CL_OK", color:
+           T.accent2 },
+      73      review: { label: "stateMeta.review", code: "RVW", color: T.
+          violet },
+
+⏺ Now JobList.tsx and Header.tsx groupings:
+
+⏺ Update(frontend/src/components/JobList.tsx)
+  ⎿  Added 1 line, removed 1 line
+      23    { labelKey: "jobList.inbox", states: ["awaiting_input"] },
+      24    { labelKey: "jobList.needsReview", states: ["unfit"] },
+      25    { labelKey: "jobList.running", states: ["running", "pending",
+           "fit_done", "cv_done", "cl_done"] },
+      26 -  { labelKey: "jobList.review", states: ["review"] },          
+      26 +  { labelKey: "jobList.review", states: ["cv_review", "review"]
+         + },                                                            
+      27    { labelKey: "jobList.done", states: ["approved"] },
+      28    { labelKey: "jobList.failed", states: ["failed"] },
+      29    { labelKey: "jobList.dismissed", states: ["dismissed"] },
+
+⏺ Update(frontend/src/components/Header.tsx)
+  ⎿  Added 1 line, removed 1 line
+      12  
+      13  const RUNNING_STATES: JobState[] = ["running", "pending", "cv_d
+          one", "cl_done"];
+      14  const INBOX_STATES: JobState[] = ["awaiting_input"];
+      15 -const REVIEW_STATES: JobState[] = ["review"];                  
+      15 +const REVIEW_STATES: JobState[] = ["cv_review", "review"];     
+      16  const DONE_STATES: JobState[] = ["approved"];
+      17  const FAILED_STATES: JobState[] = ["failed"];
+      18  
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ No test coverage there, good — safe change.
+
+⏺ Now store.ts:
+
+⏺ Update(frontend/src/store.ts)
+  ⎿  Added 6 lines
+      35    // not yet known (pre-hydration). The orchestrator keeps jobs
+           pending until this is true —
+      36    // JobList surfaces a gate banner pointing at the Structure E
+          ditor while it's false.
+      37    cvStructureExists: boolean | null;
+      38 +  // Which artifact the user is looking at, independent of what
+         + the pipeline is currently                                     
+      39 +  // running — driven by clicking the CV_ADJUST / COVER_LETTER 
+         +dots in StageTimeline. `null`                                  
+      40 +  // means "follow the pipeline" (today's default behaviour). R
+         +eset to null on every job                                      
+      41 +  // switch (selectJob) so a stale view never carries over to a
+         + different job.                                                
+      42 +  viewedStage: "cv" | "cl" | null;                             
+      43    upsertJob(j: JobDTO): void;
+      44    selectJob(id: string | undefined): void;
+      45 +  setViewedStage(stage: Store["viewedStage"]): void;           
+      46    setWsStatus(s: Store["wsStatus"]): void;
+      47    setEditorOpen(open: boolean): void;
+      48    setCvStructureExists(exists: boolean): void;
+
+⏺ Update(frontend/src/store.ts)
+  ⎿  Added 1 line
+      71    bootLang: "en",
+      72    configReady: false,
+      73    cvStructureExists: null,
+      74 +  viewedStage: null,                                           
+      75  
+      76    upsertJob(j: JobDTO) {
+      77      set((state) => ({
+
+⏺ Update(frontend/src/store.ts)
+  ⎿  Added 5 lines, removed 1 line
+      80    },
+      81  
+      82    selectJob(id: string | undefined) {
+      83 -    set({ selectedId: id });                                   
+      83 +    set({ selectedId: id, viewedStage: null });                
+      84    },
+      85  
+      86 +  setViewedStage(stage: Store["viewedStage"]) {                
+      87 +    set({ viewedStage: stage });                               
+      88 +  },                                                           
+      89 +                                                               
+      90    setWsStatus(s: Store["wsStatus"]) {
+      91      set({ wsStatus: s });
+      92    },
+
+⏺ Now api.ts — add approveCv:
+
+⏺ Update(frontend/src/api.ts)
+  ⎿  Added 7 lines
+      34      );
+      35    },
+      36  
+      37 +  approveCv(id: string): Promise<{ pdf_path: string; docx_path:
+         + string }> {                                                   
+      38 +    return apiFetch<{ pdf_path: string; docx_path: string }>(  
+      39 +      `/api/jobs/${encodeURIComponent(id)}/approve-cv`,        
+      40 +      { method: "POST" }                                       
+      41 +    );                                                         
+      42 +  },                                                           
+      43 +                                                               
+      44    revise(id: string, target: "cv" | "cl", text: string): Promis
+          e<JobDTO> {
+      45      return apiFetch<JobDTO>(`/api/jobs/${encodeURIComponent(id)
+          }/revise`, {
+      46        method: "POST",
+
+⏺ Now ChatBox.tsx — add fixedTarget prop:
+
+⏺ Update(frontend/src/components/ChatBox.tsx)  ⎿  Added 1 line, removed 1 line
+      12  
+      13  type ChatBoxProps =
+      14    | { kind: "answer"; jobId: string; followUpId: number; onSubm
+          itted?: () => void }
+      15 -  | { kind: "revise"; jobId: string; onSubmitted?: () => void }
+         -;                                                              
+      15 +  | { kind: "revise"; jobId: string; onSubmitted?: () => void; 
+         +fixedTarget?: "cv" };                                          
+      16  
+      17  // Backward-scan @-mention detection: an `@` found before any w
+          hitespace/newline makes the
+      18  // mention "active" at that index. Ported from the design hando
+          ff's `getMentionAt`
+
+⏺ Update(frontend/src/components/ChatBox.tsx)
+  ⎿  Added 3 lines, removed 1 line
+      39  
+      40  export function ChatBox(props: ChatBoxProps) {
+      41    const [text, setText] = useState("");
+      42 -  const [target, setTarget] = useState<"cv" | "cl">("cv");     
+      42 +  const [targetState, setTargetState] = useState<"cv" | "cl">("
+         +cv");                                                          
+      43 +  const fixedTarget = props.kind === "revise" ? props.fixedTarg
+         +et : undefined;                                                
+      44 +  const target = fixedTarget ?? targetState;                   
+      45    const [submitting, setSubmitting] = useState(false);
+      46    const [error, setError] = useState<string | null>(null);
+      47    const [mention, setMention] = useState<MentionState>(CLOSED_M
+          ENTION);
+
+⏺ Update(frontend/src/components/ChatBox.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      176        {mention.open && (
+      177          <MentionDropdown pos={mention.pos} entries={sortedEntr
+           ies} onSelect={insertScratchNote} />
+      178        )}
+      179 -      {props.kind === "revise" && (                           
+      179 +      {props.kind === "revise" && !fixedTarget && (           
+      180          <select
+      181            value={target}
+      182 -          onChange={(e) => setTarget(e.target.value as "cv" | 
+          -"cl")}                                                        
+      182 +          onChange={(e) => setTargetState(e.target.value as "c
+          +v" | "cl")}                                                   
+      183            disabled={submitting}
+      184            style={{
+      185              alignSelf: "flex-start",
+
+⏺ Now handleSubmit uses target which already correctly resolves — no change
+  needed there. Let's verify:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Good.
+
+⏺ Now StageTimeline.tsx — the biggest change:
+
+⏺ Update(frontend/src/components/StageTimeline.tsx)
+  ⎿  Added 18 lines, removed 5 lines
+      1  import type { JobDTO, JobState, Stage } from "../types";
+      2  import { useT } from "../i18n/useT";
+      3 +import { useStore } from "../store";                            
+      4  import { SHELL_THEME } from "../theme/tokens";
+      5  import { Icon } from "../theme/Icon";
+      6  
+     ...
+      10    job: JobDTO;
+      11  }
+      12  
+      12 -// `labelKey` is a translation key, resolved by the component b
+         -elow via `t()`.                                                
+      13 -const STEPS: { labelKey: string; key: string }[] = [           
+      13 +// `labelKey` is a translation key, resolved by the component b
+         +elow via `t()`. `viewKey` is                                   
+      14 +// set only on the two nodes that are clickable — they select w
+         +hich artifact ReviewPane                                       
+      15 +// shows (via the store's `viewedStage`), independent of which 
+         +stage is actually running.                                     
+      16 +const STEPS: { labelKey: string; key: string; viewKey?: "cv" | 
+         +"cl" }[] = [                                                   
+      17    { labelKey: "stageTimeline.pending", key: "pending" },
+      15 -  { labelKey: "stageTimeline.cvAdjust", key: "cv_adjust" },    
+      16 -  { labelKey: "stageTimeline.cvDone", key: "cv_done" },        
+      17 -  { labelKey: "stageTimeline.coverLetter", key: "cover_letter" 
+         -},                                                             
+      18 +  { labelKey: "stageTimeline.cvAdjust", key: "cv_adjust", viewK
+         +ey: "cv" },                                                    
+      19 +  { labelKey: "stageTimeline.cvReview", key: "cv_review" },    
+      20 +  { labelKey: "stageTimeline.coverLetter", key: "cover_letter",
+         + viewKey: "cl" },                                              
+      21    { labelKey: "stageTimeline.clDone", key: "cl_done" },
+      22    { labelKey: "stageTimeline.review", key: "review" },
+      23    { labelKey: "stageTimeline.approved", key: "approved" },
+      24  ];
+      25  
+      26 +// A cover_letter Document is only ever written on that stage's
+         + first FINAL (see                                              
+      27 +// jsa/pipeline/stages.py::_handle_final) — i.e. once the job h
+         +as reached `review` at least                                   
+      28 +// once, or is mid a `revising_cl` (which by definition can't h
+         +appen without a prior CL                                       
+      29 +// Document). Anything earlier — including a live `running`/`aw
+         +aiting_input` cover_letter                                     
+      30 +// stage before its first FINAL — has nothing to show yet.     
+      31 +function coverLetterDocLikelyExists(job: JobDTO): boolean {    
+      32 +  if (job.state === "review" || job.state === "approved" || job
+         +.state === "cl_done") return true;                             
+      33 +  return job.current_stage === "revising_cl";                  
+      34 +}                                                              
+      35 +                                                               
+      36  function getActiveStepIndex(state: JobState, currentStage: Stag
+          e | null): number {
+      37    switch (state) {
+      38      case "queued":
+
+⏺ Now update getActiveStepIndex to handle cv_review state:
+
+⏺ Update(frontend/src/components/StageTimeline.tsx)
+  ⎿  Added 6 lines
+      54      case "unfit":
+      55        // Parked on the not-a-fit modal; nothing produced yet.
+      56        return 0;
+      57 +    case "cv_review":                                          
+      58 +      // Parked at the CV gate, awaiting approve/revise.       
+      59 +      return 2;                                                
+      60      case "cv_done":
+      61 +      // CV approved; same node position — cover_letter is up n
+         +ext but hasn't produced                                        
+      62 +      // anything yet. This is also the BF-19 rewind target, so
+         + it must stay reachable                                        
+      63 +      // from running(cover_letter) — see jsa/pipeline/state_ma
+         +chine.py.                                                      
+      64        return 2;
+      65      case "cl_done":
+      66        return 4;
+
+⏺ Now the render section — make the cv_adjust/cover_letter nodes clickable
+  buttons:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Now let's replace the whole render body:
+
+⏺ Update(frontend/src/components/StageTimeline.tsx)
+  ⎿  Added 37 lines, removed 4 lines
+      80  
+      81  export function StageTimeline({ job }: StageTimelineProps) {
+      82    const activeIdx = getActiveStepIndex(job.state, job.current_s
+          tage);
+      83 +  const viewedStage = useStore((s) => s.viewedStage);          
+      84 +  const setViewedStage = useStore((s) => s.setViewedStage);    
+      85    const t = useT();
+      86 +  const clDocExists = coverLetterDocLikelyExists(job);         
+      87  
+      88    return (
+      89      <div style={{ display: "flex", alignItems: "flex-start", ga
+          p: 0, overflowX: "auto", padding: "6px 2px 2px" }}>
+     ...
+       91          const isComplete = idx < activeIdx;
+       92          const isActive = idx === activeIdx;
+       93          const color = isComplete ? T.accent2 : isActive ? T.a 
+           : T.ink3;
+       94 +        const interactive = step.viewKey !== undefined;       
+       95 +        const disabled = step.viewKey === "cl" && !clDocExists
+          +;                                                             
+       96 +        const selected = interactive && viewedStage === step.v
+          +iewKey;                                                       
+       97  
+       98 +        const Node = interactive ? "button" : "div";          
+       99 +        const nodeProps = interactive                         
+      100 +          ? {                                                 
+      101 +              type: "button" as const,                        
+      102 +              disabled,                                       
+      103 +              "aria-pressed": selected,                       
+      104 +              title: disabled ? t("stageTimeline.clNotStarted"
+          +) : undefined,                                                
+      105 +              onClick: () => setViewedStage(step.viewKey === v
+          +iewedStage ? null : (step.viewKey ?? null)),                  
+      106 +            }                                                 
+      107 +          : {};                                               
+      108 +                                                              
+      109          return (
+      110            <div key={step.key} style={{ display: "flex", alignI
+           tems: "flex-start", flex: "none" }}>
+      111              {/* Connector line (not before first step) */}
+     ...
+      122                />
+      123              )}
+      124              {/* Step node + label */}
+      108 -            <div style={{ display: "flex", flexDirection: "col
+          -umn", alignItems: "center", flex: "none", width: 86 }}>       
+      125 +            <Node                                             
+      126 +              {...nodeProps}                                  
+      127 +              style={{                                        
+      128 +                display: "flex",                              
+      129 +                flexDirection: "column",                      
+      130 +                alignItems: "center",                         
+      131 +                flex: "none",                                 
+      132 +                width: 86,                                    
+      133 +                border: "none",                               
+      134 +                background: selected ? `color-mix(in srgb, ${T
+          +.a} 12%, transparent)` : "transparent",                       
+      135 +                borderRadius: T.chamfer ? 4 : 10,             
+      136 +                padding: "2px 0 4px",                         
+      137 +                cursor: interactive ? (disabled ? "default" : 
+          +"pointer") : "default",                                       
+      138 +                opacity: disabled ? 0.45 : 1,                 
+      139 +                font: "inherit",                              
+      140 +              }}                                              
+      141 +            >                                                 
+      142                <div
+      143                  data-testid="stage-dot"
+      144                  data-state={isComplete ? "complete" : isActive
+            ? "active" : "pending"}
+     ...
+      151                    alignItems: "center",
+      152                    justifyContent: "center",
+      153                    background: isComplete ? T.accent2 : "transp
+           arent",
+      121 -                  border: `2px solid ${color}`,               
+      122 -                  boxShadow: isActive ? `0 0 8px ${T.a}` : "no
+          -ne",                                                          
+      154 +                  border: `2px solid ${selected ? T.a : color}
+          +`,                                                            
+      155 +                  boxShadow: isActive ? `0 0 8px ${T.a}` : sel
+          +ected ? `0 0 6px ${T.a}` : "none",                            
+      156                  }}
+      157                >
+      158                  {isComplete ? (
+     ...
+      181                >
+      182                  {t(step.labelKey)}
+      183                </span>
+      151 -            </div>                                            
+      184 +            </Node>                                           
+      185            </div>
+      186          );
+      187        })}
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Let me rewrite this to avoid the dynamic-tag TS pitfall — extract the shared
+  style/content and branch with a real conditional element instead.
+
+⏺ Update(frontend/src/components/StageTimeline.tsx)
+  ⎿  Added 62 lines, removed 10 lines
+       94          const interactive = step.viewKey !== undefined;
+       95          const disabled = step.viewKey === "cl" && !clDocExists
+           ;
+       96          const selected = interactive && viewedStage === step.v
+           iewKey;
+       97 +        const viewKey = step.viewKey;                         
+       98  
+       98 -        const Node = interactive ? "button" : "div";          
+       99 -        const nodeProps = interactive                         
+      100 -          ? {                                                 
+      101 -              type: "button" as const,                        
+      102 -              disabled,                                       
+      103 -              "aria-pressed": selected,                       
+      104 -              title: disabled ? t("stageTimeline.clNotStarted"
+          -) : undefined,                                                
+      105 -              onClick: () => setViewedStage(step.viewKey === v
+          -iewedStage ? null : (step.viewKey ?? null)),                  
+      106 -            }                                                 
+      107 -          : {};                                               
+       99 +        const nodeStyle = {                                   
+      100 +          display: "flex" as const,                           
+      101 +          flexDirection: "column" as const,                   
+      102 +          alignItems: "center" as const,                      
+      103 +          flex: "none" as const,                              
+      104 +          width: 86,                                          
+      105 +          border: "none",                                     
+      106 +          background: selected ? `color-mix(in srgb, ${T.a} 12
+          +%, transparent)` : "transparent",                             
+      107 +          borderRadius: T.chamfer ? 4 : 10,                   
+      108 +          padding: "2px 0 4px",                               
+      109 +          cursor: interactive ? (disabled ? "default" : "point
+          +er") : "default",                                             
+      110 +          opacity: disabled ? 0.45 : 1,                       
+      111 +          font: "inherit",                                    
+      112 +        };                                                    
+      113  
+      114 +        const nodeContent = (                                 
+      115 +          <>                                                  
+      116 +            <div                                              
+      117 +              data-testid="stage-dot"                         
+      118 +              data-state={isComplete ? "complete" : isActive ?
+          + "active" : "pending"}                                        
+      119 +              style={{                                        
+      120 +                width: 16,                                    
+      121 +                height: 16,                                   
+      122 +                borderRadius: T.chamfer ? 3 : 16,             
+      123 +                flex: "none",                                 
+      124 +                display: "flex",                              
+      125 +                alignItems: "center",                         
+      126 +                justifyContent: "center",                     
+      127 +                background: isComplete ? T.accent2 : "transpar
+          +ent",                                                         
+      128 +                border: `2px solid ${selected ? T.a : color}`,
+      129 +                boxShadow: isActive ? `0 0 8px ${T.a}` : selec
+          +ted ? `0 0 6px ${T.a}` : "none",                              
+      130 +              }}                                              
+      131 +            >                                                 
+      132 +              {isComplete ? (                                 
+      133 +                <Icon name="check" size={9} color="#06080B" />
+      134 +              ) : isActive ? (                                
+      135 +                <span                                         
+      136 +                  style={{                                    
+      137 +                    width: 5,                                 
+      138 +                    height: 5,                                
+      139 +                    borderRadius: 5,                          
+      140 +                    background: T.a,                          
+      141 +                    animation: "jsblink 1s ease-in-out infinit
+          +e",                                                           
+      142 +                  }}                                          
+      143 +                />                                            
+      144 +              ) : null}                                       
+      145 +            </div>                                            
+      146 +            <span                                             
+      147 +              style={{                                        
+      148 +                marginTop: 6,                                 
+      149 +                font: `500 9.5px ${T.mono}`,                  
+      150 +                letterSpacing: ".04em",                       
+      151 +                color,                                        
+      152 +                textAlign: "center",                          
+      153 +                whiteSpace: "nowrap",                         
+      154 +              }}                                              
+      155 +            >                                                 
+      156 +              {t(step.labelKey)}                              
+      157 +            </span>                                           
+      158 +          </>                                                 
+      159 +        );                                                    
+      160 +                                                              
+      161          return (
+      162            <div key={step.key} style={{ display: "flex", alignI
+           tems: "flex-start", flex: "none" }}>
+      163              {/* Connector line (not before first step) */}
+
+⏺ Now replace the old duplicate node-rendering block that follows with the
+  branch using nodeContent/nodeStyle:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(frontend/src/components/StageTimeline.tsx)
+  ⎿  Added 14 lines, removed 60 lines
+      173                  }}
+      174                />
+      175              )}
+      176 -            {/* Step node + label */}                         
+      177 -            <Node                                             
+      178 -              {...nodeProps}                                  
+      179 -              style={{                                        
+      180 -                display: "flex",                              
+      181 -                flexDirection: "column",                      
+      182 -                alignItems: "center",                         
+      183 -                flex: "none",                                 
+      184 -                width: 86,                                    
+      185 -                border: "none",                               
+      186 -                background: selected ? `color-mix(in srgb, ${T
+          -.a} 12%, transparent)` : "transparent",                       
+      187 -                borderRadius: T.chamfer ? 4 : 10,             
+      188 -                padding: "2px 0 4px",                         
+      189 -                cursor: interactive ? (disabled ? "default" : 
+          -"pointer") : "default",                                       
+      190 -                opacity: disabled ? 0.45 : 1,                 
+      191 -                font: "inherit",                              
+      192 -              }}                                              
+      193 -            >                                                 
+      194 -              <div                                            
+      195 -                data-testid="stage-dot"                       
+      196 -                data-state={isComplete ? "complete" : isActive
+          - ? "active" : "pending"}                                      
+      197 -                style={{                                      
+      198 -                  width: 16,                                  
+      199 -                  height: 16,                                 
+      200 -                  borderRadius: T.chamfer ? 3 : 16,           
+      201 -                  flex: "none",                               
+      202 -                  display: "flex",                            
+      203 -                  alignItems: "center",                       
+      204 -                  justifyContent: "center",                   
+      205 -                  background: isComplete ? T.accent2 : "transp
+          -arent",                                                       
+      206 -                  border: `2px solid ${selected ? T.a : color}
+          -`,                                                            
+      207 -                  boxShadow: isActive ? `0 0 8px ${T.a}` : sel
+          -ected ? `0 0 6px ${T.a}` : "none",                            
+      208 -                }}                                            
+      176 +            {/* Step node + label — only the cv_adjust/cover_l
+          +etter nodes are interactive */}                               
+      177 +            {interactive ? (                                  
+      178 +              <button                                         
+      179 +                type="button"                                 
+      180 +                disabled={disabled}                           
+      181 +                aria-pressed={selected}                       
+      182 +                title={disabled ? t("stageTimeline.clNotStarte
+          +d") : undefined}                                              
+      183 +                onClick={() => setViewedStage(viewKey === view
+          +edStage ? null : (viewKey ?? null))}                          
+      184 +                style={nodeStyle}                             
+      185                >
+      210 -                {isComplete ? (                               
+      211 -                  <Icon name="check" size={9} color="#06080B" 
+          -/>                                                            
+      212 -                ) : isActive ? (                              
+      213 -                  <span                                       
+      214 -                    style={{                                  
+      215 -                      width: 5,                               
+      216 -                      height: 5,                              
+      217 -                      borderRadius: 5,                        
+      218 -                      background: T.a,                        
+      219 -                      animation: "jsblink 1s ease-in-out infin
+          -ite",                                                         
+      220 -                    }}                                        
+      221 -                  />                                          
+      222 -                ) : null}                                     
+      223 -              </div>                                          
+      224 -              <span                                           
+      225 -                style={{                                      
+      226 -                  marginTop: 6,                               
+      227 -                  font: `500 9.5px ${T.mono}`,                
+      228 -                  letterSpacing: ".04em",                     
+      229 -                  color,                                      
+      230 -                  textAlign: "center",                        
+      231 -                  whiteSpace: "nowrap",                       
+      232 -                }}                                            
+      233 -              >                                               
+      234 -                {t(step.labelKey)}                            
+      235 -              </span>                                         
+      236 -            </Node>                                           
+      186 +                {nodeContent}                                 
+      187 +              </button>                                       
+      188 +            ) : (                                             
+      189 +              <div style={nodeStyle}>{nodeContent}</div>      
+      190 +            )}                                                
+      191            </div>
+      192          );
+      193        })}
+
+⏺ Now let's view the full file to confirm correctness and check for leftover
+  duplicated nodeContent block near the top from the earlier edit:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Now ReviewPane.tsx — the core CV-gate logic:
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+⏺ "eye" exists. Good. Now let's write the ReviewPane.tsx edits.
+⏺ Update(frontend/src/components/ReviewPane.tsx)
+  ⎿  Added 4 lines
+      13  
+      14  interface Props {
+      15    jobId: string;
+      16 +  // "cv-gate" — the CV-only pane shown while a job is parked i
+         +n `cv_review` (or, read-only,                                  
+      17 +  // while the cover-letter lane is running and the user jumps 
+         +back to view the CV). Defaults                                 
+      18 +  // to "final" so the existing review/approved call site is un
+         +affected.                                                      
+      19 +  mode?: "cv-gate" | "final";                                  
+      20  }
+      21  
+      22  type TabKey = "cv" | "cl";
+
+⏺ Update(frontend/src/components/ReviewPane.tsx)
+  ⎿  Added 12 lines, removed 2 lines
+      37    return `/api/files/${rel}`;
+      38  }
+      39  
+      40 -export function ReviewPane({ jobId }: Props) {                 
+      40 +export function ReviewPane({ jobId, mode = "final" }: Props) { 
+      41    const state = useStore((s) => s.jobs[jobId]?.state as JobStat
+          e | undefined);
+      42 -  const [activeTab, setActiveTab] = useState<TabKey>("cv");    
+      42 +  const viewedStage = useStore((s) => s.viewedStage);          
+      43 +  const setViewedStage = useStore((s) => s.setViewedStage);    
+      44 +  const [localActiveTab, setLocalActiveTab] = useState<TabKey>(
+         +"cv");                                                         
+      45 +  // The CV gate only ever has a CV to show. Otherwise, StageTi
+         +meline's dots and this pane's                                  
+      46 +  // own tab buttons both write to the shared `viewedStage` — i
+         +t wins whenever set, falling                                   
+      47 +  // back to local state only before either has been touched.  
+      48 +  const activeTab: TabKey = mode === "cv-gate" ? "cv" : viewedS
+         +tage ?? localActiveTab;                                        
+      49 +  // Read-only iff the job is in flight — the only way this pan
+         +e renders while running or                                     
+      50 +  // awaiting_input is the mid-cover-letter-run CV jump-back (s
+         +ee JobDetail.tsx). A job                                       
+      51 +  // parked awaiting the user (cv_review, review) is always ful
+         +ly interactive.                                                
+      52 +  const readOnly = state === "running" || state === "awaiting_i
+         +nput";                                                         
+      53    const [cvPaths, setCvPaths] = useState<DocPaths>(emptyPaths);
+      54    const [clPaths, setClPaths] = useState<DocPaths>(emptyPaths);
+      55    const [pathsLoading, setPathsLoading] = useState(true);
+
+⏺ Now update handleApprove to dispatch based on mode:
+
+⏺ Update(frontend/src/components/ReviewPane.tsx)
+  ⎿  Added 5 lines, removed 1 line
+      105      setApproving(true);
+      106      setApproveError(null);
+      107      try {
+      108 -      await api.approve(jobId);                               
+      108 +      if (mode === "cv-gate") {                               
+      109 +        await api.approveCv(jobId);                           
+      110 +      } else {                                                
+      111 +        await api.approve(jobId);                             
+      112 +      }                                                       
+      113        await useStore.getState().refetchAll();
+      114      } catch (err) {
+      115        setApproveError(err instanceof Error ? err.message : Str
+           ing(err));
+
+⏺ Now the tabButton function — should write to store's viewedStage, and the tab
+  bar should hide the CL tab in cv-gate mode:
+
+⏺ Update(frontend/src/components/ReviewPane.tsx)
+  ⎿  Added 4 lines, removed 1 line
+      139        <button
+      140          type="button"
+      141          className="jtab"
+      142 -        onClick={() => setActiveTab(key)}                     
+      142 +        onClick={() => {                                      
+      143 +          setLocalActiveTab(key);                             
+      144 +          setViewedStage(key);                                
+      145 +        }}                                                    
+      146          style={{
+      147            padding: "8px 4px",
+      148            marginRight: 22,
+
+⏺ Update(frontend/src/components/ReviewPane.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      162  
+      163    return (
+      164      <div style={{ display: "flex", flexDirection: "column", ga
+           p: 14 }}>
+      165 -      {/* Tab bar */}                                         
+      165 +      {/* Tab bar — the CV gate only ever has a CV to show */}
+      166        <div style={{ display: "flex", borderBottom: `1px solid 
+           ${T.bd}` }}>
+      167          {tabButton("cv", t("reviewPane.cvTab"))}
+      168 -        {tabButton("cl", t("reviewPane.clTab"))}              
+      168 +        {mode === "final" && tabButton("cl", t("reviewPane.clT
+          +ab"))}                                                        
+      169        </div>
+      170  
+      171        <div style={{ display: "flex", alignItems: "center", gap
+           : 8 }}>
+
+⏺ Now the "State-specific actions" section — add the read-only branch and swap
+  the approve button label/target by mode:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(frontend/src/components/ReviewPane.tsx)
+  ⎿  Added 18 lines
+      385            <Icon name="check" size={14} />
+      386            {t("reviewPane.approvedBanner")}
+      387          </div>
+      388 +      ) : readOnly ? (                                        
+      389 +        <div                                                  
+      390 +          style={{                                            
+      391 +            display: "flex",                                  
+      392 +            alignItems: "center",                             
+      393 +            gap: 8,                                           
+      394 +            font: `600 12.5px ${T.disp}`,                     
+      395 +            color: T.ink3,                                    
+      396 +            border: `1px solid ${T.bd2}`,                     
+      397 +            background: T.sunk,                               
+      398 +            borderRadius: T.btnRadius,                        
+      399 +            padding: "10px 14px",                             
+      400 +            width: "fit-content",                             
+      401 +          }}                                                  
+      402 +        >                                                     
+      403 +          <Icon name="eye" size={14} />                       
+      404 +          {t("reviewPane.readOnlyNotice")}                    
+      405 +        </div>                                                
+      406        ) : (
+      407          <div style={{ display: "flex", flexDirection: "column"
+           , gap: 12 }}>
+      408            {approveError && (
+
+⏺ Update(frontend/src/components/ReviewPane.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      451              ) : (
+      452                <>
+      453                  <Icon name="check" size={15} />
+      454 -                {t("reviewPane.approveButton")}               
+      454 +                {mode === "cv-gate" ? t("reviewPane.approveCvB
+          +utton") : t("reviewPane.approveButton")}                      
+      455                </>
+      456              )}
+      457            </button>
+     ...
+      467              >
+      468                REQUEST_REVISION
+      469              </div>
+      470 -            <ChatBox kind="revise" jobId={jobId} />           
+      470 +            <ChatBox kind="revise" jobId={jobId} fixedTarget={
+          +mode === "cv-gate" ? "cv" : undefined} />                     
+      471            </div>
+      472          </div>
+      473        )}
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now JobDetail.tsx — mount ReviewPane for cv_review and the mid-run CV
+  read-only jump-back:
+
+⏺ Update(frontend/src/components/JobDetail.tsx)
+  ⎿  Added 1 line
+      59    const refetchAll = useStore((s) => s.refetchAll);
+      60    const removeJob = useStore((s) => s.removeJob);
+      61    const selectJob = useStore((s) => s.selectJob);
+      62 +  const viewedStage = useStore((s) => s.viewedStage);          
+      63  
+      64    const [deleting, setDeleting] = useState(false);
+      65    const [deleteError, setDeleteError] = useState<string | null>
+          (null);
+
+⏺ Update(frontend/src/components/JobDetail.tsx)
+  ⎿  Added 18 lines, removed 3 lines
+      429          </div>
+      430        )}
+      431  
+      432 -      {job.state === "awaiting_input" && (                    
+      433 -        <FollowUpPane jobId={job.id} />                       
+      434 -      )}                                                      
+      432 +      {/* The cover-letter lane running/blocked doesn't retire
+          + the CV — a user who clicks                                   
+      433 +          the CV_ADJUST dot in the timeline (StageTimeline.tsx
+          +) can jump back to a read-only                                
+      434 +          view of it (ReviewPane's own state==="running"/"awai
+          +ting_input" check keeps it                                    
+      435 +          non-interactive). Clicking COVER_LETTER (or anything
+          + resetting viewedStage away                                   
+      436 +          from "cv") returns to the normal running-lane UI bel
+          +ow. */}                                                       
+      437 +      {(() => {                                               
+      438 +        const onCoverLetterLane =                             
+      439 +          (job.state === "running" || job.state === "awaiting_
+          +input") &&                                                    
+      440 +          (job.current_stage === "cover_letter" || job.current
+          +_stage === "revising_cl");                                    
+      441 +        if (onCoverLetterLane && viewedStage === "cv") {      
+      442 +          return <ReviewPane jobId={job.id} mode="cv-gate" />;
+      443 +        }                                                     
+      444 +        if (job.state === "awaiting_input") {                 
+      445 +          return <FollowUpPane jobId={job.id} />;             
+      446 +        }                                                     
+      447 +        return null;                                          
+      448 +      })()}                                                   
+      449 +      {job.state === "cv_review" && <ReviewPane jobId={job.id}
+          + mode="cv-gate" />}                                           
+      450        {(job.state === "review" || job.state === "approved") &&
+            (
+      451          <ReviewPane jobId={job.id} />
+      452        )}
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now the i18n strings — add new keys and run the translation script.
+
+⏺ Update(frontend/src/i18n/strings.en.json)
+  ⎿  Added 1 line
+      24    "stateMeta.awaitingInput": "NEEDS INPUT",
+      25    "stateMeta.fitDone": "ASSESSED",
+      26    "stateMeta.unfit": "NEEDS REVIEW",
+      27 +  "stateMeta.cvReview": "CV REVIEW",                           
+      28    "stateMeta.cvDone": "CV DONE",
+      29    "stateMeta.clDone": "CL DONE",
+      30    "stateMeta.review": "REVIEW",
+
+⏺ Update(frontend/src/i18n/strings.en.json)
+  ⎿  Added 2 lines, removed 1 line
+      39    "kindLabel.education": "Education",
+      40    "stageTimeline.pending": "PENDING",
+      41    "stageTimeline.cvAdjust": "CV_ADJUST",
+      42 -  "stageTimeline.cvDone": "CV_DONE",                           
+      42 +  "stageTimeline.cvReview": "CV_REVIEW",                       
+      43 +  "stageTimeline.clNotStarted": "Cover letter not started yet",
+      44    "stageTimeline.coverLetter": "COVER_LETTER",
+      45    "stageTimeline.clDone": "CL_DONE",
+      46    "stageTimeline.review": "REVIEW",
+
+⏺ Update(frontend/src/i18n/strings.en.json)  ⎿  Added 2 lines
+      116    "reviewPane.approvedBanner": "APPROVED · PDFS WRITTEN TO OUT
+           PUT/",
+      117    "reviewPane.approving": "Approving…",
+      118    "reviewPane.approveButton": "APPROVE & EXPORT",
+      119 +  "reviewPane.approveCvButton": "APPROVE CV",                 
+      120 +  "reviewPane.readOnlyNotice": "READ-ONLY · COVER LETTER LANE 
+          +IS RUNNING",                                                  
+      121    "scratchBuffer.orbTitle": "Scratch buffer (⌘ + Space)",
+      122    "scratchBuffer.minimizeTitle": "Minimize",
+      123    "scratchBuffer.notePlaceholder": "quick note… (Enter to log)
+           ",
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now run the translation script (via the CLI backend since no API key is set),
+  then verify with --check.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Good, that works. Now let's run for all locales.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 18 locales translated (5 new keys each). Now verify with --check:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now let's update the frontend tests to match. First run the current test suite
+  to see baseline failures introduced by the code changes so far.
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ proceed                                                                       
+
+⏺ Continuing — running the frontend test suite now to see the baseline before
+  updating the affected tests.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Update(frontend/src/__tests__/StageTimeline.test.tsx)
+  ⎿  Added 4 lines, removed 2 lines
+      1 -import { describe, it, expect } from "vitest";                  
+      2 -import { render } from "@testing-library/react";                
+      1 +import { describe, it, expect, beforeEach } from "vitest";      
+      2 +import { render, screen } from "@testing-library/react";        
+      3 +import userEvent from "@testing-library/user-event";            
+      4  import { StageTimeline } from "../components/StageTimeline";
+      5 +import { useStore } from "../store";                            
+      6  import type { JobDTO } from "../types";
+      7  
+      8  function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
+
+⏺ Update(frontend/src/__tests__/StageTimeline.test.tsx)
+  ⎿  Added 4 lines
+      29    return Array.from(container.querySelectorAll('[data-testid="s
+          tage-dot"]'));
+      30  }
+      31  
+      32 +beforeEach(() => {                                             
+      33 +  useStore.setState({ viewedStage: null });                    
+      34 +});                                                            
+      35 +                                                               
+      36  describe("StageTimeline", () => {
+      37    it('shows first step (index 0) as active for state "pending"'
+          , () => {
+      38      const job = makeJob({ state: "pending" });
+
+⏺ Update(frontend/src/__tests__/StageTimeline.test.tsx)
+  ⎿  Added 45 lines, removed 1 line
+       82  
+       83      expect(getAllByText("PENDING").length).toBeGreaterThan(0);
+       84      expect(getAllByText("CV_ADJUST").length).toBeGreaterThan(0
+           );
+       85 -    expect(getAllByText("CV_DONE").length).toBeGreaterThan(0);
+       85 +    expect(getAllByText("CV_REVIEW").length).toBeGreaterThan(0
+          +);                                                            
+       86      expect(getAllByText("COVER_LETTER").length).toBeGreaterTha
+           n(0);
+       87      expect(getAllByText("CL_DONE").length).toBeGreaterThan(0);
+       88      expect(getAllByText("REVIEW").length).toBeGreaterThan(0);
+       89      expect(getAllByText("APPROVED").length).toBeGreaterThan(0)
+           ;
+       90    });
+       91  
+       92 +  it("renders only the CV_ADJUST and COVER_LETTER nodes as but
+          +tons; the other five stay plain divs", () => {                
+       93 +    // A "review" job so the cover_letter Document proxy allow
+          +s the CL button to be enabled                                 
+       94 +    // too — this test is about element type, not disabled sta
+          +te.                                                           
+       95 +    const job = makeJob({ state: "review" });                 
+       96 +    render(<StageTimeline job={job} />);                      
+       97 +                                                              
+       98 +    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).
+          +toBeInTheDocument();                                          
+       99 +    expect(screen.getByRole("button", { name: /COVER_LETTER/ }
+          +)).toBeInTheDocument();                                       
+      100 +    // Only those two — no other step label sits inside a <but
+          +ton>.                                                         
+      101 +    expect(screen.getAllByRole("button")).toHaveLength(2);    
+      102 +  });                                                         
+      103 +                                                              
+      104 +  it("disables the COVER_LETTER button while no cover-letter D
+          +ocument exists yet", () => {                                  
+      105 +    const job = makeJob({ state: "cv_review" });              
+      106 +    render(<StageTimeline job={job} />);                      
+      107 +                                                              
+      108 +    expect(screen.getByRole("button", { name: /COVER_LETTER/ }
+          +)).toBeDisabled();                                            
+      109 +    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).
+          +toBeEnabled();                                                
+      110 +  });                                                         
+      111 +                                                              
+      112 +  it("enables the COVER_LETTER button once the job has reached
+          + review", () => {                                             
+      113 +    const job = makeJob({ state: "review" });                 
+      114 +    render(<StageTimeline job={job} />);                      
+      115 +                                                              
+      116 +    expect(screen.getByRole("button", { name: /COVER_LETTER/ }
+          +)).toBeEnabled();                                             
+      117 +  });                                                         
+      118 +                                                              
+      119 +  it("clicking a dot sets the store's viewedStage, and clickin
+          +g it again clears it", async () => {                          
+      120 +    const user = userEvent.setup();                           
+      121 +    const job = makeJob({ state: "review" });                 
+      122 +    render(<StageTimeline job={job} />);                      
+      123 +                                                              
+      124 +    await user.click(screen.getByRole("button", { name: /CV_AD
+          +JUST/ }));                                                    
+      125 +    expect(useStore.getState().viewedStage).toBe("cv");       
+      126 +    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).
+          +toHaveAttribute("aria-pressed", "true");                      
+      127 +                                                              
+      128 +    await user.click(screen.getByRole("button", { name: /COVER
+          +_LETTER/ }));                                                 
+      129 +    expect(useStore.getState().viewedStage).toBe("cl");       
+      130 +    expect(screen.getByRole("button", { name: /CV_ADJUST/ })).
+          +toHaveAttribute("aria-pressed", "false");                     
+      131 +                                                              
+      132 +    await user.click(screen.getByRole("button", { name: /COVER
+          +_LETTER/ }));                                                 
+      133 +    expect(useStore.getState().viewedStage).toBeNull();       
+      134 +  });                                                         
+      135 +                                                              
+      136    it('shows step index 1 as active when state is "running" wit
+           h cv_adjust stage', () => {
+      137      const job = makeJob({ state: "running", current_stage: "cv
+           _adjust" });
+      138      const { container } = render(<StageTimeline job={job} />);
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 12 pass. Now let's add cv-gate tests to ReviewPane.test.tsx.
+
+⏺ Update(frontend/src/__tests__/ReviewPane.test.tsx)
+  ⎿  Added 1 line
+      10    api: {
+      11      getJob: vi.fn(),
+      12      approve: vi.fn(),
+      13 +    approveCv: vi.fn(),                                        
+      14      revise: vi.fn(),
+      15      getJobs: vi.fn().mockResolvedValue([]),
+      16    },
+
+⏺ Update(frontend/src/__tests__/ReviewPane.test.tsx)
+  ⎿  Added 1 line, removed 1 line
+      42  
+      43  beforeEach(() => {
+      44    vi.clearAllMocks();
+      45 -  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus
+         -: "connecting" });                                             
+      45 +  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus
+         +: "connecting", viewedStage: null });                          
+      46    (api.getJobs as ReturnType<typeof vi.fn>).mockResolvedValue([
+          ]);
+      47    (api.getJob as ReturnType<typeof vi.fn>).mockResolvedValue(ma
+          keFullJob());
+      48  });
+
+⏺ Now append the cv-gate tests and the critical regression test at the end:
+
+⏺ Update(frontend/src/__tests__/ReviewPane.test.tsx)
+  ⎿  Added 66 lines
+      182        ).toBeInTheDocument();
+      183      });
+      184    });
+      185 +                                                              
+      186 +  describe('mode="cv-gate"', () => {                          
+      187 +    it("shows only the CV tab and an APPROVE CV button, and ca
+          +lls api.approveCv", async () => {                             
+      188 +      const user = userEvent.setup();                         
+      189 +      (api.approveCv as ReturnType<typeof vi.fn>).mockResolved
+          +Value({                                                       
+      190 +        pdf_path: "/out/cv.pdf",                              
+      191 +        docx_path: "/out/cv.docx",                            
+      192 +      });                                                     
+      193 +      const job = makeJob({ state: "cv_review" });            
+      194 +      useStore.setState({ jobs: { job1: job }, selectedId: "jo
+          +b1" });                                                       
+      195 +                                                              
+      196 +      render(<ReviewPane jobId="job1" mode="cv-gate" />);     
+      197 +                                                              
+      198 +      expect(screen.getByRole("button", { name: "CV / RESUME" 
+          +})).toBeInTheDocument();                                      
+      199 +      expect(screen.queryByRole("button", { name: "COVER_LETTE
+          +R" })).toBeNull();                                            
+      200 +                                                              
+      201 +      const approveButton = await screen.findByRole("button", 
+          +{ name: /approve cv/i });                                     
+      202 +      await user.click(approveButton);                        
+      203 +                                                              
+      204 +      await waitFor(() => {                                   
+      205 +        expect(api.approveCv).toHaveBeenCalledWith("job1");   
+      206 +      });                                                     
+      207 +      expect(api.approve).not.toHaveBeenCalled();             
+      208 +    });                                                       
+      209 +                                                              
+      210 +    it("restricts the revise ChatBox to the CV target (no cv/c
+          +l selector)", async () => {                                   
+      211 +      const job = makeJob({ state: "cv_review" });            
+      212 +      useStore.setState({ jobs: { job1: job }, selectedId: "jo
+          +b1" });                                                       
+      213 +                                                              
+      214 +      render(<ReviewPane jobId="job1" mode="cv-gate" />);     
+      215 +                                                              
+      216 +      await waitFor(() => {                                   
+      217 +        expect(screen.getByRole("button", { name: /Request Rev
+          +ision/i })).toBeInTheDocument();                              
+      218 +      });                                                     
+      219 +      expect(screen.queryByRole("combobox")).toBeNull();      
+      220 +    });                                                       
+      221 +                                                              
+      222 +    it("hides the approve button and revise box, and shows a r
+          +ead-only notice, when the job is running/awaiting_input", asyn
+          +c () => {                                                     
+      223 +      const job = makeJob({ state: "running", current_stage: "
+          +cover_letter" });                                             
+      224 +      useStore.setState({ jobs: { job1: job }, selectedId: "jo
+          +b1", viewedStage: "cv" });                                    
+      225 +                                                              
+      226 +      render(<ReviewPane jobId="job1" mode="cv-gate" />);     
+      227 +                                                              
+      228 +      await waitFor(() => {                                   
+      229 +        expect(screen.queryByRole("button", { name: /approve c
+          +v/i })).toBeNull();                                           
+      230 +      });                                                     
+      231 +      expect(screen.queryByRole("button", { name: /Request Rev
+          +ision/i })).toBeNull();                                       
+      232 +      expect(screen.getByText(/read-only/i)).toBeInTheDocument
+          +();                                                           
+      233 +    });                                                       
+      234 +  });                                                         
+      235 +                                                              
+      236 +  // The regression this whole feature could introduce: StageT
+          +imeline's dots write to the                                   
+      237 +  // same shared `viewedStage` the final ReviewPane reads for 
+          +its tab. Looking at the CV tab                                
+      238 +  // via viewedStage must never be mistaken for the CV-gate's 
+          +read-only condition — a job at                                
+      239 +  // state === "review" stays fully interactive regardless of 
+          +which tab is being viewed.                                    
+      240 +  it('mode="final" with viewedStage "cv" still shows APPROVE &
+          + EXPORT and the revise box at state "review"', async () => {  
+      241 +    const job = makeJob({ state: "review" });                 
+      242 +    useStore.setState({ jobs: { job1: job }, selectedId: "job1
+          +", viewedStage: "cv" });                                      
+      243 +                                                              
+      244 +    render(<ReviewPane jobId="job1" />);                      
+      245 +                                                              
+      246 +    await waitFor(() => {                                     
+      247 +      expect(screen.getByRole("button", { name: /approve & exp
+          +ort/i })).toBeInTheDocument();                                
+      248 +    });                                                       
+      249 +    expect(screen.getByRole("button", { name: /Request Revisio
+          +n/i })).toBeInTheDocument();                                  
+      250 +  });                                                         
+      251  });
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+⏺ Update(frontend/src/__tests__/ReviewPane.test.tsx)
+  ⎿  Added 1 line, removed 1 line
+      229          expect(screen.queryByRole("button", { name: /approve c
+           v/i })).toBeNull();
+      230        });
+      231        expect(screen.queryByRole("button", { name: /Request Rev
+           ision/i })).toBeNull();
+      232 -      expect(screen.getByText(/read-only/i)).toBeInTheDocument
+          -();                                                           
+      232 +      expect(screen.getByText(/cover letter lane is running/i)
+          +).toBeInTheDocument();                                        
+      233      });
+      234    });
+      235  
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 13 pass. Now run the full frontend suite and the build.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All 268 tests pass. Now let's build so the CLI serves the updated bundle.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Build succeeded and jsa/static was regenerated. Now let's set up a fresh test
+  run per project convention so the user can do the visual click-through.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Good, translation catalogs are in sync. Let's check overall git status and
+  diff summary before handing off for the visual check.
+
+  Searched for 2 patterns, ran 1 shell command (ctrl+o to expand)
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Staged. Now let's finish up: mark tasks complete and close out the claude-stat
+  task.
+
+⏺ Let me get a second opinion before declaring this done.
+
+⏺ Advising using Opus 5
+  ⎿  ✔ Advisor has reviewed the conversation and will apply the feedback
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(frontend/src/components/StageTimeline.tsx)
+  ⎿  Removed 10 lines
+      23    { labelKey: "stageTimeline.approved", key: "approved" },
+      24  ];
+      25  
+      26 -// A cover_letter Document is only ever written on that stage's
+         - first FINAL (see                                              
+      27 -// jsa/pipeline/stages.py::_handle_final) — i.e. once the job h
+         -as reached `review` at least                                   
+      28 -// once, or is mid a `revising_cl` (which by definition can't h
+         -appen without a prior CL                                       
+      29 -// Document). Anything earlier — including a live `running`/`aw
+         -aiting_input` cover_letter                                     
+      30 -// stage before its first FINAL — has nothing to show yet.     
+      31 -function coverLetterDocLikelyExists(job: JobDTO): boolean {    
+      32 -  if (job.state === "review" || job.state === "approved" || job
+         -.state === "cl_done") return true;                             
+      33 -  return job.current_stage === "revising_cl";                  
+      34 -}                                                              
+      35 -                                                               
+      26  function getActiveStepIndex(state: JobState, currentStage: Stag
+          e | null): number {
+      27    switch (state) {
+      28      case "queued":
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(frontend/src/components/StageTimeline.tsx)
+  ⎿  Added 3 lines, removed 2 lines
+      73    const viewedStage = useStore((s) => s.viewedStage);
+      74    const setViewedStage = useStore((s) => s.setViewedStage);
+      75    const t = useT();
+      76 -  const clDocExists = coverLetterDocLikelyExists(job);         
+      76  
+      77    return (
+      78      <div style={{ display: "flex", alignItems: "flex-start", ga
+          p: 0, overflowX: "auto", padding: "6px 2px 2px" }}>
+     ...
+      81          const isActive = idx === activeIdx;
+      82          const color = isComplete ? T.accent2 : isActive ? T.a :
+           T.ink3;
+      83          const interactive = step.viewKey !== undefined;
+      85 -        const disabled = step.viewKey === "cl" && !clDocExists;
+      84 +        // The cover_letter node (index 3) is where the CL lane
+         + starts running — before that                                  
+      85 +        // (still in the CV lane, or parked at the CV gate) the
+         +re is nothing to show yet.                                     
+      86 +        const disabled = step.viewKey === "cl" && activeIdx < 3
+         +;                                                              
+      87          const selected = interactive && viewedStage === step.vi
+          ewKey;
+      88          const viewKey = step.viewKey;
+      89  
+
+⏺ Now JobDetail.tsx — fix the awaiting_input hiding bug and broaden the CV
+  jump-back to any in-flight cv/cl stage while running:
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(frontend/src/components/JobDetail.tsx)
+  ⎿  Added 14 lines, removed 17 lines
+      429          </div>
+      430        )}
+      431  
+      432 -      {/* The cover-letter lane running/blocked doesn't retire
+          - the CV — a user who clicks                                   
+      433 -          the CV_ADJUST dot in the timeline (StageTimeline.tsx
+          -) can jump back to a read-only                                
+      434 -          view of it (ReviewPane's own state==="running"/"awai
+          -ting_input" check keeps it                                    
+      435 -          non-interactive). Clicking COVER_LETTER (or anything
+          - resetting viewedStage away                                   
+      436 -          from "cv") returns to the normal running-lane UI bel
+          -ow. */}                                                       
+      437 -      {(() => {                                               
+      438 -        const onCoverLetterLane =                             
+      439 -          (job.state === "running" || job.state === "awaiting_
+          -input") &&                                                    
+      440 -          (job.current_stage === "cover_letter" || job.current
+          -_stage === "revising_cl");                                    
+      441 -        if (onCoverLetterLane && viewedStage === "cv") {      
+      442 -          return <ReviewPane jobId={job.id} mode="cv-gate" />;
+      443 -        }                                                     
+      444 -        if (job.state === "awaiting_input") {                 
+      445 -          return <FollowUpPane jobId={job.id} />;             
+      446 -        }                                                     
+      447 -        return null;                                          
+      448 -      })()}                                                   
+      432 +      {/* A pipeline stage running doesn't retire the CV — cli
+          +cking the CV_ADJUST dot in the                                
+      433 +          timeline (StageTimeline.tsx) jumps to a read-only vi
+          +ew of it (ReviewPane's own                                    
+      434 +          state==="running" check keeps it non-interactive; it
+          + degrades gracefully to                                       
+      435 +          "rendering in progress" if no cv_adjust Document exi
+          +sts yet). This only applies to                                
+      436 +          `running`, never `awaiting_input` — the agent may be
+          + blocking on a question, and                                  
+      437 +          FollowUpPane (the only place that question and its a
+          +nswer box are shown) must                                     
+      438 +          never be suppressed while the job is actually waitin
+          +g on the user. Clicking                                       
+      439 +          COVER_LETTER (or anything resetting viewedStage away
+          + from "cv") returns to the                                    
+      440 +          normal running-lane UI below. */}                   
+      441 +      {job.state === "running" && viewedStage === "cv" ? (    
+      442 +        <ReviewPane jobId={job.id} mode="cv-gate" />          
+      443 +      ) : (                                                   
+      444 +        job.state === "awaiting_input" && <FollowUpPane jobId=
+          +{job.id} />                                                   
+      445 +      )}                                                      
+      446        {job.state === "cv_review" && <ReviewPane jobId={job.id}
+            mode="cv-gate" />}
+      447        {(job.state === "review" || job.state === "approved") &&
+            (
+      448          <ReviewPane jobId={job.id} />
+
+  Read 1 file, listed 1 directory, ran 1 shell command (ctrl+o to expand)
+⏺ Update(frontend/src/__tests__/JobDetail.test.tsx)
+  ⎿  Added 1 line
+      24      getDocument: vi.fn().mockResolvedValue({ markdown: "# Doc",
+           version: 1 }),
+      25      answerFollowUp: vi.fn().mockResolvedValue({}),
+      26      approve: vi.fn().mockResolvedValue({ cv_pdf_path: "/cv.pdf"
+          , cl_pdf_path: "/cl.pdf" }),
+      27 +    approveCv: vi.fn().mockResolvedValue({ pdf_path: "/cv.pdf",
+         + docx_path: "/cv.docx" }),                                     
+      28      revise: vi.fn().mockResolvedValue({}),
+      29      config: vi.fn().mockResolvedValue({ backend: "anthropic" })
+          ,
+      30      getJobs: vi.fn().mockResolvedValue([]),
+
+⏺ Update(frontend/src/__tests__/JobDetail.test.tsx)
+  ⎿  Added 29 lines
+      156      expect(screen.getByText("Loading follow-up…")).toBeInTheDo
+           cument();
+      157    });
+      158  
+      159 +  it("keeps FollowUpPane visible for awaiting_input even when 
+          +viewedStage is 'cv' — the agent's question must never be hidde
+          +n by the CV jump-back", () => {                               
+      160 +    const job = makeJob({ id: "j1", state: "awaiting_input", c
+          +urrent_stage: "cover_letter" });                              
+      161 +    useStore.setState({ jobs: { j1: job }, selectedId: "j1", v
+          +iewedStage: "cv" });                                          
+      162 +                                                              
+      163 +    render(<JobDetail />);                                    
+      164 +                                                              
+      165 +    expect(screen.getByText("Loading follow-up…")).toBeInTheDo
+          +cument();                                                     
+      166 +  });                                                         
+      167 +                                                              
+      168 +  it("shows the read-only CV pane when running the cover-lette
+          +r lane and viewedStage is 'cv'", () => {                      
+      169 +    const job = makeJob({ id: "j1", state: "running", current_
+          +stage: "cover_letter" });                                     
+      170 +    useStore.setState({ jobs: { j1: job }, selectedId: "j1", v
+          +iewedStage: "cv" });                                          
+      171 +                                                              
+      172 +    render(<JobDetail />);                                    
+      173 +                                                              
+      174 +    // ReviewPane mounts in cv-gate mode: only the CV tab, no 
+          +cover-letter tab.                                             
+      175 +    expect(screen.getByText("CV / RESUME")).toBeInTheDocument(
+          +);                                                            
+      176 +    expect(screen.queryByText("COVER_LETTER")).toBeNull();    
+      177 +  });                                                         
+      178 +                                                              
+      179 +  it("shows the read-only CV pane when running cv_adjust itsel
+          +f and viewedStage is 'cv' (no dead click on the active dot)", 
+          +() => {                                                       
+      180 +    const job = makeJob({ id: "j1", state: "running", current_
+          +stage: "cv_adjust" });                                        
+      181 +    useStore.setState({ jobs: { j1: job }, selectedId: "j1", v
+          +iewedStage: "cv" });                                          
+      182 +                                                              
+      183 +    render(<JobDetail />);                                    
+      184 +                                                              
+      185 +    expect(screen.getByText("CV / RESUME")).toBeInTheDocument(
+          +);                                                            
+      186 +  });                                                         
+      187 +                                                              
+      188    it("renders ReviewPane (not placeholder) for review state", 
+           () => {
+      189      const job = makeJob({ id: "j1", state: "review" });
+      190      useStore.setState({ jobs: { j1: job }, selectedId: "j1" })
+           ;
+
+⏺ Update(frontend/src/__tests__/JobDetail.test.tsx)
+  ⎿  Added 3 lines, removed 2 lines
+      171  
+      172      render(<JobDetail />);
+      173  
+      174 -    // ReviewPane mounts in cv-gate mode: only the CV tab, no 
+          -cover-letter tab.                                             
+      174 +    // ReviewPane mounts in cv-gate mode: its CV tab is presen
+          +t. (StageTimeline also renders                                
+      175 +    // a "COVER_LETTER" node label unconditionally, so this do
+          +esn't assert on its absence —                                 
+      176 +    // ReviewPane.test.tsx's cv-gate suite already covers "no 
+          +CL tab in cv-gate mode".)                                     
+      177      expect(screen.getByText("CV / RESUME")).toBeInTheDocument(
+           );
+      176 -    expect(screen.queryByText("COVER_LETTER")).toBeNull();    
+      178    });
+      179  
+      180    it("shows the read-only CV pane when running cv_adjust itsel
+           f and viewedStage is 'cv' (no dead click on the active dot)", 
+           () => {
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(frontend/src/__tests__/StageTimeline.test.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      90    });
+      91  
+      92    it("renders only the CV_ADJUST and COVER_LETTER nodes as butt
+          ons; the other five stay plain divs", () => {
+      93 -    // A "review" job so the cover_letter Document proxy allows
+         - the CL button to be enabled                                   
+      94 -    // too — this test is about element type, not disabled stat
+         -e.                                                             
+      93 +    // A "review" job so the CL button is enabled too — this te
+         +st is about element type,                                      
+      94 +    // not disabled state.                                     
+      95      const job = makeJob({ state: "review" });
+      96      render(<StageTimeline job={job} />);
+      97  
+
+⏺ Update(frontend/src/__tests__/StageTimeline.test.tsx)
+  ⎿  Added 7 lines
+      109      expect(screen.getByRole("button", { name: /CV_ADJUST/ })).
+           toBeEnabled();
+      110    });
+      111  
+      112 +  it("enables the COVER_LETTER button while the cover-letter l
+          +ane is actively running — the click-back in verification step 
+          +(f) must work mid-run, not just after review", () => {        
+      113 +    const job = makeJob({ state: "running", current_stage: "co
+          +ver_letter" });                                               
+      114 +    render(<StageTimeline job={job} />);                      
+      115 +                                                              
+      116 +    expect(screen.getByRole("button", { name: /COVER_LETTER/ }
+          +)).toBeEnabled();                                             
+      117 +  });                                                         
+      118 +                                                              
+      119    it("enables the COVER_LETTER button once the job has reached
+            review", () => {
+      120      const job = makeJob({ state: "review" });
+      121      render(<StageTimeline job={job} />);
+
+⏺ Now let's rerun the full test suite, tsc, and build.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ 272/272 pass, tsc clean (that act() warning is pre-existing and unrelated).
+  Now rebuild the bundle:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Build is clean. Let's re-stage the fixed files and update the Change Log entry
+  to note the advisor's catches and fixes.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now let's append a short addendum to the plan's Change Log entry noting the
+  advisor-caught fixes.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Phase 5 is implemented, staged, and verified — frontend tests (272/272), tsc,
+  and npm run build are all clean, and the bundle in jsa/static is up to date.
+
+  What changed (all staged, nothing committed):
+  - types.ts / store.ts — added cv_review state and a viewedStage
+    ("cv"|"cl"|null) store field driving which artifact is shown, independent of
+    the pipeline
+  - StageTimeline.tsx — the CV_ADJUST and COVER_LETTER dots are now real
+    clickable buttons wired to viewedStage; the CV_DONE step is relabeled
+    CV_REVIEW; COVER_LETTER stays disabled until that lane is actually reachable
+  - ReviewPane.tsx — new mode="cv-gate" (CV-only tab, approveCv instead of
+    approve, revise restricted to CV) vs "final" (unchanged); read-only strictly
+    follows job.state, never viewedStage
+  - JobDetail.tsx — mounts the CV gate pane at cv_review, and a read-only CV
+    view when jumping back mid-run
+  - api.ts, ChatBox.tsx, chrome.tsx, JobList.tsx, Header.tsx — supporting
+    plumbing (the last two weren't in the plan's file list but were needed or a
+    cv_review job would silently vanish from the sidebar)
+  - i18n: 5 new keys translated into all 18 locales via translate-ui.sh 
+    --backend cli, --check passes
+
+  An advisor() pass before handoff caught three real bugs the unit tests missed
+  — a disabled COVER_LETTER dot during its own first run (verification step (f)
+  would've been stuck), a suppressed blocking question when jumping to the CV
+  mid–cover-letter-run, and a dead click on CV_ADJUST during its own run. All
+  three are fixed and covered by new tests now.
+
+  Full detail is logged in the plan's Change Log:
+  .claude/plans/let-s-write-a-careful-velvet-mccarthy.md.
+
+  Next step is yours — the manual click-through (plan's step 3): launch a job,
+  watch it park at CV_REVIEW, revise/approve it, jump back to the CV while the
+  cover-letter lane runs, etc. Standard run command applies.
+
+  One housekeeping question: claude-stat has task #76 open for this work —
+  should I mark it done?
+
+✻ Cogitated for 6m 57s · done 3:10 PM
+
+❯ /compact                                                                      
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Referenced file .claude/plans/let-s-write-a-careful-velvet-mccarthy.md
+  ⎿  Read frontend/src/__tests__/StageTimeline.test.tsx (192 lines)
+  ⎿  Referenced file frontend/src/__tests__/JobDetail.test.tsx
+  ⎿  Referenced file frontend/src/components/JobDetail.tsx
+  ⎿  Read frontend/src/components/StageTimeline.tsx (188 lines)
+
+※ recap: Working on the CV/cover-letter two-lane split, phase 5 (frontend). It's done, staged, tests and build pass — just waiting on your manual click-through in the browser to confirm it works visually. (disable recaps in /config)

@@ -1,0 +1,313 @@
+{
+  "contact": {
+    "name": "Sarah Chen",
+    "email": "sarah.chen.dev@gmail.com",
+    "phone": null,
+    "location": "San Francisco, California",
+    "links": [
+      "github.com/sarahchen-dev"
+    ]
+  },
+  "sections": [
+    {
+      "name": "Skills",
+      "text": null,
+      "items": [],
+      "entries": [
+        {
+          "heading": "Cloud Platforms",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [
+            "AWS (EC2, Lambda, RDS, S3, DynamoDB)",
+            "Google Cloud (BigQuery, Cloud Functions, Dataflow)",
+            "Azure (Cosmos DB, Data Lake)"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Languages",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Python",
+            "Go",
+            "Scala",
+            "SQL",
+            "TypeScript",
+            "Rust"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Methodologies",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Data Warehousing",
+            "ETL/ELT Design",
+            "Machine Learning Pipelines",
+            "Event-Driven Architecture",
+            "Microservices",
+            "TDD",
+            "DevOps"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Frameworks & Tools",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Apache Spark",
+            "Apache Airflow",
+            "dbt",
+            "Kafka",
+            "Redis"
+          ],
+          "links": [
+            "TensorFlow",
+            "TensorFlow",
+            "TensorFlow"
+          ]
+        },
+        {
+          "heading": "Tools & Infrastructure",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Kubernetes",
+            "Docker",
+            "Terraform",
+            "Prometheus",
+            "GitHub Actions CI/CD"
+          ],
+          "links": []
+        }
+      ]
+    },
+    {
+      "name": "Experience",
+      "text": null,
+      "items": [],
+      "entries": [
+        {
+          "heading": "Senior Data Engineer",
+          "subheading": "DataFlow Systems",
+          "dates": "March 2024 – Present",
+          "location": "Remote",
+          "text": null,
+          "bullets": [
+            "Product pins obscured the 360° panorama during admin inspection; added a self-contained toggle inside the shared krpano viewer component, gating the overlay behind a module-level stable empty array to avoid re-render churn in its animation-frame effect — one change covered all three viewer usages.",
+            "Operators had no way to tag which room a viewpoint belonged to; regenerated the typed API client from swagger and added a searchable, clearable AntD Select to the point-detail modal wired to a new PATCH with optimistic update, rollback on error and query-key invalidation — room assignment and unassignment work for both point types with no full-list refetch",
+            "Re-architected a microservice into two purpose-built services: an internal admin API with normalized tables for data integrity, and a public client-facing API with denormalized tables collapsed into just 3 endpoints — eliminating network round trips entirely and enabling front-end caching for significantly faster reads",
+            "Built and owned the full end-to-end panorama generation pipeline: from 2D point placement on a canvas in the React admin panel, through task creation in the panorama microservice, to an Unreal Engine polling client that generates cube maps, uploads them back to the microservice, and renders them on interactive floor plans via krpano",
+            "A three-hop redirect chain broke WebGL texture loads on CORS and served wrong MIME types; designed a Go read service collapsing it to a single streamed response — one tenant-scoped JOIN for resolution, DB-driven Content-Type, ACAO, and Range/ETag/304 via http.ServeContent — fixing both defects at serve time for already-broken objects, with Docker Compose wiring.",
+            "Concurrent producers were stamping read-model snapshot versions independently of when content was read, so an older read could win the last-writer-wins gate and freeze stale data; bound version allocation to content by running sequence allocation and the full slice build inside one PostgreSQL RepeatableRead transaction — correctness restored under multi-producer load with the change contained to a single dispatcher class.",
+            "Diagnosed and resolved a subtle React <StrictMode> double-invocation bug that was silently breaking krpano pin rendering",
+            "An admin-side background service reconciled projections by reading the public service's schema directly, breaking the events-only service boundary; replaced it with a lean Kafka census contract plus a read-side prune consumer and blind write-side re-emit, deleting the reconciliation service and its cross-project references — neither service references the other's schema any more.",
+            "A single poison row in the projection invalidation queue re-drained forever and blocked all downstream work; added per-row exception isolation with bounded retry/dead-lettering plus a unique index and ON CONFLICT DO NOTHING migration to coalesce duplicate signals — the queue now drains past failures instead of stalling.",
+            "Unreal's visibility test leaked neighbouring-room products into apartment tours; after adjudicating that the fix belonged at serve time rather than bake time, added a subtractive room predicate to the public tour projector with an explicit fallback for unassigned hotspots — a room reassignment now takes effect on the next request with zero re-bake, no schema, query or endpoint change",
+            "Apartment cards shipped with no thumbnail because nothing ever populated the field; added a focused EF Core repository read (deterministic ordering, scalar-column filter for query translation) plus a projector fallback with per-cycle caching, keeping any manual value winning — thumbnails appear automatically within one 60-second sync cycle, with no migration and no backfill",
+            "Every uploaded object was stored as application/octet-stream despite the DB recording the real type; set the content type from the recorded value at S3 write — correct MIME for all future uploads across every consumer"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Lead Data Engineer",
+          "subheading": "CloudMetrics Inc.",
+          "dates": "November 2022 – February 2024",
+          "location": "Seattle, Washington",
+          "text": null,
+          "bullets": [
+            "Optimized Windows version by refactoring UI with a view pattern and implementing event-driven logic, reducing FPS drop by 97% (from 60 to 2 FPS).",
+            "Developed a native Unreal host enabling .NET integration to leverage a free CAD library, implemented CAD-to-UE data conversion, and created a UStructSynchronizer to sync Unreal USTRUCTs with C# counterparts."
+          ],
+          "links": []
+        },
+        {
+          "heading": "Staff Data Engineer",
+          "subheading": "TechScale",
+          "dates": "June 2021 – October 2022",
+          "location": "Austin, Texas",
+          "text": null,
+          "bullets": [
+            "Architected data structures and flows in Unreal Engine to represent 3D apartment objects, and built a custom packaging system that resolved asset dependencies via the Content Browser, categorized them automatically, and deployed the resulting .pak files to Amazon S3",
+            "Integrated REST API-based user authentication and a custom analytics tracking system recording dwell time per apartment and per-object interaction events, aggregating the data into structured reports dispatched to a backend endpoint",
+            "Developed custom Unreal Engine commandlets in C# to automate and streamline build and packaging pipelines, reducing manual overhead in the deployment workflow",
+            "Developed high-performance widgets with custom styling using the Slate Framework",
+            "Developed utility modules reducing boilerplate in threaded operations, including Blueprint-friendly async wrappers, Rust-style result handling, and enhanced automation testing",
+            "Developed UI system from scratch using Presenter pattern for separation of concerns. Created customizable, reusable components matching Figma designs with system-wide configuration support",
+            "Developed cross-platform marketplace widget with platform-specific layouts and reusable components (filters, search, list selectors)",
+            "Led a team of four developers, assigning tasks, managing disputes, and maintaining project coordination through an internal task tracker. Conducted biweekly progress meetings and architectural discussions. Wrote and maintained documentation for company guidelines and production pipelines",
+            "The project suffered from poor performance and FPS drops due to frequent garbage collection during level loading. I refactored the system to use asynchronous loading and implemented object pooling to pre-create and reuse objects. This significantly increased performance"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Senior Backend Engineer",
+          "subheading": "StreamCorp",
+          "dates": "February 2020 – May 2021",
+          "location": "Portland, Oregon",
+          "text": null,
+          "bullets": [
+            "Integrated a REST API to fetch product data with multi-variant structures, translating JSON responses into a dynamic UI that updated available options in real time based on variant availability",
+            "Engineered a cascading variant filtration system where each selection progressively narrowed subsequent options, ensuring only valid variant combinations were surfaced to the user",
+            "Integrated two caching mechanisms: one memory-based and one file-based. The memory cache used a singleton to store generic data in memory, while the file-based cache handled byte-convertible assets such as dynamic meshes stored in the cloud. This integration dramatically improved performance, as no caching existed previously",
+            "Refactored furniture moving system by isolating movement logic into testable components, decoupling input handling, and applying dependency injection. This improved architecture enabled faster feature integration",
+            "Built grouped object system for moving object clusters with serialized selection state, streamlining apartment design with repeated elements",
+            "Led a team of four developers, assigning tasks based on their skills and providing support when needed. Implemented Agile and Scrum practices to create a customized task pipeline, improving communication between developers and managers"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Software Engineer",
+          "subheading": "DataConsult Solutions",
+          "dates": "July 2018 – January 2020",
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Developed destructible gameplay objects using Unreal Engine's Chaos Destruction and Niagara effects, enabling multi-layered damage systems where objects like cars and buildings could be broken into progressively smaller pieces",
+            "Built village game systems on RTS template: dynamic weather, NPC interactions, and unit progression"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Junior Engineer",
+          "subheading": "InnovateTech Labs (startup)",
+          "dates": "March 2018",
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Developed AI behavior systems using Unreal Engine Behavior Trees in a team of 4–5 developers; first experience with multi-person team synchronization and task coordination"
+          ],
+          "links": []
+        },
+        {
+          "heading": "Software Developer",
+          "subheading": "CodeWeave (early-stage)",
+          "dates": "January 2018",
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Designed and implemented an inventory system inspired by Death Stranding, including full UI, drag-and-drop interaction, and inventory component logic in Blueprints"
+          ],
+          "links": []
+        }
+      ]
+    },
+    {
+      "name": "Personal Projects",
+      "text": "June 2017 – November 2017",
+      "items": [],
+      "entries": [
+        {
+          "heading": "Real-Time Analytics Dashboard",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": "Solo prototype built to explore streaming data visualization; implemented Kafka consumer, real-time aggregations, and interactive D3.js dashboard",
+          "bullets": [],
+          "links": []
+        },
+        {
+          "heading": "ML Model Training Pipeline",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": "Developed end-to-end feature engineering pipeline, hyperparameter tuning, model versioning with MLflow, and automated retraining triggers for time-series prediction",
+          "bullets": [],
+          "links": []
+        },
+        {
+          "heading": "Distributed Cache System (open-source)",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": "Full Rust implementation of a distributed cache with consistent hashing and replication; used as a learning exercise for systems programming and distributed algorithms",
+          "bullets": [],
+          "links": []
+        }
+      ]
+    },
+    {
+      "name": "Projects",
+      "text": null,
+      "items": [],
+      "entries": [
+        {
+          "heading": "Time Series Forecasting Engine",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [],
+          "links": [
+            "github.com/sarahchen-dev/time-series-forecaster"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Portfolios",
+      "text": null,
+      "items": [],
+      "entries": [
+        {
+          "heading": "Stream Processing Framework",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [],
+          "links": [
+            "github.com/sarahchen-dev/stream-processing-framework"
+          ]
+        },
+        {
+          "heading": "Data Validation Library",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [],
+          "links": [
+            "github.com/sarahchen-dev/data-validation-lib"
+          ]
+        },
+        {
+          "heading": "Database Query Optimizer",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [],
+          "links": [
+            "github.com/sarahchen-dev/query-optimizer"
+          ]
+        },
+        {
+          "heading": "Distributed Scheduler",
+          "subheading": null,
+          "dates": null,
+          "location": null,
+          "text": null,
+          "bullets": [],
+          "links": [
+            "github.com/sarahchen-dev/distributed-scheduler"
+          ]
+        }
+      ]
+    }
+  ]
+}

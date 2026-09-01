@@ -33,10 +33,28 @@ backends.
 
 **Capability flag.** `AgentBackend.supports_structured_output: ClassVar[bool]`
 (`jsa/agents/base.py`) is hard-coded per backend, never runtime-detected:
-`AnthropicAPIBackend` and `OpenCodeZenBackend` are `True`; `ClaudeCliBackend` and
-`GoogleCliBackend` are `False` (and never accept a `structured_schema` kwarg — under
-`stages.py`'s conditional-kwarg wiring, no caller ever offers one to a backend that can't
-use it, so adding an accept-and-ignore parameter to the CLI backends would be dead code).
+`AnthropicAPIBackend`, `OpenCodeZenBackend`, `MistralBackend`, `OpenRouterBackend`, and
+`GeminiBackend` are `True`; `ClaudeCliBackend` and `GoogleCliBackend` are `False` (and
+never accept a `structured_schema` kwarg — under `stages.py`'s conditional-kwarg wiring,
+no caller ever offers one to a backend that can't use it, so adding an accept-and-ignore
+parameter to the CLI backends would be dead code).
+
+**`OpenCodeGoBackend` is the one deliberate exception to "never runtime-detected."**
+`jsa/agents/opencode_go.py` proxies two wire protocols under one backend name —
+`/chat/completions` models get real structured output, `/messages` (Anthropic-shape)
+models are sentinel-only because forced tool-use does not take on that gateway path (see
+"Backend fallback chain (BF-19)" → "OpenCode Zen backend" below for the same shape applied
+to zen). Which protocol a given *instance* speaks depends on which model it was
+constructed with (`_PROTOCOL: dict[str, Literal["chat","messages"]]`), so
+`supports_structured_output` is set as an **instance attribute in `__init__`**, not read
+off the class. `stages.py::_structured_schema_for(backend, stage)` reads it off the
+backend *instance* it was handed, which is what makes this safe — **a class-level read
+(`OpenCodeGoBackend.supports_structured_output` / `cls.supports_structured_output`) would
+silently see the inherited `OpenAICompatBackend` default (`True`) and be wrong** for a
+`/messages`-model instance. Before adding any new call site that touches this flag, grep
+for a class-level read first; do not "fix" this back to a ClassVar as a simplification —
+that would silently re-enable prompt-injected JSON on a gateway path proven not to honor
+it.
 
 **Turn models and schema.** `jsa/schema/turn_models.py` holds one flat, non-nullable
 Pydantic model per stage — `FitVerdict{verdict, reason}` (both fields required, `reason`
@@ -173,6 +191,52 @@ Never write `Message` rows, `Document` rows, and `Job` state in separate commits
 ## Agent backend registration
 
 New backends are registered in `jsa/agents/registry.py` by adding an entry to the `_REGISTRY` dict. The key is the CLI-flag string (e.g., `"claude-cli"`, `"google-cli"`, `"anthropic"`). Backends must subclass `AgentBackend` and implement all four abstract methods.
+
+---
+
+## Model selection (per-backend, runtime)
+
+Which model each registered backend runs is selectable at runtime — no restart — through
+`Settings.backend_models: dict[str, str]` (`jsa/config.py`), a **global, persisted, live**
+mapping of backend name → chosen model ID. This is additive on top of each backend's
+existing flat scalar default (`Settings.model`, `Settings.opencode_zen_model`, etc.) and
+their `JSA_*_MODEL` env vars — neither of those was touched or renamed.
+
+**Precedence**, resolved inside `server.py::make_backend_factory`'s `_model_for(name,
+default)` closure on every single dispatch (not cached): explicit `model_override` (the
+fit-gate's `--fit-model`, when set) > `settings.backend_models[name]` (a runtime UI
+selection) > the backend's flat per-backend field default. **Why the fit factory needs no
+extra wiring:** `server.py` evaluates `model_override=settings.fit_model` once at startup;
+when `fit_model` is `None` (the default) that override is `None`, so the fit factory falls
+through to the same `_model_for` read as every other stage and picks up runtime UI changes
+too. Only an explicit `--fit-model` pins the fit gate independently of the dropdown. Do not
+"fix" this by making the override lazy — it already is, by construction.
+
+**Persistence.** `jsa/store/backend_models.py` (`BackendModels{selected, catalog}`)
+mirrors `jsa/store/preferences.py`'s pattern exactly (sync read/write wrapped in
+`asyncio.to_thread`), saved to `Settings.backend_models_path`
+(`db_path.parent / "backend_models.json"`, so tests using an isolated `db_path` stay
+self-isolated). `server.py`'s startup event hydrates `settings.backend_models` from this
+file **before** the factory is built, so a restart doesn't lose a prior selection.
+`catalog` holds only *user* overrides on top of the code-shipped
+`jsa.agents.model_catalog.DEFAULT_CATALOG` — a new default model shipped in code reaches
+every user without them editing their JSON.
+
+**API.** `jsa/api/routes_backend_models.py`: `GET /api/backend-models` (cheap, no network —
+current selections + `supports_model_selection` per backend, `google-cli` → `false`,
+since `GoogleCliBackend.__init__` takes no `model` kwarg at all — the `agy` CLI has no
+model flag, so a selection UI for it would be meaningless, not merely empty); `GET
+/api/backend-models/{backend}` (lazy — called when a UI submenu opens — live listing where
+`jsa/agents/model_catalog.py::list_models` has a fetcher for that backend, catalog fallback
+otherwise, **any fetch failure is a 200 with `source: "catalog"`, never a 500**); `PUT
+/api/backend-models` (validates registry-membership and `SUPPORTS_MODEL_SELECTION`, persists,
+and mutates `request.app.state.settings.backend_models[backend]` in place so the very next
+dispatch sees it, not just a future restart).
+
+**Deliberately NOT on `/api/config`.** That endpoint is on the frontend's boot path and is
+raced against an 8s timeout in `store.hydrateLanguage` — a provider model-listing fetch
+must never be allowed to hang off it. Model selection has its own dedicated endpoints
+instead, fetched lazily by the header dropdown only when a submenu actually opens.
 
 ---
 
@@ -323,6 +387,60 @@ sentinel block")` on the job's very first turn — no BF-19 fallback-chain engag
 `ProtocolError` doesn't map to `AgentLimitReached`. Do not remove this nudge as a
 "simplification"; it is the fix for that failure mode, not a violation of the paragraph
 above.
+
+### The four multi-backend-model-select backends (Mistral, OpenRouter, OpenCode-GO, Gemini)
+
+`mistral`, `openrouter`, and `opencode-go`'s `/chat/completions` path are built on a shared
+base, `jsa/agents/_openai_compat.py`'s `OpenAICompatBackend` — extracted from
+`opencode_zen.py` but **deliberately not wired back into it** (that refactor is optional
+and gated on `opencode_zen.py`'s 935-line test file passing unchanged; it was not
+attempted, so `opencode_zen.py` keeps its own independent, behaviourally identical copy —
+accept the duplication rather than "DRY-ing" the two together). The shared base copies
+`opencode_zen.py`'s three-way classification and retry loop **verbatim**: quota/rate
+(`429`, `"rate"`/`"credit"` in the message, or `err_type` in `{"RateLimitError",
+"CreditsError"}`) → immediate `AgentLimitReached`; transient overload/gateway (any
+structured JSON error body at status `<400` or `>=500`, a non-JSON body at `>=500`, or a
+null `message.content`) → retried in-process up to `_MAX_ATTEMPTS` (3) then
+`AgentBackendUnavailable`; a permanent `4xx` → immediate `AgentBackendUnavailable`, no
+retry. `gemini` (`jsa/agents/gemini_api.py`) subclasses the same base but overrides only
+`_call_api_once` — its wire shape (`{"error": {"code","message","status"}}`) has nothing in
+common with an OpenAI-compatible body, so its three-way split is hand-adapted to that
+envelope, not literally copied. **Do not build any of these four on
+`jsa/agents/anthropic_api.py`'s pattern** — that backend has no `AgentBackendUnavailable`
+path at all, so an auth error or a bad model name would propagate raw and hard-fail the job
+on the very first backend instead of advancing the BF-19 chain (the exact bug class this
+section exists to prevent). Regression coverage:
+`tests/backend/test_openai_compat.py` (the shared base, exercised via `MistralBackend`),
+`tests/backend/test_gemini_api.py`, and
+`tests/backend/test_bf18_limit_detection.py::TestOpenAICompatibleNewBackendsClassification`
+/ `::TestGeminiClassification` (one parametrized pass over all four confirming each
+concrete subclass — not just the shared base — actually raises the right BF-19-recognized
+exception type).
+
+**OpenRouter's `provider.require_parameters` routing guard is mandatory, not optional.**
+`OpenRouterBackend._extra_payload()` adds `{"provider": {"require_parameters": True}}` to
+every request. Without it, OpenRouter may silently route a structured request to an
+upstream endpoint that ignores `response_format` entirely — the model then answers in
+free-form prose instead of JSON, which this project's per-session structured→sentinel
+downgrade cannot distinguish from any other unparseable reply, so it just downgrades on
+every single turn instead of failing loudly once. **Removing this flag is a silent
+regression, not a simplification** — nothing else in this codebase would catch its absence
+except `tests/backend/test_openrouter.py`'s dedicated payload-shape assertion, which exists
+specifically because a missing guard produces no error, just quietly worse behavior.
+
+**`opencode-go` spans two wire protocols under one backend name** — see "Structured output
+(API backends)" above for the instance-level `supports_structured_output` this requires.
+`/messages` models use a hand-built Anthropic Messages-shape request (`x-api-key` auth, a
+top-level `system` field, no `response_format` ever sent) with its own three-way
+classification adapted to that envelope shape — built on raw `httpx`, not the `anthropic`
+SDK, for the same `AgentBackendUnavailable`-path reason called out above.
+
+**Env-var fallback chains** (all read at call time, never cached, never loaded from a
+`.env` file — this project still loads no `.env`, same as every existing backend):
+`MISTRAL_API_KEY`; `OPENROUTER_API_KEY`; `GEMINI_API_KEY` → `GOOGLE_API_KEY`;
+`OPENCODE_GO_API_KEY` → `OPENCODE_API_KEY` (the existing `opencode-zen` backend keeps using
+`OPENCODE_API_KEY` on its own, untouched — `opencode-go` merely falls back to the same
+variable if its own is unset, it does not replace it).
 
 ---
 
