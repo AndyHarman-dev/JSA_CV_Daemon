@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -108,8 +109,20 @@ class Orchestrator:
         output_dir: Path | None = None,
         cv_structure_path: Path | None = None,
         preferences_path: Path | None = None,
+        max_parallel_per_backend: int = 0,
+        dispatch_stagger_seconds: float = 0.0,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
+        # Per-backend in-flight cap, on top of the global `sem`. Throttles one *provider
+        # account* — five jobs on one backend are five simultaneous requests on one API key,
+        # and the resulting 429/overload is keyed to the account, not the model. `0` =
+        # unlimited, which is exactly today's behaviour and what every existing caller
+        # (tests included) gets by default; production passes settings.max_parallel_per_backend.
+        # Counts are created lazily per backend name, so a chain that never dispatches to a
+        # backend never gets an entry.
+        self._max_parallel_per_backend = max_parallel_per_backend
+        self._backend_inflight: dict[str, int] = {}
+        self._dispatch_stagger_seconds = dispatch_stagger_seconds
         self.wakeup = asyncio.Event()
         self._db_session_factory = db_session_factory
         self._backend_factory = _wrap_factory(backend_factory)
@@ -128,6 +141,53 @@ class Orchestrator:
     def kick(self) -> None:
         """Wake the run() loop. Called by API routes after answer/revise."""
         self.wakeup.set()
+
+    def _acquire_backend_slot(self, backend_name: str) -> bool:
+        """Try to take one in-flight slot for `backend_name`. Never blocks.
+
+        Returns True if a slot was taken (or the cap is disabled), False if this backend
+        is already saturated and the caller should skip the job this cycle.
+
+        Non-blocking is the whole point, and the reason this is a plain counter rather
+        than an ``asyncio.Semaphore``: the dispatch loop is sequential, so *waiting* on a
+        saturated backend would cause head-of-line blocking — every job queued behind it
+        would stall, including jobs on completely idle backends. A skipped job stays
+        runnable and is re-picked on the next scan (see the starvation note in ``run()``).
+        """
+        cap = self._max_parallel_per_backend
+        if cap <= 0:  # 0 (or negative) = unlimited — today's behaviour
+            return True
+        if self._backend_inflight_count(backend_name) >= cap:
+            return False
+        self._backend_inflight[backend_name] = self._backend_inflight_count(backend_name) + 1
+        return True
+
+    def _release_backend_slot(self, backend_name: str | None) -> None:
+        """Return one in-flight slot for `backend_name`. Idempotent-safe and never negative.
+
+        MUST be called at every site that releases the global ``self.sem`` — the three
+        post-acquire bailouts in ``run()`` plus ``_run_one``'s ``finally``. Missing any one
+        permanently burns a slot, and after `max_parallel_per_backend` occurrences that
+        backend deadlocks and never dispatches again.
+
+        Takes the backend name captured *at dispatch time*, not ``job.backend_name``, so a
+        mid-run BF-19 backend switch releases the slot that was actually taken.
+        """
+        if backend_name is None or self._max_parallel_per_backend <= 0:
+            return
+        current = self._backend_inflight_count(backend_name)
+        if current > 0:
+            self._backend_inflight[backend_name] = current - 1
+
+    def _backend_inflight_count(self, backend_name: str) -> int:
+        """In-flight job count for one backend (0 when it has never been dispatched to)."""
+        return self._backend_inflight.get(backend_name, 0)
+
+    def _backend_for_dispatch(self, job: Job) -> str:
+        """Which backend this job will actually run on — mirrors the resolution used by
+        ``_advance_backend_or_fail``, so the slot taken at dispatch is keyed to the backend
+        the request is really sent to."""
+        return job.backend_name or self._backends[0]
 
     def cancel_task(self, job_id: str) -> bool:
         """Best-effort: cancel the in-flight worker task for job_id, if any.
@@ -161,6 +221,14 @@ class Orchestrator:
         cv_gate_blocked_announced = False
 
         while not self._stopping:
+            # DO NOT MOVE THIS BELOW THE DISPATCH SCAN. Skip-on-saturation (the per-backend
+            # cap below) leaves a skipped job runnable and relies on a later scan to pick it
+            # up — which is starvation-free ONLY because clear() sits here, above the scan,
+            # with no await between wait() returning at the bottom of the loop and this
+            # clear(). That ordering means a kick() landing *during* the scan is retained and
+            # re-runs the loop immediately. If clear() ever moves below the scan, a kick that
+            # arrives mid-scan is swallowed and jobs skipped for saturation starve silently
+            # until some unrelated event kicks the loop again.
             self.wakeup.clear()
 
             # Gate: cv_structure is the single source of truth for CV content. Inert
@@ -194,6 +262,21 @@ class Orchestrator:
                 runnable: list[Job] = await repo.list_runnable_jobs(session)
 
             for job in runnable:
+                # Per-backend cap FIRST, and non-blocking: if this backend already has
+                # max_parallel_per_backend jobs in flight, skip this job for now rather than
+                # waiting on it. Waiting here would head-of-line block the whole sequential
+                # loop — a saturated backend would stall every job behind it, including jobs
+                # on completely idle backends. The job stays runnable; see the clear() note
+                # at the top of the loop for why it can't starve.
+                #
+                # The three bailouts below release this slot but deliberately do NOT kick():
+                # reaching one means the acquire above SUCCEEDED, i.e. this backend had room,
+                # which in a sequential scan means no earlier job was skipped on its account.
+                # So the release cannot unblock anything the loop has already walked past.
+                dispatch_backend = self._backend_for_dispatch(job)
+                if not self._acquire_backend_slot(dispatch_backend):
+                    continue
+
                 # Acquire sem BEFORE committing the transition so the in-flight
                 # count is accurate. This blocks when 5 tasks are in flight.
                 await self.sem.acquire()
@@ -207,11 +290,13 @@ class Orchestrator:
                         db_job = await repo.get_job(session, job.id)
                         if db_job is None:
                             self.sem.release()
+                            self._release_backend_slot(dispatch_backend)
                             continue
                         # Skip if the job was already picked up (e.g. by a
                         # concurrent kick that landed before we got here)
                         if db_job.state == JobState.running:
                             self.sem.release()
+                            self._release_backend_slot(dispatch_backend)
                             continue
                         transition(db_job, JobState.running, stage)
                         db_job.updated_at = datetime.utcnow()
@@ -231,6 +316,7 @@ class Orchestrator:
                         )
                     )
                     self.sem.release()
+                    self._release_backend_slot(dispatch_backend)
                     continue
 
                 # Publish status change AFTER the DB commit so the UI fetches
@@ -258,7 +344,7 @@ class Orchestrator:
                 # Spawn the worker task; sem is released in the task's finally block.
                 # Keying by job_id (rather than an unkeyed set) lets cancel_task()
                 # look up and cancel a specific job's in-flight task (e.g. on dismiss).
-                task = asyncio.create_task(self._run_one(job.id))
+                task = asyncio.create_task(self._run_one(job.id, dispatch_backend))
                 self._tasks[job.id] = task
                 # Only pop if the dict still points at *this* task — guards against
                 # popping a newer task if the same job_id got re-dispatched before
@@ -273,12 +359,24 @@ class Orchestrator:
 
             await self.wakeup.wait()
 
-    async def _run_one(self, job_id: str) -> None:
+    async def _run_one(self, job_id: str, dispatch_backend: str | None = None) -> None:
         """Worker task: open a session, run the stage, handle outcome.
 
         Always releases the semaphore and kicks the loop in finally.
+
+        `dispatch_backend` is the backend name whose per-backend slot was taken by the
+        dispatch loop. It is passed in (rather than re-read from ``job.backend_name``) so
+        that a mid-run BF-19 backend switch still releases the slot that was actually
+        taken. Defaults to None for direct callers in tests, which took no slot.
         """
         try:
+            # Jittered stagger: spread a burst of simultaneous launches over a small window
+            # so one provider account sees a staggered request pattern instead of N requests
+            # at the same instant. Deliberately here and not in the dispatch loop — there it
+            # would delay dispatch itself while holding both semaphores, converting a
+            # throughput fix into a throughput cost.
+            if self._dispatch_stagger_seconds > 0:
+                await asyncio.sleep(random.uniform(0, self._dispatch_stagger_seconds))
             async with self._db_session_factory() as session:
                 job = await repo.get_job(session, job_id)
                 if job is None:
@@ -388,6 +486,7 @@ class Orchestrator:
 
         finally:
             self.sem.release()
+            self._release_backend_slot(dispatch_backend)
             self.kick()
 
     async def _handle_limit_reached(self, job_id: str, exc: AgentLimitReached) -> None:

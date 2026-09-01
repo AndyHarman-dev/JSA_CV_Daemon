@@ -20,15 +20,37 @@ class Settings(BaseSettings):
     anthropic_timeout: float = 180.0     # Per-reply timeout in seconds, via JSA_ANTHROPIC_TIMEOUT
     agent_timeout: float = 600.0         # Timeout for CLI backends (claude-cli, google-cli), via JSA_AGENT_TIMEOUT
     opencode_zen_model: str = "nemotron-3-ultra-free"  # Model ID for opencode-zen, via JSA_OPENCODE_ZEN_MODEL
-    opencode_zen_timeout: float = 180.0  # Per-reply timeout in seconds, via JSA_OPENCODE_ZEN_TIMEOUT
+    opencode_zen_timeout: float = 300.0  # Per-reply timeout in seconds, via JSA_OPENCODE_ZEN_TIMEOUT
     mistral_model: str = "mistral-small-2603"  # Must match MistralBackend.default_model; via JSA_MISTRAL_MODEL
-    mistral_timeout: float = 180.0       # Per-reply timeout in seconds, via JSA_MISTRAL_TIMEOUT
+    mistral_timeout: float = 300.0       # Per-reply timeout in seconds, via JSA_MISTRAL_TIMEOUT
     openrouter_model: str = "nvidia/nemotron-3-nano-30b-a3b"  # Must match OpenRouterBackend.default_model; via JSA_OPENROUTER_MODEL
-    openrouter_timeout: float = 180.0    # Per-reply timeout in seconds, via JSA_OPENROUTER_TIMEOUT
+    openrouter_timeout: float = 300.0    # Per-reply timeout in seconds, via JSA_OPENROUTER_TIMEOUT
     gemini_model: str = "gemini-3.1-flash-lite"  # Must match GeminiBackend.default_model; via JSA_GEMINI_MODEL
-    gemini_timeout: float = 180.0        # Per-reply timeout in seconds, via JSA_GEMINI_TIMEOUT
+    gemini_timeout: float = 300.0        # Per-reply timeout in seconds, via JSA_GEMINI_TIMEOUT
     opencode_go_model: str = "glm-5.3"   # Must match OpenCodeGoBackend.default_model; via JSA_OPENCODE_GO_MODEL
-    opencode_go_timeout: float = 180.0   # Per-reply timeout in seconds, via JSA_OPENCODE_GO_TIMEOUT
+    opencode_go_timeout: float = 300.0   # Per-reply timeout in seconds, via JSA_OPENCODE_GO_TIMEOUT
+    # The five HTTP API backends above default to 300s (bumped from 180s): a busy-but-alive
+    # model on a throttled provider account routinely needs longer than 180s for one reply,
+    # and BF-19 reads that timeout as "backend down" and burns a chain hop. `anthropic_timeout`
+    # and the 600s CLI `agent_timeout` are deliberately NOT bumped — neither showed this
+    # failure. Note the bump is only safe together with `max_parallel_per_backend` below: on
+    # its own, a longer timeout means a stuck job holds its global semaphore slot longer, so
+    # throughput under throttling gets strictly WORSE.
+    max_parallel_per_backend: int = 2    # Max jobs in flight against any ONE backend, via
+                                         # JSA_MAX_PARALLEL_PER_BACKEND. `0` = unlimited
+                                         # (restores the pre-ladder behaviour, where the global
+                                         # `max_parallel` was the only limit). This is a
+                                         # per-provider-account throttle: five jobs on
+                                         # opencode-go are five simultaneous requests on one API
+                                         # key, and the resulting 429/overload is keyed to the
+                                         # account, not the model. Deliberately NOT a reduction
+                                         # of the global cap — jobs on *different* backends
+                                         # should still run five-wide.
+    dispatch_stagger_seconds: float = 1.5  # Max random delay before a worker's first agent
+                                           # call, via JSA_DISPATCH_STAGGER_SECONDS. `0` = off.
+                                           # Spreads a burst of simultaneous launches over a
+                                           # small window so the provider sees a staggered
+                                           # request pattern rather than N at the same instant.
     fit_model: str | None = None         # Model for the fit_assessment stage only, via JSA_FIT_MODEL / --fit-model.
                                          # None → the fit stage uses the same model as every other stage (`model`).
     fit_timeout: float | None = None     # Per-reply timeout for the fit_assessment stage only, via JSA_FIT_TIMEOUT.

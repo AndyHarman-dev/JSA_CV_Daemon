@@ -206,6 +206,10 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
             output_dir=settings.output_dir,
             cv_structure_path=settings.cv_structure_path,
             preferences_path=settings.preferences_path,
+            # Provider-account throttling: cap in-flight jobs per backend and jitter the
+            # start of each worker, so N simultaneous launches don't hit one API key at once.
+            max_parallel_per_backend=settings.max_parallel_per_backend,
+            dispatch_stagger_seconds=settings.dispatch_stagger_seconds,
         )
         app.state.orchestrator = orchestrator
 

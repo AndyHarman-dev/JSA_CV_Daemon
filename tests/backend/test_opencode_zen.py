@@ -583,7 +583,13 @@ class TestConfigDefaults:
         monkeypatch.delenv("JSA_OPENCODE_ZEN_TIMEOUT", raising=False)
         from jsa.config import Settings
         s = Settings()
-        assert s.opencode_zen_timeout == 180.0
+        # 300s, not 180s: the five HTTP API backends were bumped in Phase 1 of the
+        # model-fallback-ladder plan. A busy-but-alive model on a throttled provider
+        # account routinely needs longer than 180s for one reply, and BF-19 reads that
+        # timeout as "backend down" and burns a whole chain hop. See
+        # tests/backend/test_orchestrator_throttling.py::TestSettingsDefaults for the
+        # full set (and for the pin that anthropic_timeout/agent_timeout are NOT bumped).
+        assert s.opencode_zen_timeout == 300.0
 
     def test_opencode_zen_model_overridable_via_env(self, monkeypatch):
         monkeypatch.setenv("JSA_OPENCODE_ZEN_MODEL", "gpt-5")
