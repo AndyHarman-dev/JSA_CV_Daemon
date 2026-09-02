@@ -300,6 +300,85 @@ in `jsa/db/repo.py`), so after a `cv_adjust`-stage switch the retry re-enters
 `fit_assessment` on the new backend before reaching `cv_adjust` again — an extra fit turn,
 by design, not a loop.
 
+### Model ladder (tried before the backend advance)
+
+`AgentTimeout` and `AgentBackendUnavailable` — **never `AgentLimitReached`** — first try the
+next model on the SAME backend before `_advance_backend_or_fail`
+(`jsa/pipeline/orchestrator.py`) falls through to the backend advance above. Rationale: a
+busy-but-alive model is not the same failure as an exhausted account. A different model on
+the same account is still a different upstream constraint for a timeout/availability
+failure, so it's worth trying before burning a whole backend hop — but a 429/quota signal is
+an account-scoped constraint that a different model on the *same* account does nothing for,
+so `AgentLimitReached` skips the ladder entirely and always advances the backend, as before
+this feature existed.
+
+- **A hop is a job-level rewind, not an in-backend retry.** It calls
+  `repo.backend_switch_reset` with the SAME backend name (a legal, no-op `backend_name`
+  reassignment) and `new_model_name=<next rung>` / `increment_model_hops=True` — the exact
+  mechanism the backend advance already uses, just without changing `backend_name`. This
+  reuses that function's existing Message/FollowUp cleanup and fresh-session forcing
+  (`cv_session_id`/`cl_session_id` cleared), which is required, not incidental: the
+  `opencode-go` backend's ladder can cross its `chat`/`messages` protocol boundary (see "The
+  four multi-backend-model-select backends" below), where `supports_structured_output`
+  differs per model — only a fresh session makes that switch safe. `ModelSwitchedEvent`
+  (`jsa/events/schema.py`) is emitted instead of `BackendSwitchedEvent`, and the hop returns
+  without also advancing the backend in the same call.
+- **Curated catalog, not the live listing.** The ladder reads `model_ladder(backend)` —
+  `model_catalog.merged_catalog` filtered through `model_costs.cost_ordered` — never
+  `list_models`. A failure path must not depend on a network call to the provider that is
+  already failing.
+- **Entry point is the UI-selected model**, not the catalog's cheapest rung:
+  `job.model_name` if the job has already hopped, else `model_resolver(backend)` (the same
+  `settings.backend_models[name]`-else-flat-default precedence `make_backend_factory` uses —
+  see "Model selection (per-backend, runtime)" above). Starting every job at the global
+  cheapest would silently override the header dropdown.
+- **`google-cli` is exempt** — `SUPPORTS_MODEL_SELECTION["google-cli"]` is `False` (the `agy`
+  CLI has no model flag), so `_resolve_model_hop` returns `None` immediately and every
+  `google-cli` failure goes straight to the backend advance, same as pre-ladder behavior.
+- **Two brakes, both must pass, in `Orchestrator._resolve_model_hop`:**
+  - **Hop cap** — `job.model_hops < 5`. A count cap, not a cost cap: some backends (e.g.
+    `opencode-go`) have 20+ rungs, so an unbounded ladder could re-ask the user's question
+    that many times.
+  - **Answered-input brake** — if the job has ANY answered `FollowUp` (checked **job-wide**,
+    not scoped to the currently-failing stage) and `job.model_hops > 0`, no further hop is
+    allowed. Job-wide + counting **hops** (not `model_name is not None`) is deliberate, not
+    an oversight — a stage-scoped or `model_name`-based check is fooled two ways: (a) a
+    `revising_*` reset deletes ALL FollowUps (including answered ones) for that stage as
+    part of taking the hop itself, so a stage-scoped recheck afterward would see nothing and
+    wrongly allow another hop; (b) a `cv_adjust` rewind lands the *next* failure at
+    `fit_assessment`, a stage that never has FollowUps at all, so a stage-scoped check there
+    would also miss the still-present answered FollowUp from the earlier stage. Counting
+    hops closes both gaps: a job that has already spent its one post-answer hop stays capped
+    regardless of which stage or reset touched the FollowUp rows.
+  - **Pinned-fit escape** — if `failed_stage == fit_assessment` and `--fit-model` is pinned
+    (`Orchestrator._fit_model_pinned`), skip the ladder and advance the backend immediately.
+    Without this, the pinned fit model keeps failing, the ladder hops the *general* pipeline
+    model instead (wrong target), a `cv_adjust` rewind re-enters `fit_assessment` on the same
+    still-failing pinned model, and the whole ladder gets spent for zero forward progress.
+- **Fail-safe.** `_resolve_model_hop` raising for any reason is caught by
+  `_advance_backend_or_fail` and treated as "no hop" — falls through to the backend advance
+  — so a ladder bug degrades to pre-ladder behavior instead of leaving the job stuck
+  `running` forever (nothing in `list_runnable_jobs` recovers a `running` job, and
+  `_run_one`'s `finally` would already have released the semaphore).
+- **Chain exhaustion message.** If the job hopped models on its final backend before the
+  chain ran out, `mark_failed`'s message appends `"(also tried N model(s) on <backend>)"` —
+  only when `job.model_hops > 0`, so a no-ladder-configured job's message stays
+  byte-identical to what it was before this feature.
+- **Why this doesn't contradict "don't blindly repeat an expensive multi-minute call"** (see
+  "OpenCode Zen backend"'s in-backend retry-loop rationale below): that rule is about
+  repeating the *identical* request to the *identical* upstream. A ladder hop is a
+  *different* model — usually a different upstream — so it is not the same trade being
+  re-litigated.
+- **Job-row display, one-way.** `GET /api/jobs` exposes `model_name` (raw, null until the
+  first hop) and `effective_model` (`model_name` if set, else `model_resolver(backend_name)`
+  — computed in `jsa/api/routes_jobs.py::_job_to_dict` via the SAME `make_model_resolver`
+  closure the orchestrator uses, exposed at `app.state.model_resolver`). The frontend renders
+  `effective_model` on the job row only (`JobList.tsx`) — **never** into Header's
+  runtime-selection dropdown, which must keep meaning "your global selection", not "what this
+  one hopped job happens to be running." `model_name` is never seeded at dispatch time —
+  seeding it would corrupt the hop-cap/answered-input-brake accounting above, which relies on
+  `model_name is None` meaning "never hopped."
+
 ### OpenCode Zen backend
 
 `opencode-zen` (`jsa/agents/opencode_zen.py`) is an HTTP backend, not a CLI one — it POSTs

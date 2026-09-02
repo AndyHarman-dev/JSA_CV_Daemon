@@ -149,6 +149,24 @@ describe("applyEvent - stage_complete event", () => {
   });
 });
 
+describe("applyEvent - model_switched event", () => {
+  it("calls refetchAll (api.getJobs) when a model_switched event is received", async () => {
+    const event: WSEvent = {
+      type: "model_switched",
+      job_id: "job1",
+      backend: "opencode-go",
+      from_model: "glm-5.3",
+      to_model: "kimi-k2.6",
+    };
+    useStore.getState().applyEvent(event);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(api.getJobs).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("refetchAll", () => {
   it("updates the jobs map with returned jobs", async () => {
     const mockJob = makeJob({ id: "fetched1", state: "running" });

@@ -38,6 +38,7 @@ function JobRow({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -97,7 +98,24 @@ function JobRow({
       >
         {job.role}
       </div>
-      {job.state === "queued" ? <LaunchButton jobId={job.id} /> : <StatusBadge state={job.state} />}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        {job.state === "queued" ? <LaunchButton jobId={job.id} /> : <StatusBadge state={job.state} />}
+        {job.effective_model && (
+          <span
+            title={`${t("jobList.modelTitle")}: ${job.effective_model}`}
+            style={{
+              font: `400 9.5px ${T.mono}`,
+              color: T.ink3,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              maxWidth: "50%",
+            }}
+          >
+            {job.effective_model}
+          </span>
+        )}
+      </div>
     </button>
   );
 }

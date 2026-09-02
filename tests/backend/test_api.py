@@ -570,6 +570,63 @@ class TestIgnoreFit:
         assert resp.json()["state"] == "dismissed"
 
 
+class TestModelDisplay:
+    """Phase 5 of the model-fallback-ladder plan: model_name/effective_model in the
+    job DTO. See CLAUDE.md's "Model ladder" -> "Job-row display, one-way"."""
+
+    async def test_never_hopped_effective_model_is_backend_flat_default(self, client, db):
+        # No model_name (never hopped) and no runtime UI selection -> falls through to
+        # the backend's flat default (Settings.model for claude-cli == "claude-haiku-4-5").
+        await _insert_job(db, state=JobState.pending)
+        async with db() as session:
+            job = await repo.get_job(session, "aabbccdd00112233")
+            job.backend_name = "claude-cli"
+            await session.commit()
+
+        resp = await client.get("/api/jobs/aabbccdd00112233")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model_name"] is None
+        assert data["effective_model"] == "claude-haiku-4-5"
+
+    async def test_hopped_effective_model_is_the_pinned_rung(self, client, db):
+        await _insert_job(db, state=JobState.pending)
+        async with db() as session:
+            job = await repo.get_job(session, "aabbccdd00112233")
+            job.backend_name = "opencode-go"
+            job.model_name = "kimi-k2.6"
+            job.model_hops = 1
+            await session.commit()
+
+        resp = await client.get("/api/jobs/aabbccdd00112233")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model_name"] == "kimi-k2.6"
+        assert data["effective_model"] == "kimi-k2.6"
+
+    async def test_no_backend_yet_effective_model_is_none(self, client, db):
+        # backend_name is None (job never dispatched) -> nothing to resolve against.
+        await _insert_job(db, state=JobState.queued)
+        resp = await client.get("/api/jobs/aabbccdd00112233")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["model_name"] is None
+        assert data["effective_model"] is None
+
+    async def test_list_jobs_summary_also_carries_effective_model(self, client, db):
+        await _insert_job(db, state=JobState.pending)
+        async with db() as session:
+            job = await repo.get_job(session, "aabbccdd00112233")
+            job.backend_name = "claude-cli"
+            await session.commit()
+
+        resp = await client.get("/api/jobs")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["effective_model"] == "claude-haiku-4-5"
+
+
 class TestLaunchJob:
     """Manual job launch: queued → pending, snapshotting the global language."""
 

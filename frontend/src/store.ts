@@ -136,6 +136,19 @@ export const useStore = create<Store>((set, get) => ({
           console.error("refetchAll failed:", err);
         });
         break;
+      case "model_switched":
+        // A ladder hop also rewinds the job's state (e.g. running -> pending), not just
+        // its model — refetch so both the job row's state badge and its effective-model
+        // display pick up the new row. No dedicated store field: unlike backend_switched,
+        // nothing outside the job row (e.g. Header's dropdown) needs to reconcile against
+        // this — see CLAUDE.md's "Model ladder" section.
+        console.info(
+          `[JSA] Model switched for job ${e.job_id} on ${e.backend}: ${e.from_model} → ${e.to_model}`
+        );
+        store.refetchAll().catch((err: unknown) => {
+          console.error("refetchAll failed:", err);
+        });
+        break;
       case "log":
         break;
       case "error":

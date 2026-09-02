@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
@@ -33,6 +33,15 @@ def _session_factory(request: Request):
     return request.app.state.session_factory
 
 
+def _model_resolver_for(request: Request) -> Callable[[str], str | None]:
+    """The app's backend->model resolver (`server.py::make_model_resolver`), or a
+    no-op if the app never set one (e.g. a test app built without startup running).
+    Used only to fill in a job's *effective* model when it hasn't hopped yet — see
+    `_job_to_dict`."""
+    resolver = getattr(request.app.state, "model_resolver", None)
+    return resolver if resolver is not None else (lambda _name: None)
+
+
 def _doc_to_dict(doc: Document) -> dict:
     return {
         "id": doc.id,
@@ -58,7 +67,22 @@ def _follow_up_to_dict(fu: FollowUp) -> dict:
     }
 
 
-def _job_to_dict(job: Job, *, full: bool = False) -> dict:
+def _job_to_dict(
+    job: Job,
+    *,
+    full: bool = False,
+    model_resolver: Callable[[str], str | None] | None = None,
+) -> dict:
+    # Effective model (Phase 5, display only — never written back to the job or to the
+    # header's runtime-selection dropdown, see CLAUDE.md "Model ladder"): the job's own
+    # pinned rung once it has hopped, else whatever its backend is currently configured
+    # to run. `model_resolver` is the exact same backend->model mapping the orchestrator's
+    # ladder uses (`server.py::make_model_resolver`), so this can never disagree with what
+    # a fresh dispatch on that backend would actually pick.
+    effective_model = job.model_name
+    if effective_model is None and job.backend_name is not None and model_resolver is not None:
+        effective_model = model_resolver(job.backend_name)
+
     d: dict[str, Any] = {
         "id": job.id,
         "company": job.company,
@@ -69,6 +93,8 @@ def _job_to_dict(job: Job, *, full: bool = False) -> dict:
         "state": job.state.value if job.state is not None else None,
         "current_stage": job.current_stage.value if job.current_stage is not None else None,
         "backend_name": job.backend_name,
+        "model_name": job.model_name,
+        "effective_model": effective_model,
         "language": job.language,
         "fit_reason": job.fit_reason,
         "error": job.error,
@@ -134,7 +160,7 @@ async def list_jobs(request: Request, state: str | None = None):
         result = await session.execute(stmt)
         jobs = list(result.scalars().all())
         # Summary endpoint: no need to load relationships
-        return [_job_to_dict(job, full=False) for job in jobs]
+        return [_job_to_dict(job, full=False, model_resolver=_model_resolver_for(request)) for job in jobs]
 
 
 @router.get("/api/jobs/{job_id}")
@@ -145,7 +171,7 @@ async def get_job(request: Request, job_id: str):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        return _job_to_dict(job, full=True)
+        return _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
 
 @router.post("/api/jobs/{job_id}/answer")
@@ -188,7 +214,7 @@ async def answer_follow_up(request: Request, job_id: str, body: AnswerBody):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        job_dict = _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
     # Kick the orchestrator after releasing the session
     request.app.state.orchestrator.kick()
@@ -389,7 +415,7 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        job_dict = _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
     request.app.state.orchestrator.kick()
 
@@ -418,7 +444,7 @@ async def dismiss_job(request: Request, job_id: str):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        job_dict = _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
     await bus.publish(
         event_to_dict(
@@ -468,7 +494,7 @@ async def ignore_fit(request: Request, job_id: str):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        job_dict = _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
     await bus.publish(
         event_to_dict(
@@ -517,7 +543,7 @@ async def launch_job(request: Request, job_id: str):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        job_dict = _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
     await bus.publish(
         event_to_dict(
@@ -600,7 +626,7 @@ async def cancel_job(request: Request, job_id: str):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        job_dict = _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
     await bus.publish(
         event_to_dict(
@@ -704,7 +730,7 @@ async def reset_job(request: Request, job_id: str):
         job = await _fetch_job_with_relations(session, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-        job_dict = _job_to_dict(job, full=True)
+        job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
     # Wake the orchestrator so it picks up the now-pending/cv_done job immediately.
     request.app.state.orchestrator.kick()

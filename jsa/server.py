@@ -203,6 +203,10 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
 
     app.state.settings = settings
     app.state.bus = bus
+    # Exposed for GET /api/jobs' "effective model" display (Phase 5) — the same
+    # backend->model resolution the orchestrator's ladder uses, so the job-row
+    # display and the ladder's implicit starting rung never disagree.
+    app.state.model_resolver = make_model_resolver(settings)
 
     @app.on_event("startup")
     async def _startup() -> None:

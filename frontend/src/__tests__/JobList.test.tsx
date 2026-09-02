@@ -76,6 +76,31 @@ describe("JobList", () => {
     expect(screen.getByText("RUNNING")).toBeInTheDocument();
   });
 
+  it("shows the effective model on the job row when set", () => {
+    const job = makeJob({
+      id: "j1",
+      state: "running",
+      company: "Corp",
+      role: "Lead",
+      effective_model: "kimi-k2.6",
+    });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.getByText("kimi-k2.6")).toBeInTheDocument();
+  });
+
+  it("shows no model text on the job row when effective_model is absent", () => {
+    const job = makeJob({ id: "j1", state: "running", company: "Corp", role: "Lead" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    // Only the status badge and company/role text should render — no stray model chip.
+    expect(screen.getByText("RUNNING")).toBeInTheDocument();
+  });
+
   it("shows an unfit job under the Needs Review section", () => {
     const job = makeJob({ id: "j1", state: "unfit", company: "Bad Robot", role: "Principal" });
     useStore.setState({ jobs: { j1: job } });

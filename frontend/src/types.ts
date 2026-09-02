@@ -15,6 +15,12 @@ export interface JobDTO {
   state: JobState;
   current_stage: Stage | null;
   backend_name: string | null;
+  // Set only after the job has hopped at least once (model-first fallback ladder).
+  model_name: string | null;
+  // `model_name` if set, else the backend's currently-configured model. Display-only —
+  // never fed back into the header's runtime-selection dropdown. See CLAUDE.md's
+  // "Model ladder" section.
+  effective_model: string | null;
   language: string | null;
   fit_reason: string | null;
   error: string | null;
@@ -52,6 +58,9 @@ export type WSEvent =
   | { type: "approved"; job_id: string; cv_pdf_path: string; cl_pdf_path: string }
   | { type: "job_removed"; job_id: string }
   | { type: "backend_switched"; job_id: string; from_backend: string; to_backend: string }
+  // Model-first fallback ladder (Phase 4): a job hopped to the next model rung on the
+  // SAME backend. Mirrors jsa/events/schema.py::ModelSwitchedEvent exactly.
+  | { type: "model_switched"; job_id: string; backend: string; from_model: string; to_model: string }
   // CV Structure Editor — one-shot infer progress (job-less; keyed by a transient task_id).
   // Mirrors jsa/events/schema.py::InferProgressEvent exactly.
   | {
