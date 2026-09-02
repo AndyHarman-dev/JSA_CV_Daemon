@@ -130,7 +130,11 @@ STATIC_COSTS: dict[str, dict[str, float]] = {
     "opencode-go": _OPENCODE_GO_COSTS,
     "opencode-zen": _OPENCODE_ZEN_COSTS,
     "anthropic": _ANTHROPIC_COSTS,
-    "claude-cli": _ANTHROPIC_COSTS,
+    # claude-cli supports model selection and runs the same Claude models as
+    # the anthropic backend, so it snapshots the Anthropic table. Kept as a
+    # separate dict copy so a future in-place mutation of one backend's table
+    # cannot silently mutate the other.
+    "claude-cli": dict(_ANTHROPIC_COSTS),
     "mistral": _MISTRAL_COSTS,
     "gemini": _GEMINI_COSTS,
     "openrouter": _OPENROUTER_COSTS,
