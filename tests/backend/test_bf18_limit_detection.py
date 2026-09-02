@@ -32,6 +32,7 @@ from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
 from jsa.agents.mistral import MistralBackend
 from jsa.agents.opencode_go import OpenCodeGoBackend
 from jsa.agents.openrouter import OpenRouterBackend
+from jsa.agents.protocol import ProtocolError
 from jsa.db import repo
 from jsa.db.models import Base, FollowUp, Job, JobState, Stage
 from jsa.pipeline.orchestrator import Orchestrator
@@ -634,6 +635,98 @@ class TestOrchestratorBackendUnavailableDetection:
         orch = Orchestrator(
             db_session_factory=session_factory,
             backend_factory=lambda name: BackendUnavailableBackend(),
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
+
+
+class ProtocolErrorBackend(FakeAgentBackend):
+    """Test double: backend that always raises ProtocolError — the exception
+    run_stage's own structured-mode wire-retry budget re-raises once
+    MAX_FINAL_CORRECTIONS is exhausted on a session/backend that never emits
+    parseable JSON (jsa/pipeline/stages.py::_start_session_with_retry /
+    _send_message_with_wire_retry). See CLAUDE.md "Structured output (API
+    backends)" -> "BF-19 interaction"."""
+
+    def __init__(self):
+        super().__init__([])
+
+    async def start_session(self, system_prompt, initial_user_msg):
+        raise ProtocolError(
+            "cv_adjust FINAL block was not valid JSON (Expecting value: line 1 "
+            "column 1 (char 0))"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 8b: Orchestrator._run_one catches ProtocolError (once run_stage's own
+# wire-retry budget is exhausted) and engages the same BF-19 fallback chain as
+# AgentLimitReached/AgentTimeout/AgentBackendUnavailable, instead of falling
+# into the generic `except Exception` handler and hard-failing the job on the
+# very first backend with no fallback attempt at all. Reported bug: a
+# `--backends opencode-zen,opencode-go` chain never tried opencode-go when
+# opencode-zen kept returning malformed structured JSON.
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorProtocolErrorDetection:
+    """Tests for Orchestrator._run_one handling of ProtocolError via BF-19."""
+
+    async def test_protocol_error_switches_to_next_backend_in_chain(self, session_factory):
+        """A single-backend ProtocolError advances job.backend_name to the next
+        configured backend and keeps the job runnable."""
+        job = await _insert_job_at_cv_done(session_factory)
+
+        def backend_factory(name: str):
+            return (
+                ProtocolErrorBackend()
+                if name == "opencode-zen"
+                else FakeAgentBackend([cl_final()])
+            )
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=backend_factory,
+            backends=["opencode-zen", "opencode-go"],
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.backend_name == "opencode-go"
+        assert refreshed.state == JobState.review
+
+    async def test_protocol_error_exhausted_chain_marks_job_failed(self, session_factory):
+        """When every backend in the chain raises ProtocolError, the job fails
+        with a message distinct from the limit/timeout/unavailable wording."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: ProtocolErrorBackend(),
+            backends=["opencode-zen", "opencode-go"],
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
+        assert "unparseable" in (refreshed.error or "").lower()
+        assert "Backend limit reached" not in (refreshed.error or "")
+        assert "timed out on every" not in (refreshed.error or "")
+        assert "Backend unavailable on every" not in (refreshed.error or "")
+
+    async def test_protocol_error_single_backend_marks_job_failed(self, session_factory):
+        """With no fallback configured, still fails cleanly rather than looping."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: ProtocolErrorBackend(),
         )
 
         await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)

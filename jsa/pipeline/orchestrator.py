@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from jsa.agents import model_catalog, model_costs
 from jsa.agents.base import AgentBackend, AgentBackendUnavailable, AgentLimitReached, AgentTimeout
 from jsa.agents.google_cli import GoogleCliSessionExpiredError
+from jsa.agents.protocol import ProtocolError
 from jsa.db import repo
 from jsa.db.models import Job, JobState, Stage
 from jsa.events.bus import bus
@@ -514,6 +515,21 @@ class Orchestrator:
             logger.warning("_run_one: job %s google session expired, attempting auto-recovery", job_id)
             await self._handle_session_expired(job_id, exc)
 
+        except ProtocolError as exc:
+            # A structured-mode reply that stayed unparseable after run_stage's own
+            # MAX_FINAL_CORRECTIONS wire-retry budget (_start_session_with_retry /
+            # _send_message_with_wire_retry, jsa/pipeline/stages.py) re-raises
+            # ProtocolError rather than swallowing it — see CLAUDE.md → "Structured
+            # output (API backends)" → "BF-19 interaction". That budget is scoped to
+            # the SAME session/backend; once it's spent, this is exactly the kind of
+            # stage failure BF-19 exists for (the active backend/model isn't
+            # producing usable output), so it must engage the same fallback chain as
+            # AgentTimeout/AgentBackendUnavailable rather than falling into the
+            # generic `except Exception` below (which hard-fails the job with no
+            # fallback attempt at all — the exact bug this clause fixes).
+            logger.warning("_run_one: job %s structured reply unparseable: %s", job_id, exc)
+            await self._handle_protocol_error(job_id, exc)
+
         except Exception as exc:
             logger.exception("_run_one: job %s failed: %s", job_id, exc)
             try:
@@ -589,6 +605,26 @@ class Orchestrator:
             exhausted_message=(
                 "Backend unavailable on every configured backend — check model/API "
                 "key configuration, or try again later if this was transient overload"
+            ),
+            use_ladder=True,
+        )
+
+    async def _handle_protocol_error(self, job_id: str, exc: ProtocolError) -> None:
+        """Handle a structured-mode ProtocolError that survived run_stage's own
+        wire-retry budget: hop to the next model, switch to next backend, or mark
+        failed (BF-19 + Phase 4 model-first fallback ladder).
+
+        `use_ladder=True`, same rationale as AgentTimeout/AgentBackendUnavailable —
+        a different model on the same account is a different upstream constraint
+        for "this specific model isn't emitting valid JSON" and is worth trying
+        before burning a whole backend hop.
+        """
+        await self._advance_backend_or_fail(
+            job_id,
+            switch_reason="Structured reply unparseable",
+            exhausted_message=(
+                "Structured reply unparseable on every configured backend — the "
+                "model isn't returning valid JSON; try a different model or backend"
             ),
             use_ladder=True,
         )
