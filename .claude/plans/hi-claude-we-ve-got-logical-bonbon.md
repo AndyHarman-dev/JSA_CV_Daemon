@@ -333,8 +333,16 @@ implementation:
   and, in sentinel mode, gets no schema appended — below every provider minimum
   (Mistral 64, OpenRouter/Gemini 1024–4096, Anthropic-on-Haiku 4096). It will not cache.
   Structured-mode fit is larger and may.
-- **`opencode-zen`.** Deliberately out of scope; assumed to cache automatically upstream,
-  unverified.
+- **`opencode-zen`.** Deliberately out of scope — not on either scope answer's backend
+  list, and architecturally separate (its own independent payload-builder copy, not
+  `OpenAICompatBackend`). Verified 2026-09-02 via WebFetch against opencode.ai/docs/zen/:
+  the pricing table has "Cached Read"/"Cached Write" columns per model (so cached-token
+  billing exists at the underlying-provider level), but the docs give no request/response
+  field for it — no `cache_control`, no header, no implementation guidance. This is
+  **not** "confirmed to cache automatically" — it is the same undocumented-mechanism
+  situation Phase 5 already handled for OpenCode-GO (speculative `cache_control` +
+  `_CacheRejected` degrade). Reopening this as a future phase would follow that exact
+  pattern, not an assumption of automatic caching.
 - **CLI backends** (`claude-cli`, `google-cli`). Not applicable — the CLI manages its own
   caching.
 
@@ -615,6 +623,21 @@ it since it never overrides `_system_content`). Re-ran the full backend suite:
 1692 passed, 2 skipped, 21 deselected. Verified: Phases 3-5 complete and clean.
 Phase 6 (Anthropic, cuttable per the plan's scope note) was not attempted this
 session — remains open if the user wants it.
+
+**2026-09-02**: User asked why `opencode-zen` is out of scope and whether it's
+actually verified not to support/auto-cache. Read back the plan's own
+"Known non-caching cases" line ("assumed to cache automatically upstream,
+unverified") and found it overstated — CLAUDE.md's parallel line ("undocumented
+caching API") was already the accurate one. Ran a WebFetch against
+opencode.ai/docs/zen/: confirmed the docs list "Cached Read"/"Cached Write"
+pricing columns per model (cached-token billing exists) but document no
+request/response field for it (no `cache_control`, no header, no
+implementation guidance) — same undocumented-mechanism shape Phase 5 already
+handled for OpenCode-GO. Corrected the plan's "Known non-caching cases" entry
+to state this precisely instead of asserting automatic upstream caching.
+No code changed; scope exclusion stands (not on either scope answer's backend
+list, architecturally separate payload-builder). Verified: documentation-level
+only, matches Phase 2/Mistral's verification rigor.
 
 ## Decisions Log
 
