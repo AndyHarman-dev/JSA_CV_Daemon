@@ -799,24 +799,28 @@ message-tail cache breakpoint — the tail is separated by human answer latency
 **Kill switch.** `Settings.prompt_caching: bool = True` (`JSA_PROMPT_CACHING`),
 `--prompt-caching`/`--no-prompt-caching` (tri-state, only overrides when explicitly
 passed). Forwarded via `make_backend_factory` to the `mistral`, `openrouter`,
-`gemini`, and `opencode-go` branches only — never to `opencode-zen`, `claude-cli`, or
-`google-cli`, which don't accept the kwarg (same no-unused-parameter rule as
-`structured_schema`). With the switch off, every touched backend's payload must be
-byte-identical to its pre-prompt-caching shape — this is a permanent parity
+`gemini`, `opencode-go`, and `anthropic` branches — never to `opencode-zen`,
+`claude-cli`, or `google-cli`, which don't accept the kwarg (same no-unused-parameter
+rule as `structured_schema`). With the switch off, every touched backend's payload
+must be byte-identical to its pre-prompt-caching shape — this is a permanent parity
 invariant, not a one-time migration check (see `tests/backend/
 test_openai_compat.py::TestPromptCacheKey::
-test_prompt_caching_false_is_byte_identical_to_pre_phase2_payload`).
+test_prompt_caching_false_is_byte_identical_to_pre_phase2_payload` and
+`test_anthropic_api.py::TestSendMessageSystemPrompt::
+test_prompt_caching_false_sends_bare_string`).
 
-**Per-backend mechanism** (`mistral`, `gemini`, `openrouter`, and `opencode-go` are
-all wired — Phase 6, `anthropic`, is the only phase left, and is cuttable):
+**Per-backend mechanism** (all six phases wired — `mistral`, `gemini`, `openrouter`,
+`opencode-go`, and `anthropic`; `opencode-zen` is permanently out of scope, see
+"Known non-caching cases" below):
 
 | Backend | Mechanism | Cached-token field |
 |---|---|---|
 | `mistral` | top-level `prompt_cache_key` (`jsa/agents/mistral.py::_extra_payload`), a `sha1(system_prompt)[:16]` hash — a hash of the byte-identical prefix, not `job.id`, so it groups every job that shares that prefix. Confirmed live against Mistral's own `/v1/chat/completions` API reference (not just the separate Conversations API) that `prompt_cache_key` is a real top-level parameter on this endpoint — an unrecognized-field 4xx was considered and ruled out, so this backend has no degrade path. | `usage.prompt_tokens_details.cached_tokens` |
-| `gemini` | **observability only, no request change.** Gemini's implicit caching is on by default for 2.5+ models given a stable prefix (`systemInstruction` first, growing `contents` after) — the existing request shape already satisfies it. `GeminiBackend._call_api_once` (`jsa/agents/gemini_api.py`) logs `body["usageMetadata"]["cachedContentTokenCount"]` at `logger.info` when present, `isinstance`-guarded the same way as Mistral's `usage` read. Deliberately does **not** add explicit `cachedContents` — that requires a separate create/manage lifecycle for a prefix implicit caching already covers. `Settings.prompt_caching=False` is a true no-op here — there is no field to omit. This makes `gemini` the one **permanent** no-op-on-the-wire backend among the four — see `tests/backend/test_prompt_caching_phase1.py::TestKillSwitchIsCurrentlyANoOpOnTheWire`. | `usageMetadata.cachedContentTokenCount` |
+| `gemini` | **observability only, no request change.** Gemini's implicit caching is on by default for 2.5+ models given a stable prefix (`systemInstruction` first, growing `contents` after) — the existing request shape already satisfies it. `GeminiBackend._call_api_once` (`jsa/agents/gemini_api.py`) logs `body["usageMetadata"]["cachedContentTokenCount"]` at `logger.info` when present, `isinstance`-guarded the same way as Mistral's `usage` read. Deliberately does **not** add explicit `cachedContents` — that requires a separate create/manage lifecycle for a prefix implicit caching already covers. `Settings.prompt_caching=False` is a true no-op here — there is no field to omit. This makes `gemini` the one **permanent** no-op-on-the-wire backend among the six — see `tests/backend/test_prompt_caching_phase1.py::TestKillSwitchIsCurrentlyANoOpOnTheWire`. | `usageMetadata.cachedContentTokenCount` |
 | `openrouter` | explicit `cache_control: {"type": "ephemeral"}` on the system text block (`OpenRouterBackend._system_content`, `jsa/agents/openrouter.py`) — required for OpenRouter's Anthropic/Qwen/Gemini upstreams to cache at all; harmless for upstreams that cache automatically. **Has a degrade-on-4xx path** — see below. | `usage.prompt_tokens_details.cached_tokens` |
 | `opencode-go` `/chat` | Same `cache_control` breakpoint as OpenRouter, via the identical `_system_content` override (`OpenCodeGoBackend._system_content`, `jsa/agents/opencode_go.py`) — inherits the shared base's `_CacheRejected` degrade for free, no protocol-specific code needed. **Speculative**: this gateway documents no cache API (same caveat as its forced-tool-use gap, see the module docstring). | `usage.prompt_tokens_details.cached_tokens` |
 | `opencode-go` `/messages` | Same breakpoint shape, hand-built (this protocol does not go through the shared `_call_api_once`/`_system_content` machinery at all — see the module docstring's dual-protocol split): `_call_messages_api_once` sends `"system": [{"type": "text", "text": ..., "cache_control": {"type": "ephemeral"}}]` when `self._prompt_caching`, and `_call_messages_api` carries its own copy of the catch-`_CacheRejected`-and-retry-clean wrapper (imported from `_openai_compat.py`, reused rather than duplicated — only the wrapping code around it is protocol-specific). Also speculative, same caveat. | `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens` |
+| `anthropic` | Documented, first-class `cache_control: {"type": "ephemeral"}` (default 5-minute TTL — **not** `ttl: "1h"`, see below) on a single system text block (`AnthropicAPIBackend._call_api`, `jsa/agents/anthropic_api.py`), sent unconditionally (no `require_parameters`-style routing risk — see "No degrade path" below). Render order is `tools → system → messages`, so this one breakpoint also covers the forced-tool schema in structured mode (see "Anthropic: forced tool-use" above) — no separate breakpoint on the tool definition is needed, and structured mode's `tool_choice`/tool list must stay byte-identical turn-to-turn within a session for that cache to hold (it already does — the schema is fixed per stage for a session's whole life). | `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens` |
 
 **OpenRouter's degrade-on-4xx (Phase 4).** Sending `cache_control` is the one place
 in this plan where the field itself could make `provider.require_parameters: true`
@@ -874,6 +878,34 @@ degrade path is mandatory here, not optional:
   `prompt_caching=False` case exists for both wire shapes in
   `tests/backend/test_opencode_go.py`, pinning the pre-Phase-5 bare-string shape.
 
+**Anthropic: no degrade path needed (Phase 6).** Unlike OpenRouter/OpenCode-GO,
+`cache_control` on the Claude API is a first-class, documented field, not a routing
+hint that a gateway's `require_parameters`-style guard could reject — so there is no
+`_CacheRejected`-equivalent here, no retry-on-4xx, and `self._prompt_caching` never
+flips at runtime for this backend. `AnthropicAPIBackend.__init__` gains `prompt_caching:
+bool = True`; when it's on, `_call_api` sends `system` as
+`[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]`
+instead of the bare string, for both sentinel and structured mode identically. The
+repo's default model is `claude-haiku-4-5`, whose **minimum cacheable prefix is 4096
+tokens** (verified against Anthropic's own prompt-caching reference: 512 on
+Opus 5-tier, 1024 on Sonnet 5/Opus 4.8-tier, 4096 on Opus 4.6/Haiku 4.5 — the minimum
+is **not monotonic** across model generations, so switching the configured model can
+silently change whether a given prompt caches at all) — a `cv_adjust`/`cover_letter`
+system prompt clears that easily; sentinel-mode `fit_assessment`'s prompt does not
+(see "Known non-caching cases" below).
+
+**Default 5-minute TTL, not `ttl: "1h"` — deliberately.** The 1-hour TTL's 2× write
+premium only pays off when the start-to-start gap between requests sharing the prefix
+is 5–60 minutes; the value here comes from job-to-job reuse under the orchestrator's
+continuous dispatch loop, which is well under 5 minutes apart in normal operation, so
+the plain 5-minute TTL is strictly cheaper. Do not add `ttl: "1h"` as a "safer" default
+without re-deriving this from the actual dispatch cadence.
+
+**No message-tail breakpoint, no top-level auto-`cache_control`** — same locked
+decision as every other backend in this plan (see "Locked decisions" above): the
+conversation tail is separated by human answer latency and would collide with
+`adapt_history`/`_parse_with_nudge`'s history rewriting.
+
 **Cached-token observability lives in `OpenAICompatBackend._call_api_once`**
 (`jsa/agents/_openai_compat.py`) for the `/chat/completions` shape, and in
 `OpenCodeGoBackend._call_messages_api_once` (`jsa/agents/opencode_go.py`) for the
@@ -881,7 +913,12 @@ degrade path is mandatory here, not optional:
 `.get` chains — an API returning `"usage": null` or a wrong-typed field must not
 raise past a request that otherwise succeeded). Because the `/chat/completions`
 logging lives in the *shared* base, `openrouter` and `opencode-go`'s `/chat`
-protocol inherit it automatically — this is not extra code per backend.
+protocol inherit it automatically — this is not extra code per backend. Anthropic's
+equivalent is the module-level `_log_cache_usage(response)` helper in
+`jsa/agents/anthropic_api.py`, called once after every `_call_api` response —
+`isinstance`-guarded the same way (`response.usage` is a real SDK object here, not a
+dict, so the guard is on the attribute *value* being an `int`, not on the container
+being a `dict`).
 
 **`_extra_payload` takes `system_prompt`.** Any override (currently only
 `MistralBackend` and `OpenRouterBackend`) receives the assembled system prompt as an

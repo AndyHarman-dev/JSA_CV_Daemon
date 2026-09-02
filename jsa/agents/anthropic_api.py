@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,6 +12,8 @@ from typing import Any
 from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
 from jsa.agents.protocol import ProtocolError, parse_reply
 from jsa.schema.turn_models import parse_structured_reply_for_schema
+
+logger = logging.getLogger(__name__)
 
 # The single tool every structured-mode request offers. Its name is arbitrary — the
 # model never gets to choose it as a "real" tool (tool_choice forces it) — it exists
@@ -105,9 +108,15 @@ class AnthropicAPIBackend(AgentBackend):
     name = "anthropic"
     supports_structured_output = True
 
-    def __init__(self, model: str = "claude-haiku-4-5", timeout: float = 180.0) -> None:
+    def __init__(
+        self,
+        model: str = "claude-haiku-4-5",
+        timeout: float = 180.0,
+        prompt_caching: bool = True,
+    ) -> None:
         self._model = model
         self._timeout = timeout
+        self._prompt_caching = prompt_caching
 
     async def start_session(
         self,
@@ -194,10 +203,13 @@ class AnthropicAPIBackend(AgentBackend):
     ) -> str:
         """Call the Anthropic messages API and return the raw reply text.
 
-        Sentinel mode (``structured_schema is None``) is byte-for-byte the
-        pre-structured behavior: no tools kwargs, first content block's text.
-        Structured mode adds the forced-tool kwargs and extracts the canonical
-        JSON from the tool_use block (see the two adapter functions above).
+        Sentinel mode (``structured_schema is None``) is otherwise the
+        pre-structured behavior: no tools kwargs, first content block's text
+        (``system`` becomes a cache-annotated block array when
+        ``self._prompt_caching`` is on — see below — but that's a shape change,
+        not a behavior change). Structured mode adds the forced-tool kwargs and
+        extracts the canonical JSON from the tool_use block (see the two
+        adapter functions above).
 
         The client is created per-call and explicitly closed in a finally block
         so the httpx connection pool is released on both normal exit and
@@ -211,10 +223,27 @@ class AnthropicAPIBackend(AgentBackend):
         """
         import anthropic
 
+        system: str | list[dict[str, Any]] = system_prompt
+        if self._prompt_caching:
+            # Default 5-minute TTL (no `ttl` key) — see CLAUDE.md "Prompt caching"
+            # -> Phase 6: job-to-job reuse under continuous dispatch pays off well
+            # inside a 5-minute start-to-start gap, so the 1-hour TTL's 2x write
+            # premium buys nothing here. Tools render before system (CLAUDE.md's
+            # documented render order), so this one breakpoint covers the forced-
+            # tool schema too when structured_schema is set — no separate
+            # cache_control on the tool definition is needed.
+            system = [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+
         create_kwargs: dict[str, Any] = {
             "model": self._model,
             "max_tokens": 8192,
-            "system": system_prompt,
+            "system": system,
             "messages": messages,
         }
         if structured_schema is not None:
@@ -237,6 +266,27 @@ class AnthropicAPIBackend(AgentBackend):
         finally:
             await client.close()
 
+        _log_cache_usage(response)
+
         if structured_schema is None:
             return response.content[0].text
         return _extract_structured_text(response)
+
+
+def _log_cache_usage(response: Any) -> None:
+    """Log cache_read/cache_creation token counts, isinstance-guarded.
+
+    ``response.usage`` is normally a real SDK ``Usage`` object, but a test
+    double or an SDK change could hand back something else entirely — guard
+    with isinstance, not just attribute presence, so a wrong-typed usage
+    object never raises past an otherwise-successful reply.
+    """
+    usage = getattr(response, "usage", None)
+    cache_read = getattr(usage, "cache_read_input_tokens", None)
+    cache_creation = getattr(usage, "cache_creation_input_tokens", None)
+    if isinstance(cache_read, int) or isinstance(cache_creation, int):
+        logger.info(
+            "anthropic API cache_read_input_tokens=%s cache_creation_input_tokens=%s",
+            cache_read,
+            cache_creation,
+        )

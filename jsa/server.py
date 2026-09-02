@@ -113,7 +113,9 @@ def make_backend_factory(
         if name == "anthropic":
             resolved = _model_for("anthropic", settings.model, model)
             timeout = settings.anthropic_timeout if timeout_override is None else timeout_override
-            return backend_for("anthropic", model=resolved, timeout=timeout)
+            return backend_for(
+                "anthropic", model=resolved, timeout=timeout, prompt_caching=settings.prompt_caching
+            )
 
         if name == "opencode-zen":
             # opencode-zen has its own model catalog (nemotron/gpt/gemini/claude

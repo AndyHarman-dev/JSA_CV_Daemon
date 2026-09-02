@@ -306,6 +306,7 @@ class TestSendMessageAppendsTurns:
 
 class TestSendMessageSystemPrompt:
     async def test_api_called_with_system_prompt_kwarg(self):
+        """Default prompt_caching=True: system is a cache-annotated block array."""
         handle = AnthropicSessionHandle(
             id="test-id",
             external_id=None,
@@ -315,6 +316,28 @@ class TestSendMessageSystemPrompt:
         mock_client = _make_mock_client(FINAL_RAW)
         with patch("anthropic.AsyncAnthropic", return_value=mock_client):
             backend = AnthropicAPIBackend()
+            await backend.send_message(handle, "user text")
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["system"] == [
+            {
+                "type": "text",
+                "text": "my system prompt",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    async def test_prompt_caching_false_sends_bare_string(self):
+        """prompt_caching=False must be byte-identical to the pre-Phase-6 shape."""
+        handle = AnthropicSessionHandle(
+            id="test-id",
+            external_id=None,
+            system_prompt="my system prompt",
+            messages=[],
+        )
+        mock_client = _make_mock_client(FINAL_RAW)
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend(prompt_caching=False)
             await backend.send_message(handle, "user text")
 
         call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -532,6 +555,12 @@ class TestStructuredForcedToolRequest:
         assert "tool_choice" not in call_kwargs
 
     async def test_model_max_tokens_system_unchanged_in_structured_mode(self):
+        """Structured mode doesn't affect model/max_tokens/caching independently.
+
+        Render order (CLAUDE.md "Prompt caching") is tools -> system -> messages,
+        so the one cache_control breakpoint on the system block covers the forced
+        tool schema too — no separate breakpoint on the tool definition is needed.
+        """
         mock_client = _make_mock_block_client(
             [_tool_block({"kind": "final", "question": None, "payload": _cv_payload()})]
         )
@@ -543,6 +572,24 @@ class TestStructuredForcedToolRequest:
         call_kwargs = mock_client.messages.create.call_args.kwargs
         assert call_kwargs["model"] == "claude-opus-4-7"
         assert call_kwargs["max_tokens"] == 8192
+        assert call_kwargs["system"] == [
+            {
+                "type": "text",
+                "text": "my system",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    async def test_prompt_caching_false_bare_string_in_structured_mode(self):
+        mock_client = _make_mock_block_client(
+            [_tool_block({"kind": "final", "question": None, "payload": _cv_payload()})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend(prompt_caching=False)
+            await backend.start_session(
+                "my system", "msg", structured_schema=CV_SCHEMA
+            )
+        call_kwargs = mock_client.messages.create.call_args.kwargs
         assert call_kwargs["system"] == "my system"
 
 
@@ -915,3 +962,60 @@ class TestSupportsStructuredOutput:
     def test_registry_instance_flag_is_true(self):
         from jsa.agents.registry import backend_for
         assert backend_for("anthropic").supports_structured_output is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — prompt caching: ctor default, factory forwarding, cached-token
+# observability. Payload-shape and kill-switch-parity coverage for
+# prompt_caching=True/False already lives in TestSendMessageSystemPrompt and
+# TestStructuredForcedToolRequest above (mirroring where CLAUDE.md's Phase 6
+# section says to look).
+# ---------------------------------------------------------------------------
+
+class TestPromptCachingCtorDefault:
+    def test_prompt_caching_defaults_true(self):
+        assert AnthropicAPIBackend()._prompt_caching is True
+
+    def test_prompt_caching_overridable(self):
+        assert AnthropicAPIBackend(prompt_caching=False)._prompt_caching is False
+
+
+class TestPromptCachingFactoryForwarding:
+    def test_backend_for_forwards_prompt_caching_true(self):
+        from jsa.agents.registry import backend_for
+        backend = backend_for("anthropic", prompt_caching=True)
+        assert backend._prompt_caching is True
+
+    def test_backend_for_forwards_prompt_caching_false(self):
+        from jsa.agents.registry import backend_for
+        backend = backend_for("anthropic", prompt_caching=False)
+        assert backend._prompt_caching is False
+
+
+class TestCachedTokenObservability:
+    async def test_cache_usage_logged_when_present(self, caplog):
+        import logging as _logging
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=FINAL_RAW)]
+        mock_response.usage.cache_read_input_tokens = 1234
+        mock_response.usage.cache_creation_input_tokens = 56
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        mock_client.close = AsyncMock()
+
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            with caplog.at_level(_logging.INFO, logger="jsa.agents.anthropic_api"):
+                backend = AnthropicAPIBackend()
+                await backend.start_session("sys", "hi")
+
+        assert "cache_read_input_tokens=1234" in caplog.text
+        assert "cache_creation_input_tokens=56" in caplog.text
+
+    async def test_missing_usage_does_not_raise(self):
+        """A response whose usage/token fields aren't real ints must not crash."""
+        mock_client = _make_mock_client(FINAL_RAW)  # plain MagicMock().usage
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"

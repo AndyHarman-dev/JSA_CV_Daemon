@@ -639,6 +639,60 @@ No code changed; scope exclusion stands (not on either scope answer's backend
 list, architecturally separate payload-builder). Verified: documentation-level
 only, matches Phase 2/Mistral's verification rigor.
 
+**2026-09-02**: Phase 6 — Anthropic `cache_control` (the cuttable phase, now
+implemented). No `ANTHROPIC_API_KEY` available in this session — user asked to
+implement strictly by the book from Anthropic's own docs and defer live
+verification to later. Before writing code, loaded the `claude-api` skill and
+read `shared/prompt-caching.md` in full for the authoritative cache_control
+shape, per-model minimum cacheable prefix table, TTL economics, and the
+invalidation hierarchy (specifically: does forced `tool_choice` interact with
+the system/tools cache — confirmed `tool_choice` changes invalidate tools+system
+cache, but this backend's forced tool_choice/schema is fixed per session for a
+stage's whole life, so no invalidation risk in normal operation).
+
+`AnthropicAPIBackend.__init__` gained `prompt_caching: bool = True` ->
+`self._prompt_caching`. `_call_api` (`jsa/agents/anthropic_api.py`) sends
+`system` as `[{"type": "text", "text": system_prompt, "cache_control":
+{"type": "ephemeral"}}]` (default 5-minute TTL, no `ttl` key — per the plan's
+original rationale: job-to-job reuse under continuous dispatch is well under
+the 5-minute break-even gap, so the 1-hour TTL's 2x write premium buys
+nothing) when caching is on, else the original bare string — verified
+byte-identical in both sentinel and structured mode. No degrade path added:
+confirmed via `shared/prompt-caching.md` that `cache_control` is a
+first-class documented field, not a routing hint a gateway could reject, so
+this backend has no `_CacheRejected`-equivalent (matches the plan's original
+"no degrade path needed" call, now doc-verified rather than assumed). Added
+`_log_cache_usage(response)`, isinstance-guarded on `cache_read_input_tokens`/
+`cache_creation_input_tokens` being real ints (response.usage is an SDK
+object, not a dict, so the guard is on the attribute value's type, not a
+`isinstance(x, dict)` container check like the other backends). Forwarded
+`prompt_caching=settings.prompt_caching` in `server.py`'s `anthropic` branch
+of `make_backend_factory`.
+
+Updated `tests/backend/test_anthropic_api.py`: the two pinned-string
+assertions the plan called out (system-prompt-kwarg test, structured-mode
+system-unchanged test) now assert the block-array shape by default, each
+with a sibling `prompt_caching=False` case pinning the old bare-string shape;
+added ctor-default, factory-forwarding, and cached-token-observability test
+classes (11 new tests total). Updated
+`test_prompt_caching_phase1.py::TestFactoryForwardsSettingsFlag`: removed
+`test_anthropic_untouched_by_the_flag` (no longer true) and added
+`"anthropic"` to the parametrized forwarded-true/forwarded-false cases
+alongside the other four backends. Updated CLAUDE.md's prompt-caching
+section: mechanism table gained the `anthropic` row, a new "Anthropic: no
+degrade path needed (Phase 6)" subsection mirroring the OpenRouter/OpenCode-GO
+ones, and the cached-token-observability paragraph now also names
+`_log_cache_usage`.
+
+Full suite: `pytest -q -m "not integration"` -> 1701 passed, 2 skipped, 21
+deselected (up from 1692 pre-Phase-6; +9 net after the 1 removed +10 new
+anthropic-specific tests plus the phase1 forwarding-parametrize expansion).
+Verified: unit/payload-shape/doc-reference level only, same caveat as every
+other phase — **no live cache hit has been confirmed** (no `ANTHROPIC_API_KEY`
+in this session; user will test live and report back). All 6 phases of the
+plan are now implemented; Verification items 6/7 (live two-request cache-hit
+checks) remain open across every backend in this plan, not just this one.
+
 ## Decisions Log
 
 *(reserved for the user)*

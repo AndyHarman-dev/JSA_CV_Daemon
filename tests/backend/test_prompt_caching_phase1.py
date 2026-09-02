@@ -91,17 +91,22 @@ class TestEveryConcreteBackendAcceptsTheKwarg:
 
 
 class TestFactoryForwardsSettingsFlag:
-    """make_backend_factory must forward settings.prompt_caching to exactly the four
-    new backends -- never to opencode-zen, claude-cli, google-cli, or anthropic
-    (Phase 6), none of which accept the kwarg today."""
+    """make_backend_factory must forward settings.prompt_caching to exactly the five
+    backends that accept the kwarg (mistral/openrouter/gemini/opencode-go from
+    Phases 2-5, anthropic from Phase 6) -- never to opencode-zen, claude-cli, or
+    google-cli, none of which accept it."""
 
-    @pytest.mark.parametrize("name", ["mistral", "openrouter", "gemini", "opencode-go"])
+    @pytest.mark.parametrize(
+        "name", ["mistral", "openrouter", "gemini", "opencode-go", "anthropic"]
+    )
     def test_forwarded_true(self, name):
         settings = Settings(prompt_caching=True)
         backend = make_backend_factory(settings)(name)
         assert backend._prompt_caching is True
 
-    @pytest.mark.parametrize("name", ["mistral", "openrouter", "gemini", "opencode-go"])
+    @pytest.mark.parametrize(
+        "name", ["mistral", "openrouter", "gemini", "opencode-go", "anthropic"]
+    )
     def test_forwarded_false(self, name):
         settings = Settings(prompt_caching=False)
         backend = make_backend_factory(settings)(name)
@@ -123,12 +128,6 @@ class TestFactoryForwardsSettingsFlag:
     def test_google_cli_untouched_by_the_flag(self):
         settings = Settings(prompt_caching=False)
         backend = make_backend_factory(settings)("google-cli")
-        assert not hasattr(backend, "_prompt_caching")
-
-    def test_anthropic_untouched_by_the_flag(self):
-        """Phase 6, not yet wired -- AnthropicAPIBackend doesn't accept the kwarg."""
-        settings = Settings(prompt_caching=False)
-        backend = make_backend_factory(settings)("anthropic")
         assert not hasattr(backend, "_prompt_caching")
 
 
