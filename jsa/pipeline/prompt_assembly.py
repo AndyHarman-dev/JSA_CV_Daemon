@@ -20,9 +20,30 @@ files"). It owns two independent concerns:
    payload string value" guard. This section is assembled here, at runtime, and is
    never written into the prompt files themselves.
 
-Only used to steer NEW sessions (``start_session``) — never call this for a
-``restore_session`` path; a resumed session already committed to a language and a
-mode, and re-injecting a changed directive would contradict the replayed history.
+For sentinel-mode sessions (``structured_model=None``), only ever call this for NEW
+sessions (``start_session``) — never for a ``restore_session`` path; a resumed
+sentinel-mode session already committed to a language, and re-injecting a changed
+directive would contradict the replayed history.
+
+For structured-mode sessions (``structured_model`` given), pass ``for_resume=True`` on
+every ``restore_session`` call too. Every structured-capable backend
+(``anthropic``, ``opencode-zen``, ``mistral``, ``openrouter``, the ``/chat`` half of
+``opencode-go``, ``gemini``) is stateless at the wire level — there is no server-side
+session, and each of these backends' ``restore_session``/``send_message`` resends the
+system prompt on *every* HTTP call (see e.g. ``jsa/agents/_openai_compat.py``'s
+``_call_api_once``: ``"messages": [{"role": "system", "content": system_prompt}, ...]``).
+Passing the bare ``prompt_text`` on resume — as every call site did before this was
+discovered — silently drops the structured-output contract (the prose explaining
+``kind``/``question``/``payload`` and its precedence over the prompt file's sentinel
+section) from every turn after the first. The model still produces schema-valid JSON
+(the provider enforces the *shape*), but with no explanation of when to use
+``kind: "final"`` it never learns to, so it can loop forever re-asking its opening
+question — confirmed live (a stuck ``cv_adjust`` job on ``opencode-go``/``longcat-2.0``
+re-asked "shall I proceed with this strategy" indefinitely after repeated approval).
+``for_resume=True`` re-appends the (unchanged, idempotent) structured contract but
+skips the language directive — resending identical contract text does not "contradict
+history" the way a changed language directive would, so the language-directive
+exclusion above is untouched by this.
 """
 
 from __future__ import annotations
@@ -124,24 +145,36 @@ def assemble_system_prompt(
     language: str,
     structured_model: dict[str, Any] | None = None,
     fit_verdict: bool = False,
+    for_resume: bool = False,
 ) -> str:
-    """Compose a NEW session's system prompt from the file-authored ``prompt_text``.
+    """Compose a session's system prompt from the file-authored ``prompt_text``.
 
-    ``structured_model=None`` (the sentinel-mode / CLI-backend path, and every call
-    site today) is byte-identical to the pre-existing
-    ``stages.py::_with_language_directive`` — see the module docstring's parity note.
+    ``structured_model=None`` (the sentinel-mode / CLI-backend path) is byte-identical
+    to the pre-existing ``stages.py::_with_language_directive`` — see the module
+    docstring's parity note. In this mode ``for_resume=True`` returns ``prompt_text``
+    unchanged (no language directive) — CLI backends have a real session, so a resumed
+    call needs nothing appended; this is what every ``restore_session`` call site got
+    before ``for_resume`` existed.
 
     ``structured_model``, when given, is the JSON schema (``jsa.schema.turn_models
     .json_schema_for(stage)``) the destination backend will enforce; passing it appends
-    the structured-output contract section and switches the language directive to its
-    structured-mode variant. ``fit_verdict=True`` selects the fit-assessment shape in
-    both the contract and the language directive.
+    the structured-output contract section. On a fresh session (``for_resume=False``)
+    it also appends the structured-mode language directive when ``language != "en"``.
+    On a resumed session (``for_resume=True``) the language directive is always
+    skipped — only the contract is re-appended — see the module docstring for why
+    resending the contract is required for these (wire-stateless) backends while
+    resending the language directive is deliberately still excluded.
+    ``fit_verdict=True`` selects the fit-assessment shape in both the contract and the
+    language directive.
     """
     if structured_model is not None:
         prompt = prompt_text + _structured_contract(structured_model, fit_verdict=fit_verdict)
-        if language != "en":
+        if not for_resume and language != "en":
             prompt += _structured_language_directive(language, fit_verdict=fit_verdict)
         return prompt
+
+    if for_resume:
+        return prompt_text
 
     if language == "en":
         return prompt_text

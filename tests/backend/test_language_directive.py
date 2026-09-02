@@ -218,3 +218,69 @@ class TestResumedSessionNeverGetsDirective:
         assert backend.start_session_prompt is None
         assert backend.restore_session_prompt is not None
         assert "## Output language" not in backend.restore_session_prompt
+
+
+class _CapturingStructuredBackend(FakeAgentBackend):
+    """Like _CapturingBackend, but simulates a structured-capable, wire-stateless
+    backend (e.g. opencode-go/chat, anthropic) — records the system_prompt passed to
+    start_session AND restore_session, plus the structured_schema kwarg."""
+
+    def __init__(self, replies):
+        super().__init__(replies, supports_structured_output=True)
+        self.start_session_prompt: str | None = None
+        self.restore_session_prompt: str | None = None
+
+    async def start_session(self, system_prompt, initial_user_msg, structured_schema=None):
+        self.start_session_prompt = system_prompt
+        handle, reply = await super().start_session(system_prompt, initial_user_msg, structured_schema)
+        return handle, reply
+
+    async def restore_session(self, system_prompt, history, external_id, structured_schema=None):
+        self.restore_session_prompt = system_prompt
+        return await super().restore_session(system_prompt, history, external_id, structured_schema)
+
+
+def _structured_final(payload: dict) -> AgentReply:
+    raw = json.dumps({"kind": "final", "question": None, "payload": payload})
+    return AgentReply(raw=raw, content=json.dumps(payload), kind="final")
+
+
+class TestStructuredResumeStillGetsContract:
+    """Regression test for the stuck-job bug: a resumed session on a structured-
+    capable, wire-stateless backend must still carry the structured-output contract
+    on every restore_session call — without it, the model silently loses the
+    kind/question/payload explanation and can loop forever re-asking its opening
+    question (confirmed live: a cv_adjust job on opencode-go/longcat-2.0 re-asked
+    "shall I proceed with this strategy" indefinitely after repeated user approval)."""
+
+    async def test_awaiting_input_resume_carries_structured_contract(self, session, tmp_path):
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        from datetime import datetime
+
+        from jsa.db.models import FollowUp, Message
+
+        session.add(Message(
+            job_id=job.id, stage=Stage.cv_adjust, role="user", content="hi",
+        ))
+        session.add(Message(
+            job_id=job.id, stage=Stage.cv_adjust, role="assistant",
+            content=json.dumps({"kind": "question", "question": "Shall I proceed?", "payload": None}),
+        ))
+        session.add(FollowUp(
+            job_id=job.id, stage=Stage.cv_adjust, question="Shall I proceed?", answer="Proceed",
+            answered_at=datetime.utcnow(),
+        ))
+        await session.commit()
+
+        backend = _CapturingStructuredBackend([_structured_final(_cv_json())])
+        await run_stage(job, backend, Stage.cv_adjust, session)
+
+        assert backend.start_session_prompt is None
+        assert backend.restore_session_prompt is not None
+        assert "## Structured output contract" in backend.restore_session_prompt
+        assert '"kind"' in backend.restore_session_prompt or "`kind`" in backend.restore_session_prompt
+        # Still never the language directive on resume (unchanged invariant).
+        assert "## Output language" not in backend.restore_session_prompt

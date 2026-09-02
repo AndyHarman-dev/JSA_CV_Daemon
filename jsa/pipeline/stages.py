@@ -685,6 +685,16 @@ async def run_stage(
     schema = _structured_schema_for(general_purpose_backend, stage)
     structured = schema is not None
 
+    # Every restore_session call below must use THIS, not the bare `system_prompt` —
+    # see assemble_system_prompt's docstring: structured-capable backends are
+    # wire-stateless and resend the system prompt on every call, so the structured
+    # contract must be re-appended on resume or the model silently loses the
+    # kind/question/payload explanation and can loop forever re-asking its opening
+    # question. Sentinel-mode (structured=False) resumes unchanged (real CLI session).
+    resume_system_prompt = assemble_system_prompt(
+        system_prompt, language=language_code, structured_model=schema, for_resume=True
+    )
+
     if stage in (Stage.revising_cv, Stage.revising_cl):
         original_stage = Stage.cv_adjust if stage == Stage.revising_cv else Stage.cover_letter
         revision_session_id = job.cv_session_id if stage == Stage.revising_cv else job.cl_session_id
@@ -735,7 +745,7 @@ async def run_stage(
             combined_history = adapt_history(combined_history, structured=structured)
             restore_kwargs = _schema_kwargs(schema)
             handle = await general_purpose_backend.restore_session(
-                system_prompt, combined_history, revision_session_id, **restore_kwargs
+                resume_system_prompt, combined_history, revision_session_id, **restore_kwargs
             )
             reply, accumulated_messages = await _send_message_with_wire_retry(
                 general_purpose_backend, handle, answer_text, schema, stage, job
@@ -748,7 +758,7 @@ async def run_stage(
             history = adapt_history(history, structured=structured)
             restore_kwargs = _schema_kwargs(schema)
             handle = await general_purpose_backend.restore_session(
-                system_prompt, history, revision_session_id, **restore_kwargs
+                resume_system_prompt, history, revision_session_id, **restore_kwargs
             )
             reply, accumulated_messages = await _send_message_with_wire_retry(
                 general_purpose_backend, handle, instruction, schema, stage, job
@@ -764,7 +774,7 @@ async def run_stage(
             history = adapt_history(history, structured=structured)
             restore_kwargs = _schema_kwargs(schema)
             handle = await general_purpose_backend.restore_session(
-                system_prompt, history, job.session_external_id, **restore_kwargs
+                resume_system_prompt, history, job.session_external_id, **restore_kwargs
             )
             # Only the new turns are new; prior messages already persisted.
             reply, accumulated_messages = await _send_message_with_wire_retry(
