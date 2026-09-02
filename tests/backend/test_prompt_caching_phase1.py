@@ -133,17 +133,18 @@ class TestFactoryForwardsSettingsFlag:
 
 
 class TestKillSwitchIsCurrentlyANoOpOnTheWire:
-    """Phase 1 wires the switch through but no backend request shape changes yet
-    (that's Phase 2+). The posted payload must be byte-identical regardless of the
-    flag's value -- this is what makes the eventual Phase 2 payload-shape test a
-    real behavior change rather than a pre-existing difference."""
+    """Phase 1 wired the switch through with no backend request-shape change yet.
+    Mistral stopped being a no-op in Phase 2 (prompt_cache_key) -- see
+    test_openai_compat.py::TestPromptCacheKey for its payload-shape and
+    kill-switch-parity coverage now. OpenRouter, Gemini, and OpenCode-GO remain
+    untouched (Phases 3-5) and stay covered here as still-no-op."""
 
-    async def test_mistral_payload_identical_regardless_of_flag(self):
+    async def test_openrouter_payload_identical_regardless_of_flag(self):
         payloads = {}
         for caching in (True, False):
             mock_client = _make_mock_client(_completion_body(FINAL_RAW))
             with patch("httpx.AsyncClient", return_value=mock_client):
-                backend = MistralBackend(prompt_caching=caching)
+                backend = OpenRouterBackend(prompt_caching=caching)
                 await backend.start_session("sys", "hi")
             payloads[caching] = mock_client.post.call_args.kwargs["json"]
         assert payloads[True] == payloads[False]

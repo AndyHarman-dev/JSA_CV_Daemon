@@ -438,6 +438,50 @@ Manually smoke-tested `--help` shows the new flag. Full suite: `pytest -q -m "no
 integration"` → 1669 passed, 2 skipped (dev_tunnel flake from the Phase 0 run did not
 reproduce). Verified: proceed to Phase 2.
 
+**2026-09-02**: Phase 2 — Mistral `prompt_cache_key`. Changed `_extra_payload`'s
+signature to `(self, system_prompt: str)` (one call site in `_openai_compat.py`,
+one override in `OpenRouterBackend` updated to accept-and-ignore the new arg — no
+other callers, confirmed by repo-wide grep before starting). Added
+`MistralBackend._extra_payload`: `{"prompt_cache_key": f"jsa-{sha1(system_prompt)[:16]}"}`
+when `self._prompt_caching`, else `{}`. Added cached-token observability
+(`usage.prompt_tokens_details.cached_tokens`, `isinstance`-guarded against a missing
+or wrong-typed `usage`/`prompt_tokens_details`, not just `.get` chains — an advisor
+catch) to `OpenAICompatBackend._call_api_once`, which `openrouter` and `opencode-go`'s
+`/chat` protocol inherit for free (harmless; does not count as their own caching
+phases being done). Added `TestPromptCacheKey` (6 tests) to
+`tests/backend/test_openai_compat.py`: key present by default, stable across two
+different jobs sharing a system prompt (the actual cross-job-reuse claim, not just
+same-input-twice), differs across different system prompts, `prompt_caching=False`
+payload asserted **byte-identical** (full dict equality, not just key-absence — an
+advisor-flagged strengthening of the original assertion) to the pre-Phase-2 shape,
+cached-tokens log line, and missing-`usage` doesn't raise. Updated
+`test_prompt_caching_phase1.py`'s `TestKillSwitchIsCurrentlyANoOpOnTheWire`: its
+Mistral test asserted `True == False` payloads, which stopped being true this phase
+by design — swapped to `openrouter` (still genuinely a no-op, Phase 4 not started)
+and pointed a docstring note at the new Mistral-specific test.
+
+An advisor pass flagged a real risk: Mistral's plan rationale ("wrong/unknown key
+just degrades to a cache miss") only holds if Mistral's API actually recognizes
+`prompt_cache_key` as a top-level `/v1/chat/completions` param — otherwise it's an
+unrecognized-field 4xx → `AgentBackendUnavailable` → mistral drops out of the BF-19
+chain on every request, the exact failure Phase 4 refused to accept for OpenRouter.
+Verified via `WebFetch` against Mistral's own API reference
+(`docs.mistral.ai/api/#tag/chat/operation/chat_completion_v1_chat_completions_post`):
+`prompt_cache_key` is documented as a top-level parameter on that exact endpoint (not
+only the separate Conversations API), so the risk does not apply — no degrade path
+added, as the phase originally called for. This is documentation-verified, not
+live-API-verified (no `MISTRAL_API_KEY` available in this session) — Verification
+item 6/7 (a real two-request cache-hit check against a live key) remains open.
+Also added a "Prompt caching" section to `CLAUDE.md` (advisor-flagged: the new
+docstrings referenced it before it existed) covering the cross-job invariant, the
+kill switch, the per-backend mechanism table (updated as each phase lands), cached-
+token observability, the `_extra_payload(system_prompt)` signature, and the known
+non-caching cases.
+Full suite: `pytest -q -m "not integration"` → 1675 passed, 2 skipped. Verified:
+unit/payload-shape/doc-reference level only — live Mistral acceptance of
+`prompt_cache_key` and an actual cache hit are unverified (item 6/7 in Verification).
+Proceed to Phase 3.
+
 ## Decisions Log
 
 *(reserved for the user)*

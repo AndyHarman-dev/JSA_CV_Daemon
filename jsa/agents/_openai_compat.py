@@ -177,9 +177,10 @@ class OpenAICompatBackend(AgentBackend):
         self._timeout = timeout
         self._prompt_caching = prompt_caching
 
-    def _extra_payload(self) -> dict[str, Any]:
+    def _extra_payload(self, system_prompt: str) -> dict[str, Any]:
         """Hook for subclass-specific top-level payload keys. Default: none.
-        OpenRouter overrides this to add its mandatory routing guard."""
+        OpenRouter overrides this to add its mandatory routing guard; Mistral
+        overrides it to add a ``prompt_cache_key`` derived from ``system_prompt``."""
         return {}
 
     def _api_key(self) -> str:
@@ -349,7 +350,7 @@ class OpenAICompatBackend(AgentBackend):
             "messages": [{"role": "system", "content": system_prompt}, *messages],
             "max_tokens": 8192,
         }
-        payload.update(self._extra_payload())
+        payload.update(self._extra_payload(system_prompt))
         if structured_schema is not None:
             payload["response_format"] = {
                 "type": "json_schema",
@@ -420,4 +421,9 @@ class OpenAICompatBackend(AgentBackend):
                 f"{self.name} API returned null message content (model may have "
                 "produced only reasoning tokens before hitting max_tokens)"
             )
+        usage = body.get("usage")
+        prompt_tokens_details = usage.get("prompt_tokens_details") if isinstance(usage, dict) else None
+        cached_tokens = prompt_tokens_details.get("cached_tokens") if isinstance(prompt_tokens_details, dict) else None
+        if cached_tokens is not None:
+            logger.info("%s API cached_tokens=%s", self.name, cached_tokens)
         return content

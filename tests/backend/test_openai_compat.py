@@ -342,6 +342,71 @@ class TestSemanticFailureDoesNotDowngrade:
         assert handle.structured_enabled is True  # no downgrade on a semantic gap
 
 
+class TestPromptCacheKey:
+    """Phase 2 of the prompt-caching plan: MistralBackend._extra_payload derives a
+    stable prompt_cache_key from the system prompt so requests sharing the same
+    byte-identical system prefix (see CLAUDE.md -> "Prompt caching") route to a
+    server that already holds it."""
+
+    async def test_prompt_cache_key_present_by_default(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            await backend.start_session("shared system prompt", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["prompt_cache_key"].startswith("jsa-")
+
+    async def test_prompt_cache_key_stable_across_jobs_sharing_a_system_prompt(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            await MistralBackend().start_session("shared system prompt", "job A's JD")
+            first_key = mock_client.post.call_args.kwargs["json"]["prompt_cache_key"]
+            await MistralBackend().start_session("shared system prompt", "job B's JD")
+            second_key = mock_client.post.call_args.kwargs["json"]["prompt_cache_key"]
+        assert first_key == second_key
+
+    async def test_prompt_cache_key_differs_for_different_system_prompts(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            await MistralBackend().start_session("system prompt A", "hi")
+            key_a = mock_client.post.call_args.kwargs["json"]["prompt_cache_key"]
+            await MistralBackend().start_session("system prompt B", "hi")
+            key_b = mock_client.post.call_args.kwargs["json"]["prompt_cache_key"]
+        assert key_a != key_b
+
+    async def test_prompt_caching_false_is_byte_identical_to_pre_phase2_payload(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend(prompt_caching=False)
+            await backend.start_session("shared system prompt", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload == {
+            "model": backend._model,
+            "messages": [
+                {"role": "system", "content": "shared system prompt"},
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 8192,
+        }
+
+    async def test_cached_tokens_logged(self, caplog):
+        body = _completion_body(FINAL_RAW)
+        body["usage"] = {"prompt_tokens_details": {"cached_tokens": 512}}
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            with caplog.at_level("INFO"):
+                backend = MistralBackend()
+                await backend.start_session("sys", "hi")
+        assert "cached_tokens=512" in caplog.text
+
+    async def test_missing_usage_does_not_raise(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            _, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"
+
+
 class TestDowngradeOnUnparseableStructuredReply:
     async def test_non_json_reply_downgrades_and_nudge_recovers(self):
         schema = json_schema_for(Stage.cv_adjust)

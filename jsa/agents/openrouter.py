@@ -29,7 +29,7 @@ class OpenRouterBackend(OpenAICompatBackend):
     # 4xx. Confirmed present in the live Phase-0 /models probe.
     default_model = "nvidia/nemotron-3-nano-30b-a3b"
 
-    def _extra_payload(self) -> dict[str, Any]:
+    def _extra_payload(self, system_prompt: str) -> dict[str, Any]:
         """Mandatory routing guard: without it, OpenRouter may route a request to
         an upstream endpoint that silently ignores ``response_format`` instead of
         honoring it or failing loudly — which would make the per-session

@@ -779,6 +779,66 @@ URLs, or HUD-style terminal abbreviations that are intentionally code-like (see
 
 ---
 
+## Prompt caching (HTTP API backends)
+
+**The cross-job system-prefix invariant.** `assemble_system_prompt` (`jsa/pipeline/
+prompt_assembly.py`) builds the system prompt from only the on-disk prompt file,
+the language code, and the stage's JSON schema — **no per-job bytes** (JD, company,
+role, CV structure, research brief) ever land in it; those go into the initial user
+message (`_build_initial_user_msg`/`_build_fit_user_msg`). So every job at a given
+(stage, language, structured-mode) sends a **byte-identical system prefix**, which is
+what makes prompt caching worth doing here: cache the system prompt, not the message
+tail. `tests/backend/test_prompt_prefix_stability.py` pins this two ways — same-input
+determinism (including across `PYTHONHASHSEED` values, since schema generation must
+never iterate a `set`) and cross-job identity (two jobs with different JD/company/role
+produce the same system prompt and different user messages). Do not add a
+message-tail cache breakpoint — the tail is separated by human answer latency
+(`awaiting_input` → user answers), so it's usually cold, and it would collide with
+`adapt_history`/`_parse_with_nudge` rewriting message content.
+
+**Kill switch.** `Settings.prompt_caching: bool = True` (`JSA_PROMPT_CACHING`),
+`--prompt-caching`/`--no-prompt-caching` (tri-state, only overrides when explicitly
+passed). Forwarded via `make_backend_factory` to the `mistral`, `openrouter`,
+`gemini`, and `opencode-go` branches only — never to `opencode-zen`, `claude-cli`, or
+`google-cli`, which don't accept the kwarg (same no-unused-parameter rule as
+`structured_schema`). With the switch off, every touched backend's payload must be
+byte-identical to its pre-prompt-caching shape — this is a permanent parity
+invariant, not a one-time migration check (see `tests/backend/
+test_openai_compat.py::TestPromptCacheKey::
+test_prompt_caching_false_is_byte_identical_to_pre_phase2_payload`).
+
+**Per-backend mechanism** (only `mistral` is wired so far — `openrouter`, `gemini`,
+and `opencode-go` are still no-ops pending later phases of the prompt-caching plan):
+
+| Backend | Mechanism | Cached-token field |
+|---|---|---|
+| `mistral` | top-level `prompt_cache_key` (`jsa/agents/mistral.py::_extra_payload`), a `sha1(system_prompt)[:16]` hash — a hash of the byte-identical prefix, not `job.id`, so it groups every job that shares that prefix. Confirmed live against Mistral's own `/v1/chat/completions` API reference (not just the separate Conversations API) that `prompt_cache_key` is a real top-level parameter on this endpoint — an unrecognized-field 4xx was considered and ruled out, so this backend has no degrade path. | `usage.prompt_tokens_details.cached_tokens` |
+| `openrouter`, `gemini`, `opencode-go` | not yet implemented | — |
+
+**Cached-token observability lives in `OpenAICompatBackend._call_api_once`**
+(`jsa/agents/_openai_compat.py`), guarded with `isinstance(..., dict)` checks (not
+just `.get` chains — an API returning `"usage": null` or a wrong-typed field must not
+raise past a request that otherwise succeeded). Because this lives in the *shared*
+base, `openrouter` and `opencode-go`'s `/chat` protocol already log cached tokens even
+though they don't request caching yet — this is harmless, not a sign those backends'
+own caching phases are done.
+
+**`_extra_payload` takes `system_prompt`.** Any override (currently only
+`MistralBackend` and `OpenRouterBackend`) receives the assembled system prompt as an
+argument — added specifically so a subclass can derive a cache key or breakpoint from
+it. Do not revert this to a no-argument hook.
+
+**Known non-caching cases (expected, not bugs).** Sentinel-mode `fit_assessment`'s
+prompt (`PROMPT_FIT_ASSESSMENT.md`, ≈660 tokens, no schema appended) sits below every
+provider's minimum cacheable-prefix size and will show zero cached tokens even once a
+backend implements caching — this is not a broken implementation. `opencode-zen` is
+deliberately out of scope (undocumented caching API, pre-existing backend, keeps its
+own independent payload-builder copy per `_openai_compat.py`'s module docstring).
+CLI backends (`claude-cli`, `google-cli`) manage their own caching and are not
+applicable here.
+
+---
+
 ## How to test a phase
 
 After each phase is implemented, verify it with the following steps in order.
