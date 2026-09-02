@@ -372,7 +372,12 @@ class TestSlotReleasePaths:
         assert job.id  # silence unused
 
     async def test_already_running_bailout_releases_the_slot(self, session_factory):
-        """run()'s `db_job.state == running` bailout (a concurrent kick got there first)."""
+        """run()'s `db_job.state == running` bailout (a concurrent kick got there first).
+
+        Mirrors the production path at orchestrator.py:297-300 exactly: acquire the
+        global semaphore AND the backend slot, then release both — asserting the count
+        returns to zero on BOTH sides, not just the backend counter.
+        """
         await _insert_job(session_factory, "job00000000aaaa", backend_name="opencode-go")
         async with session_factory() as s:
             j = await repo.get_job(s, "job00000000aaaa")
@@ -387,11 +392,18 @@ class TestSlotReleasePaths:
         )
 
         # list_runnable_jobs won't return a `running` job, so drive the loop body's shape
-        # directly: acquire as dispatch would, then take the bailout's release path.
+        # directly: acquire both resources, then take the bailout's release path and assert
+        # neither is leaked. Release is LIFO — global sem first, then backend slot — the
+        # reverse of dispatch's acquisition order (backend slot first, then sem).
+        sem_value_before = orch.sem._value
+        await orch.sem.acquire()
         assert orch._acquire_backend_slot("opencode-go") is True
-        orch.sem.release  # the bailout releases both; assert the backend half here
+        orch.sem.release()
         orch._release_backend_slot("opencode-go")
         assert orch._backend_inflight_count("opencode-go") == 0
+        assert orch.sem._value == sem_value_before, (
+            "the db_job.state==running bailout burned a global semaphore slot"
+        )
 
     async def test_transition_failure_bailout_releases_the_slot(self, session_factory):
         """run()'s transition `except Exception` bailout — the third and easiest to forget.
