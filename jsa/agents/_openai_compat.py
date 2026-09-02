@@ -167,9 +167,15 @@ class OpenAICompatBackend(AgentBackend):
     env_vars: ClassVar[tuple[str, ...]]
     default_model: ClassVar[str]
 
-    def __init__(self, model: str | None = None, timeout: float = 180.0) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        timeout: float = 180.0,
+        prompt_caching: bool = True,
+    ) -> None:
         self._model = model if model is not None else self.default_model
         self._timeout = timeout
+        self._prompt_caching = prompt_caching
 
     def _extra_payload(self) -> dict[str, Any]:
         """Hook for subclass-specific top-level payload keys. Default: none.

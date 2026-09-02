@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     dev_autoanswer: bool = False          # Dev-only: auto-answer NEED_INPUT gates, via JSA_DEV_AUTOANSWER
     dev_answers_path: Path = Path(__file__).parent / "prompts" / "DEV_ANSWERS.json"
     select_language: bool = False          # --select-language: show the full-screen boot gate (language picker + boot log) before the dashboard on first run
+    prompt_caching: bool = True           # via JSA_PROMPT_CACHING / --prompt-caching /
+                                          # --no-prompt-caching. Global kill switch for
+                                          # every HTTP backend's prompt-caching request
+                                          # fields (mistral, openrouter, gemini,
+                                          # opencode-go — see CLAUDE.md's "Prompt caching"
+                                          # section). Default True must produce a payload
+                                          # byte-identical to pre-feature behaviour on any
+                                          # backend where caching is a no-op.
     backend_models: Dict[str, str] = {}   # backend name -> selected model ID, seeded from
                                           # backend_models.json at startup and mutated live by
                                           # PUT /api/backend-models. Overrides the flat

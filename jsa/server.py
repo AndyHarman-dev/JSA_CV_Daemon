@@ -127,22 +127,30 @@ def make_backend_factory(
         if name == "mistral":
             resolved = _model_for("mistral", settings.mistral_model, model)
             timeout = settings.mistral_timeout if timeout_override is None else timeout_override
-            return backend_for("mistral", model=resolved, timeout=timeout)
+            return backend_for(
+                "mistral", model=resolved, timeout=timeout, prompt_caching=settings.prompt_caching
+            )
 
         if name == "openrouter":
             resolved = _model_for("openrouter", settings.openrouter_model, model)
             timeout = settings.openrouter_timeout if timeout_override is None else timeout_override
-            return backend_for("openrouter", model=resolved, timeout=timeout)
+            return backend_for(
+                "openrouter", model=resolved, timeout=timeout, prompt_caching=settings.prompt_caching
+            )
 
         if name == "gemini":
             resolved = _model_for("gemini", settings.gemini_model, model)
             timeout = settings.gemini_timeout if timeout_override is None else timeout_override
-            return backend_for("gemini", model=resolved, timeout=timeout)
+            return backend_for(
+                "gemini", model=resolved, timeout=timeout, prompt_caching=settings.prompt_caching
+            )
 
         if name == "opencode-go":
             resolved = _model_for("opencode-go", settings.opencode_go_model, model)
             timeout = settings.opencode_go_timeout if timeout_override is None else timeout_override
-            return backend_for("opencode-go", model=resolved, timeout=timeout)
+            return backend_for(
+                "opencode-go", model=resolved, timeout=timeout, prompt_caching=settings.prompt_caching
+            )
 
         timeout = settings.agent_timeout if timeout_override is None else timeout_override
         if name == "claude-cli":

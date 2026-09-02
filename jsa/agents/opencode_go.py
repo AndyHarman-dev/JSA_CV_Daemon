@@ -112,14 +112,19 @@ class OpenCodeGoBackend(OpenAICompatBackend):
     # Corroborated "chat" model — see _PROTOCOL's provenance note above.
     default_model = "glm-5.3"
 
-    def __init__(self, model: str | None = None, timeout: float = 180.0) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        timeout: float = 180.0,
+        prompt_caching: bool = True,
+    ) -> None:
         resolved_model = model if model is not None else self.default_model
         if resolved_model not in _PROTOCOL:
             raise ValueError(
                 f"Unknown OpenCode Go model {resolved_model!r}. "
                 f"Available: {sorted(_PROTOCOL)}"
             )
-        super().__init__(model=resolved_model, timeout=timeout)
+        super().__init__(model=resolved_model, timeout=timeout, prompt_caching=prompt_caching)
         self._protocol: Protocol = _PROTOCOL[resolved_model]
         # Instance-level override — see this module's docstring.
         self.supports_structured_output = self._protocol == "chat"
