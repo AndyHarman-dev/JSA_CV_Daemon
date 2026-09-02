@@ -44,6 +44,7 @@ from typing import Awaitable, Callable, Literal
 
 import httpx
 
+from jsa.agents.model_costs import record_openrouter_pricing
 from jsa.agents.opencode_go import _PROTOCOL as _OPENCODE_GO_PROTOCOL
 
 logger = logging.getLogger(__name__)
@@ -159,8 +160,34 @@ async def _fetch_mistral() -> list[str]:
 async def _fetch_openrouter() -> list[str]:
     # Public endpoint -- no key required (confirmed Phase 0 probe 1c).
     body = await _get_json("https://openrouter.ai/api/v1/models")
-    ids = {m.get("id", "") for m in body.get("data", []) if isinstance(m, dict) and m.get("id")}
+    entries = [m for m in body.get("data", []) if isinstance(m, dict) and m.get("id")]
+    ids = {m["id"] for m in entries}
+    # Opportunistically push per-model pricing from this same payload into
+    # jsa.agents.model_costs -- no new network call, see that module's
+    # "OpenRouter live-pricing cache" section. Never breaks listing on
+    # malformed/missing pricing data.
+    _push_openrouter_pricing(entries)
     return sorted(ids)
+
+
+def _push_openrouter_pricing(entries: list[dict]) -> None:
+    """Extract `pricing.completion` (USD per token, per OpenRouter's /models
+    response shape) from an already-fetched payload and record it (converted
+    to USD per 1M tokens) via `model_costs.record_openrouter_pricing`.
+    Pricing is a side benefit of this fetch, not this function's job -- any
+    entry with missing or malformed pricing is skipped, never raised."""
+    prices: dict[str, float] = {}
+    for entry in entries:
+        model_id = entry.get("id")
+        pricing = entry.get("pricing")
+        if not isinstance(model_id, str) or not isinstance(pricing, dict):
+            continue
+        try:
+            per_token = float(pricing.get("completion"))
+        except (TypeError, ValueError):
+            continue
+        prices[model_id] = per_token * 1_000_000
+    record_openrouter_pricing(prices)
 
 
 async def _fetch_gemini() -> list[str]:
