@@ -1,5 +1,5 @@
 ---
-status: Pending
+status: InProgress
 ---
 
 # Model-level fallback ladder + rate-limit containment
@@ -395,7 +395,7 @@ fighting the dropdown.
 
 ## Change Log
 
-_(entries appended as phases land)_
+**2026-09-01**: Phase 2 — cost-ordered model ladder data. Added `jsa/agents/model_costs.py` with static USD/1M-output-token cost tables for all model-selection backends and the `cost_for` / `cost_ordered` / `next_model` ordering primitives. Wired the existing OpenRouter live listing fetch to opportunistically cache real per-model output prices via `record_openrouter_pricing`. Added `tests/backend/test_model_costs.py` with 17 tests covering ascending order, stable ties, unknown-cost-last, next-rung semantics, live-pricing override/fallback/replacement, and a bidirectional guard that every `opencode-go` `_PROTOCOL` model has a `STATIC_COSTS` entry. Verified `.venv/bin/pytest tests/backend/test_model_costs.py` (17 passed), `tests/backend/test_model_catalog.py` (26 passed), and the full non-integration suite (1587 passed, 0 failed, +17 over the Phase 1 baseline). Two small deviations from the plan text: `STATIC_COSTS` also includes a `"claude-cli"` key aliased to the Anthropic table (defensible because `claude-cli` supports model selection and runs Claude models, though the plan only listed Mistral/Gemini/Anthropic), and the `claude-cli`/`anthropic` dicts share the same backing dict by reference — read-only in practice. The user-run OpenCode cost probe (Verification #6) is still pending; all 23 opencode-go prices were hand-authored from the published docs page.
 
 ## Decisions Log
 
