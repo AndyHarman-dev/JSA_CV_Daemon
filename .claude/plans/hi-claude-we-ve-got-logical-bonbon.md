@@ -482,6 +482,140 @@ unit/payload-shape/doc-reference level only — live Mistral acceptance of
 `prompt_cache_key` and an actual cache hit are unverified (item 6/7 in Verification).
 Proceed to Phase 3.
 
+**2026-09-02**: Phase 3 — Gemini observability. Added `usageMetadata.
+cachedContentTokenCount` logging to `GeminiBackend._call_api_once`
+(`jsa/agents/gemini_api.py`), `isinstance`-guarded the same way Mistral's `usage`
+read is (a missing or wrong-typed `usageMetadata` must not raise past an otherwise
+successful reply). No request-shape change — Gemini's implicit caching is on by
+default for 2.5+ models given the existing stable-`systemInstruction`-first shape;
+per the plan's Phase 3 "Problems/Bugs" section, explicit `cachedContents` was
+deliberately not added (separate create/manage lifecycle for a prefix implicit
+caching already covers). Added `TestCachedTokenObservability` (3 tests) to
+`tests/backend/test_gemini_api.py`: logged-when-present, missing-key doesn't raise,
+wrong-typed-value doesn't raise. Updated CLAUDE.md's per-backend mechanism table.
+Full suite for touched files: `pytest tests/backend/test_gemini_api.py -q` → 35
+passed. Verified: proceed to Phase 4.
+
+**2026-09-02**: Phase 4 — OpenRouter `cache_control` + degrade-on-4xx. Added
+`OpenAICompatBackend._system_content(self, system_prompt) -> str | list[dict]` hook
+to `_openai_compat.py` (default: unchanged bare-string return, so `MistralBackend`
+— which never overrides it — stays byte-identical); `_call_api_once` now computes
+`cache_fields_present = isinstance(self._system_content(system_prompt), list)` once
+per call and uses it, via a local `_permanent_4xx(detail)` closure (mirroring
+Gemini's Phase-0-era `_SchemaRejected` pattern), to choose between plain
+`AgentBackendUnavailable` and the new module-private `_CacheRejected` at all three
+permanent-4xx raise sites. `_CacheRejected` (`AgentBackendUnavailable` subclass) is
+caught in `_call_api`, outside `retry_transient`'s budget: sets
+`self._prompt_caching = False` for the rest of that backend instance's life (never
+persisted), logs a warning, retries the same call once clean via a second
+`retry_transient` call. `OpenRouterBackend._system_content` (`jsa/agents/
+openrouter.py`) returns `[{"type": "text", "text": system_prompt, "cache_control":
+{"type": "ephemeral"}}]` when `self._prompt_caching`, else the plain string.
+
+Added `TestPromptCacheControl` (5 tests) to `tests/backend/test_openrouter.py`:
+cache_control sent by default, `prompt_caching=False` byte-identical to the
+pre-Phase-4 shape (full dict equality on the system message), a permanent 4xx with
+cache fields present degrades-and-retries-clean (asserts `call_count == 2`, the
+retried payload has no cache_control, and `backend._prompt_caching` flipped to
+`False`), a 4xx that also fails on the clean retry surfaces as a plain
+`AgentBackendUnavailable` (`type(exc) is AgentBackendUnavailable`, not
+`_CacheRejected`, confirming BF-19 still classifies it correctly), and
+`prompt_caching=False` from the start never attempts the extra retry
+(`call_count == 1`). Added `TestSystemContentHookDefault` to
+`test_openai_compat.py` pinning Mistral's system content as an unchanged plain
+string even with `prompt_caching=True` (its caching signal is the `_extra_payload`
+top-level key, not a system-content shape change — the two mechanisms are
+independent and must not cross-contaminate). Updated
+`test_prompt_caching_phase1.py`'s `TestKillSwitchIsCurrentlyANoOpOnTheWire`: its
+OpenRouter case stopped being a no-op this phase (same pattern as Mistral in Phase
+2) — swapped the still-covered no-op case to `opencode-go`'s `/chat` protocol
+(genuinely untouched until Phase 5) and updated the docstring to point at
+`test_openrouter.py::TestPromptCacheControl` for OpenRouter's own parity coverage.
+Updated CLAUDE.md's per-backend mechanism table with a new "OpenRouter's
+degrade-on-4xx" subsection, including the explicit warning against gating the
+degrade on `self._prompt_caching` alone instead of `cache_fields_present` (a
+gate-on-the-wrong-flag bug would falsely trip `_CacheRejected` for Mistral's
+unrelated top-level-key caching signal on any unrelated 4xx).
+
+Full suite for touched files: `pytest tests/backend/test_openai_compat.py
+tests/backend/test_openrouter.py tests/backend/test_prompt_caching_phase1.py
+tests/backend/test_gemini_api.py -q` → 104 passed. Also re-ran
+`tests/backend/test_bf18_limit_detection.py` (the permanent BF-19 classification
+regression gate) unchanged → 64 passed, confirming the three-way split's existing
+coverage isn't disturbed by the new `_CacheRejected` branch. Verified: proceed to
+Phase 5.
+
+**2026-09-02**: Phase 5 — OpenCode-GO speculative `cache_control` on both
+protocols. `/chat`: `OpenCodeGoBackend._system_content` overrides the shared hook
+exactly like `OpenRouterBackend` (`jsa/agents/opencode_go.py`), inheriting the
+Phase 4 `_CacheRejected` degrade from `OpenAICompatBackend._call_api` for free —
+no protocol-specific code needed there. `/messages`: since this protocol hand-
+builds its request outside `_call_api`/`_call_api_once` entirely,
+`_call_messages_api_once` now sends `"system": [{"type": "text", "text": ...,
+"cache_control": {"type": "ephemeral"}}]` when `self._prompt_caching` (else the
+old bare string), computes `cache_fields_present` the same way as the shared base,
+and raises `_CacheRejected` (imported from `_openai_compat.py`, not redefined)
+from exactly its two JSON-parsed permanent-4xx branches — deliberately not from
+the non-JSON-body branch, per the plan's "raise from the two permanent-4xx
+branches" instruction (an unparseable body gives no reliable signal the rejection
+was cache-related). `_call_messages_api` gained its own copy of the catch-
+`_CacheRejected`-and-retry-clean wrapper (same shape as `_call_api`'s, duplicated
+since this protocol doesn't share that call site). Added `usage.
+cache_read_input_tokens` / `usage.cache_creation_input_tokens` logging to
+`_call_messages_api_once`, `isinstance`-guarded the same way as every other
+backend's usage read.
+
+Added `TestPromptCacheControlChat` (2 tests, smoke-testing the inherited `/chat`
+degrade is actually wired in — the mechanism itself is covered once in
+`test_openrouter.py`) and `TestPromptCacheControlMessages` (5 tests: cache_control
+sent by default, degrade-and-retry-clean on a permanent 4xx with cache fields
+present, a second failure surfaces as plain `AgentBackendUnavailable`, `prompt_
+caching=False` never retries, cache tokens logged) to `tests/backend/
+test_opencode_go.py`. Updated `test_system_prompt_is_top_level_not_in_messages_array`
+(now asserts the block-array shape by default) and added a sibling
+`prompt_caching=False` case pinning the old bare-string shape, per the plan's
+explicit instruction. `test_anthropic_shape_error_envelope_4xx_raises_backend_
+unavailable` needed no code change — with the default `prompt_caching=True` it now
+makes one extra internal retry (400 → `_CacheRejected` → clean retry → the same
+mock's 400 again → plain `AgentBackendUnavailable`), and `pytest.raises
+(AgentBackendUnavailable)` still matches either way since `_CacheRejected`
+subclasses it; left as-is rather than pinning a call count that isn't the point of
+that test. `test_anthropic_shape_error_envelope_5xx_retries_then_unavailable`
+(call_count == 3) is unaffected — 529 never reaches the permanent-4xx branches.
+
+Updated `test_prompt_caching_phase1.py`'s `TestKillSwitchIsCurrentlyANoOpOnTheWire`
+again: OpenCode-GO stopped being a no-op this phase (the third backend to do so,
+after Mistral/OpenRouter) — swapped its last remaining case to Gemini, which is a
+**permanent** no-op by design (implicit caching needs no request-shape change at
+all), so this class now has a stable long-term home instead of needing a fourth
+swap later. Updated CLAUDE.md: mechanism table's `opencode-go` row split into
+`/chat` and `/messages`, a new "OpenCode-GO's speculative cache_control" subsection
+mirroring OpenRouter's, and corrected the now-stale "they don't request caching
+yet" cached-token-observability paragraph (openrouter and opencode-go's `/chat` do
+request it now) to also mention the `/messages`-side logging location.
+
+Full suite for touched files: `pytest tests/backend/test_prompt_caching_phase1.py
+tests/backend/test_openai_compat.py tests/backend/test_openrouter.py
+tests/backend/test_gemini_api.py tests/backend/test_opencode_go.py -q` → 135
+passed. Verified: proceed to the medium code review requested for Phases 3-5
+(Phase 6/Anthropic remains explicitly out of scope for this session).
+
+**2026-09-02**: `/code-review medium --fix` over the working-tree diff for Phases
+3-5 (`jsa/agents/_openai_compat.py`, `gemini_api.py`, `opencode_go.py`,
+`openrouter.py`, their test files, `CLAUDE.md`). Zero findings — the reviewer
+(plus an independent finder-angles fork) specifically chased and ruled out one
+hypothesis (whether `_CacheRejected` misclassifies an unrelated 4xx, e.g. a bad
+model name, as cache-related) by confirming it's intentional, tested,
+documented behavior, not a bug; confirmed `_CacheRejected` correctly propagates
+past `retry_transient` (which only catches `TransientBackendError`) and is caught
+outside the retry budget in both `_call_api` and `_call_messages_api`; confirmed
+`OpenCodeGoBackend._system_content` is never reached for `/messages`-protocol
+models; confirmed Mistral is unaffected (`cache_fields_present` stays `False` for
+it since it never overrides `_system_content`). Re-ran the full backend suite:
+1692 passed, 2 skipped, 21 deselected. Verified: Phases 3-5 complete and clean.
+Phase 6 (Anthropic, cuttable per the plan's scope note) was not attempted this
+session — remains open if the user wants it.
+
 ## Decisions Log
 
 *(reserved for the user)*

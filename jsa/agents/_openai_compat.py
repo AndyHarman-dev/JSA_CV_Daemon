@@ -73,6 +73,19 @@ class TransientBackendError(Exception):
     """
 
 
+class _CacheRejected(AgentBackendUnavailable):
+    """Internal only: a permanent 4xx from ``_call_api_once`` while cache_control
+    fields were actually present in the payload (i.e. ``_system_content`` returned
+    a block-array shape, not the plain string), raised instead of plain
+    ``AgentBackendUnavailable`` so ``_call_api`` can catch it, disable prompt
+    caching for the rest of this backend instance's life, and retry the same call
+    once clean rather than dropping the backend out of BF-19 over a caching-only
+    routing rejection. See ``_system_content``'s docstring (CLAUDE.md -> "Prompt
+    caching" -> OpenRouter's degrade-on-4xx). Subclasses ``AgentBackendUnavailable``
+    as a safety net: an instance that somehow escapes the catch still classifies
+    correctly for BF-19."""
+
+
 _NUDGE_TEXT = (
     "Your previous response was missing the required sentinel block. "
     "Please restate your response and end it with exactly one of:\n"
@@ -182,6 +195,16 @@ class OpenAICompatBackend(AgentBackend):
         OpenRouter overrides this to add its mandatory routing guard; Mistral
         overrides it to add a ``prompt_cache_key`` derived from ``system_prompt``."""
         return {}
+
+    def _system_content(self, system_prompt: str) -> str | list[dict]:
+        """Hook for a subclass-specific system-message shape. Default: the bare
+        string this backend has always sent — ``MistralBackend`` inherits this
+        unchanged (its caching signal is a top-level ``_extra_payload`` field, not a
+        system-content shape change). ``OpenRouterBackend`` overrides this to add an
+        explicit ``cache_control`` breakpoint when prompt caching is enabled; a list
+        return value is what ``_call_api_once`` treats as "cache fields present" for
+        the ``_CacheRejected`` degrade path below."""
+        return system_prompt
 
     def _api_key(self) -> str:
         for env_var in self.env_vars:
@@ -327,11 +350,31 @@ class OpenAICompatBackend(AgentBackend):
     ) -> str:
         """POST to ``endpoint_url``, retrying transient overload/gateway failures on
         THIS backend up to ``_MAX_ATTEMPTS`` before giving up. See
-        ``opencode_zen.py``'s method of the same name for the full rationale."""
-        return await retry_transient(
-            lambda: self._call_api_once(system_prompt, messages, structured_schema),
-            unavailable_message=f"{self.name} API still failing after {_MAX_ATTEMPTS} attempts",
-        )
+        ``opencode_zen.py``'s method of the same name for the full rationale.
+
+        A ``_CacheRejected`` (a permanent 4xx while cache_control fields were
+        present) is caught here, OUTSIDE ``retry_transient``'s budget — mirroring
+        the structured->sentinel downgrade's rule that a reshaped retry never
+        shares a budget with retries of the identical request. Prompt caching is
+        disabled for the rest of this backend instance's life and the call is
+        retried exactly once, clean.
+        """
+        try:
+            return await retry_transient(
+                lambda: self._call_api_once(system_prompt, messages, structured_schema),
+                unavailable_message=f"{self.name} API still failing after {_MAX_ATTEMPTS} attempts",
+            )
+        except _CacheRejected as exc:
+            logger.warning(
+                "%s rejected the prompt-cache_control field (%s) — disabling prompt "
+                "caching for this backend instance and retrying once without it",
+                self.name, exc,
+            )
+            self._prompt_caching = False
+            return await retry_transient(
+                lambda: self._call_api_once(system_prompt, messages, structured_schema),
+                unavailable_message=f"{self.name} API still failing after {_MAX_ATTEMPTS} attempts",
+            )
 
     async def _call_api_once(
         self,
@@ -345,9 +388,11 @@ class OpenAICompatBackend(AgentBackend):
         full rationale behind each classification branch.
         """
         api_key = self._api_key()
+        system_content = self._system_content(system_prompt)
+        cache_fields_present = isinstance(system_content, list)
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "system", "content": system_prompt}, *messages],
+            "messages": [{"role": "system", "content": system_content}, *messages],
             "max_tokens": 8192,
         }
         payload.update(self._extra_payload(system_prompt))
@@ -383,6 +428,9 @@ class OpenAICompatBackend(AgentBackend):
         finally:
             await client.aclose()
 
+        def _permanent_4xx(detail: str) -> Exception:
+            return _CacheRejected(detail) if cache_fields_present else AgentBackendUnavailable(detail)
+
         if response.status_code == 429:
             raise AgentLimitReached(f"{self.name} API rate limit reached: {response.text[:500]}")
 
@@ -392,7 +440,7 @@ class OpenAICompatBackend(AgentBackend):
             detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
             if response.status_code >= 500:
                 raise TransientBackendError(detail) from None
-            raise AgentBackendUnavailable(detail) from None
+            raise _permanent_4xx(detail) from None
 
         if "error" in body:
             err = body["error"]
@@ -401,14 +449,14 @@ class OpenAICompatBackend(AgentBackend):
             if "rate" in message.lower() or "credit" in message.lower() or err_type in {"RateLimitError", "CreditsError"}:
                 raise AgentLimitReached(f"{self.name} API limit reached: {message}")
             if 400 <= response.status_code < 500:
-                raise AgentBackendUnavailable(f"{self.name} API error: {message}")
+                raise _permanent_4xx(f"{self.name} API error: {message}")
             raise TransientBackendError(f"{self.name} API error: {message}")
 
         if response.status_code >= 400:
             detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
             if response.status_code >= 500:
                 raise TransientBackendError(detail)
-            raise AgentBackendUnavailable(detail)
+            raise _permanent_4xx(detail)
 
         choices = body.get("choices")
         if not choices:

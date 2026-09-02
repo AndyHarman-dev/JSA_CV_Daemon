@@ -807,21 +807,81 @@ invariant, not a one-time migration check (see `tests/backend/
 test_openai_compat.py::TestPromptCacheKey::
 test_prompt_caching_false_is_byte_identical_to_pre_phase2_payload`).
 
-**Per-backend mechanism** (only `mistral` is wired so far — `openrouter`, `gemini`,
-and `opencode-go` are still no-ops pending later phases of the prompt-caching plan):
+**Per-backend mechanism** (`mistral`, `gemini`, `openrouter`, and `opencode-go` are
+all wired — Phase 6, `anthropic`, is the only phase left, and is cuttable):
 
 | Backend | Mechanism | Cached-token field |
 |---|---|---|
 | `mistral` | top-level `prompt_cache_key` (`jsa/agents/mistral.py::_extra_payload`), a `sha1(system_prompt)[:16]` hash — a hash of the byte-identical prefix, not `job.id`, so it groups every job that shares that prefix. Confirmed live against Mistral's own `/v1/chat/completions` API reference (not just the separate Conversations API) that `prompt_cache_key` is a real top-level parameter on this endpoint — an unrecognized-field 4xx was considered and ruled out, so this backend has no degrade path. | `usage.prompt_tokens_details.cached_tokens` |
-| `openrouter`, `gemini`, `opencode-go` | not yet implemented | — |
+| `gemini` | **observability only, no request change.** Gemini's implicit caching is on by default for 2.5+ models given a stable prefix (`systemInstruction` first, growing `contents` after) — the existing request shape already satisfies it. `GeminiBackend._call_api_once` (`jsa/agents/gemini_api.py`) logs `body["usageMetadata"]["cachedContentTokenCount"]` at `logger.info` when present, `isinstance`-guarded the same way as Mistral's `usage` read. Deliberately does **not** add explicit `cachedContents` — that requires a separate create/manage lifecycle for a prefix implicit caching already covers. `Settings.prompt_caching=False` is a true no-op here — there is no field to omit. This makes `gemini` the one **permanent** no-op-on-the-wire backend among the four — see `tests/backend/test_prompt_caching_phase1.py::TestKillSwitchIsCurrentlyANoOpOnTheWire`. | `usageMetadata.cachedContentTokenCount` |
+| `openrouter` | explicit `cache_control: {"type": "ephemeral"}` on the system text block (`OpenRouterBackend._system_content`, `jsa/agents/openrouter.py`) — required for OpenRouter's Anthropic/Qwen/Gemini upstreams to cache at all; harmless for upstreams that cache automatically. **Has a degrade-on-4xx path** — see below. | `usage.prompt_tokens_details.cached_tokens` |
+| `opencode-go` `/chat` | Same `cache_control` breakpoint as OpenRouter, via the identical `_system_content` override (`OpenCodeGoBackend._system_content`, `jsa/agents/opencode_go.py`) — inherits the shared base's `_CacheRejected` degrade for free, no protocol-specific code needed. **Speculative**: this gateway documents no cache API (same caveat as its forced-tool-use gap, see the module docstring). | `usage.prompt_tokens_details.cached_tokens` |
+| `opencode-go` `/messages` | Same breakpoint shape, hand-built (this protocol does not go through the shared `_call_api_once`/`_system_content` machinery at all — see the module docstring's dual-protocol split): `_call_messages_api_once` sends `"system": [{"type": "text", "text": ..., "cache_control": {"type": "ephemeral"}}]` when `self._prompt_caching`, and `_call_messages_api` carries its own copy of the catch-`_CacheRejected`-and-retry-clean wrapper (imported from `_openai_compat.py`, reused rather than duplicated — only the wrapping code around it is protocol-specific). Also speculative, same caveat. | `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens` |
+
+**OpenRouter's degrade-on-4xx (Phase 4).** Sending `cache_control` is the one place
+in this plan where the field itself could make `provider.require_parameters: true`
+(the mandatory routing guard above) filter out every eligible provider, returning a
+4xx — not "no caching", but "no eligible provider", which under the three-way
+classification is an immediate, unretried `AgentBackendUnavailable` that would drop
+`openrouter` out of the BF-19 chain over a caching-only rejection. The fix lives in
+the *shared* base (`jsa/agents/_openai_compat.py`), not in `openrouter.py`, so any
+future `_system_content` override gets it for free:
+- `OpenAICompatBackend._system_content(self, system_prompt) -> str | list[dict]` is
+  a hook, default returns `system_prompt` unchanged (byte-identical for Mistral,
+  which never overrides it — its caching signal is the `_extra_payload` top-level
+  key, not a system-content shape change). `_call_api_once` computes
+  `cache_fields_present = isinstance(self._system_content(system_prompt), list)`
+  once per call and uses that value to pick between `AgentBackendUnavailable` and
+  the module-private `_CacheRejected` (a subclass of it) at all three permanent-4xx
+  raise sites.
+- `_CacheRejected` is caught in `_call_api`, **outside** `retry_transient`'s budget
+  (mirroring the structured→sentinel downgrade's rule: a reshaped retry never
+  shares a budget with retries of the identical request) — `self._prompt_caching`
+  is flipped to `False` for the rest of that backend **instance's** life (not
+  persisted), and the call is retried exactly once, clean. A second failure raises
+  a plain `AgentBackendUnavailable`/whatever BF-19 recognizes, same as before this
+  feature existed.
+- Do not key the degrade off `self._prompt_caching` alone — it must be gated on
+  `cache_fields_present` (the actual payload shape sent), so a subclass like
+  Mistral that carries a top-level cache key but never changes `_system_content`
+  never accidentally raises `_CacheRejected` and silently disables its own,
+  separately-verified-safe caching mechanism on an unrelated 4xx.
+
+**OpenCode-GO's speculative `cache_control` on both protocols (Phase 5).** This
+gateway publishes cached-read/cached-write pricing but documents no cache API for
+either wire shape, so both are informed guesses — there is direct precedent for
+this gateway silently not honoring a documented Anthropic feature (forced tool-use
+does not take on the `/messages` path either, see the module docstring), so a
+degrade path is mandatory here, not optional:
+- `/chat` reuses the Phase 4 mechanism verbatim: `OpenCodeGoBackend._system_content`
+  overrides the shared hook exactly like `OpenRouterBackend` does, so it gets the
+  `_CacheRejected` catch-and-retry-clean wrapper in `OpenAICompatBackend._call_api`
+  for free — no protocol-specific degrade code needed.
+- `/messages` does **not** go through `_call_api`/`_call_api_once` at all (it is a
+  hand-built Anthropic-shape POST, see the module docstring's dual-protocol split),
+  so it carries its own copy of the wrapper: `_call_messages_api` catches
+  `_CacheRejected` (imported from `_openai_compat.py`, not redefined) outside
+  `retry_transient`'s budget, flips `self._prompt_caching` off, and retries once
+  clean — same shape as `_call_api`'s wrapper, just duplicated onto the
+  protocol-specific call site. `_call_messages_api_once` raises `_CacheRejected`
+  from exactly its **two** JSON-parsed permanent-4xx branches (the structured
+  `{"type": "error", ...}` envelope branch and the generic `status_code >= 400`
+  fallback) — **not** from the non-JSON-body branch, which stays a plain
+  `AgentBackendUnavailable` unconditionally, since an unparseable body gives no
+  reliable signal that the rejection was cache-related.
+- Both protocols are gated by the same `Settings.prompt_caching` kill switch and
+  the same per-instance `_prompt_caching` flag — a Phase-4-style
+  `prompt_caching=False` case exists for both wire shapes in
+  `tests/backend/test_opencode_go.py`, pinning the pre-Phase-5 bare-string shape.
 
 **Cached-token observability lives in `OpenAICompatBackend._call_api_once`**
-(`jsa/agents/_openai_compat.py`), guarded with `isinstance(..., dict)` checks (not
-just `.get` chains — an API returning `"usage": null` or a wrong-typed field must not
-raise past a request that otherwise succeeded). Because this lives in the *shared*
-base, `openrouter` and `opencode-go`'s `/chat` protocol already log cached tokens even
-though they don't request caching yet — this is harmless, not a sign those backends'
-own caching phases are done.
+(`jsa/agents/_openai_compat.py`) for the `/chat/completions` shape, and in
+`OpenCodeGoBackend._call_messages_api_once` (`jsa/agents/opencode_go.py`) for the
+`/messages` shape — both guarded with `isinstance(..., dict)` checks (not just
+`.get` chains — an API returning `"usage": null` or a wrong-typed field must not
+raise past a request that otherwise succeeded). Because the `/chat/completions`
+logging lives in the *shared* base, `openrouter` and `opencode-go`'s `/chat`
+protocol inherit it automatically — this is not extra code per backend.
 
 **`_extra_payload` takes `system_prompt`.** Any override (currently only
 `MistralBackend` and `OpenRouterBackend`) receives the assembled system prompt as an

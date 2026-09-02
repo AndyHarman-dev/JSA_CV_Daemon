@@ -33,6 +33,7 @@ unmodified (verified via a repo-wide grep before landing this).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Literal
 
@@ -42,6 +43,7 @@ from jsa.agents._openai_compat import (
     OpenAICompatBackend,
     OpenAICompatSessionHandle,
     TransientBackendError,
+    _CacheRejected,
     _NUDGE_TEXT,
     retry_transient,
 )
@@ -54,6 +56,8 @@ from jsa.agents.base import (
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
+
+logger = logging.getLogger(__name__)
 
 _MESSAGES_ENDPOINT = "https://opencode.ai/zen/go/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
@@ -128,6 +132,20 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         self._protocol: Protocol = _PROTOCOL[resolved_model]
         # Instance-level override — see this module's docstring.
         self.supports_structured_output = self._protocol == "chat"
+
+    def _system_content(self, system_prompt: str) -> str | list[dict]:
+        """Speculative ``cache_control`` breakpoint for the ``/chat/completions``
+        protocol — exactly OpenRouter's shape (jsa/agents/openrouter.py), so this
+        inherits the Phase 4 ``_CacheRejected`` degrade-on-4xx from the shared base
+        for free. Speculative because this gateway documents no cache API (see the
+        module docstring's "reference bake-off project found forced tool-use does
+        not take on this gateway path" precedent) — the degrade path is exactly
+        what protects BF-19 if the guess is wrong. Never called for a ``/messages``
+        model; that protocol's own cache_control shape lives in
+        ``_call_messages_api_once`` below."""
+        if not self._prompt_caching:
+            return system_prompt
+        return [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
 
     async def start_session(
         self,
@@ -228,10 +246,30 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             return parse_reply(raw2)  # Propagate on second failure
 
     async def _call_messages_api(self, system_prompt: str, messages: list[dict]) -> str:
-        return await retry_transient(
-            lambda: self._call_messages_api_once(system_prompt, messages),
-            unavailable_message=f"{self.name} API (messages) still failing",
-        )
+        """POST to the /messages endpoint via retry_transient. A ``_CacheRejected``
+        (a permanent 4xx while cache_control fields were present) is caught here,
+        OUTSIDE ``retry_transient``'s budget — same rule and same mechanism as
+        ``OpenAICompatBackend._call_api``'s degrade path (jsa/agents/
+        _openai_compat.py), reused here because the ``/messages`` protocol does not
+        go through that shared ``_call_api`` at all (see this module's docstring's
+        dual-protocol split)."""
+        try:
+            return await retry_transient(
+                lambda: self._call_messages_api_once(system_prompt, messages),
+                unavailable_message=f"{self.name} API (messages) still failing",
+            )
+        except _CacheRejected as exc:
+            logger.warning(
+                "%s (messages) rejected the prompt-cache_control field (%s) — "
+                "disabling prompt caching for this backend instance and retrying "
+                "once without it",
+                self.name, exc,
+            )
+            self._prompt_caching = False
+            return await retry_transient(
+                lambda: self._call_messages_api_once(system_prompt, messages),
+                unavailable_message=f"{self.name} API (messages) still failing",
+            )
 
     async def _call_messages_api_once(self, system_prompt: str, messages: list[dict]) -> str:
         """Single POST to the Anthropic-shape /messages endpoint; classifies and
@@ -249,10 +287,18 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         repeat.
         """
         api_key = self._api_key()
+        system_content: str | list[dict]
+        if self._prompt_caching:
+            system_content = [
+                {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
+            ]
+        else:
+            system_content = system_prompt
+        cache_fields_present = isinstance(system_content, list)
         payload: dict[str, Any] = {
             "model": self._model,
             "max_tokens": 8192,
-            "system": system_prompt,
+            "system": system_content,
             "messages": messages,
         }
         client = httpx.AsyncClient(timeout=self._timeout)
@@ -290,6 +336,9 @@ class OpenCodeGoBackend(OpenAICompatBackend):
                 raise TransientBackendError(detail) from None
             raise AgentBackendUnavailable(detail) from None
 
+        def _permanent_4xx(detail: str) -> Exception:
+            return _CacheRejected(detail) if cache_fields_present else AgentBackendUnavailable(detail)
+
         if isinstance(body, dict) and body.get("type") == "error":
             err = body.get("error", {})
             message = err.get("message", str(err)) if isinstance(err, dict) else str(err)
@@ -297,14 +346,14 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             if err_type == "rate_limit_error" or "rate" in message.lower():
                 raise AgentLimitReached(f"{self.name} API (messages) limit reached: {message}")
             if 400 <= response.status_code < 500:
-                raise AgentBackendUnavailable(f"{self.name} API (messages) error: {message}")
+                raise _permanent_4xx(f"{self.name} API (messages) error: {message}")
             raise TransientBackendError(f"{self.name} API (messages) error: {message}")
 
         if response.status_code >= 400:
             detail = f"{self.name} API (messages) error {response.status_code}: {response.text[:500]}"
             if response.status_code >= 500:
                 raise TransientBackendError(detail)
-            raise AgentBackendUnavailable(detail)
+            raise _permanent_4xx(detail)
 
         content_blocks = body.get("content") or []
         text_parts = [
@@ -317,4 +366,13 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             raise TransientBackendError(
                 f"{self.name} API (messages) returned no text content: {response.text[:500]}"
             )
+        usage = body.get("usage") if isinstance(body, dict) else None
+        if isinstance(usage, dict):
+            cache_read = usage.get("cache_read_input_tokens")
+            cache_creation = usage.get("cache_creation_input_tokens")
+            if cache_read is not None or cache_creation is not None:
+                logger.info(
+                    "%s (messages) cache_read_input_tokens=%s cache_creation_input_tokens=%s",
+                    self.name, cache_read, cache_creation,
+                )
         return content

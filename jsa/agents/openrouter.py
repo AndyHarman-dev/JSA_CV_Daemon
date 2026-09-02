@@ -37,3 +37,16 @@ class OpenRouterBackend(OpenAICompatBackend):
         loudly once. Confirmed by the reference bake-off project
         (openrouter_provider.py). Do not remove this as a simplification."""
         return {"provider": {"require_parameters": True}}
+
+    def _system_content(self, system_prompt: str) -> str | list[dict]:
+        """An explicit ``cache_control: {"type": "ephemeral"}`` breakpoint on the
+        system text block — required for OpenRouter's Anthropic/Qwen/Gemini
+        upstreams to cache at all; harmless for upstreams (OpenAI/DeepSeek/Grok/
+        Groq/Z.AI/Gemini-2.5) that cache automatically. See CLAUDE.md -> "Prompt
+        caching" -> OpenRouter's degrade-on-4xx for why a rejection of this field
+        must not cost this backend its BF-19 slot — that degrade path
+        (``_CacheRejected``, in ``_openai_compat.py``) is keyed off this method
+        returning a list rather than a plain string."""
+        if not self._prompt_caching:
+            return system_prompt
+        return [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]

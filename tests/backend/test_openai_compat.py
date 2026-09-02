@@ -407,6 +407,20 @@ class TestPromptCacheKey:
         assert reply.kind == "final"
 
 
+class TestSystemContentHookDefault:
+    """Phase 4's ``_system_content`` hook default must leave a subclass that never
+    overrides it (Mistral: its caching signal is a top-level ``_extra_payload`` key,
+    not a system-content shape change) byte-unchanged, even with prompt_caching on."""
+
+    async def test_mistral_system_content_stays_a_plain_string(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend(prompt_caching=True)
+            await backend.start_session("shared system prompt", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["messages"][0] == {"role": "system", "content": "shared system prompt"}
+
+
 class TestDowngradeOnUnparseableStructuredReply:
     async def test_non_json_reply_downgrades_and_nudge_recovers(self):
         schema = json_schema_for(Stage.cv_adjust)

@@ -245,4 +245,8 @@ class GeminiBackend(OpenAICompatBackend):
             raise TransientBackendError(
                 f"{self.name} API returned no text content: {response.text[:500]}"
             )
+        usage_metadata = body.get("usageMetadata")
+        cached_tokens = usage_metadata.get("cachedContentTokenCount") if isinstance(usage_metadata, dict) else None
+        if cached_tokens is not None:
+            logger.info("%s API cachedContentTokenCount=%s", self.name, cached_tokens)
         return text

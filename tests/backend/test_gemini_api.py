@@ -474,3 +474,34 @@ class TestDowngradeOnUnparseableStructuredReply:
             await backend.send_message(handle, "next", structured_schema=schema)
         last_payload = mock_client.post.call_args.kwargs["json"]
         assert "responseSchema" not in last_payload["generationConfig"]
+
+
+class TestCachedTokenObservability:
+    """Phase 3 of the prompt-caching plan: Gemini's implicit caching needs no
+    request change, only visibility into usageMetadata.cachedContentTokenCount."""
+
+    async def test_cached_tokens_logged_when_present(self, caplog):
+        body = _gemini_body(FINAL_RAW)
+        body["usageMetadata"] = {"cachedContentTokenCount": 1234}
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            with caplog.at_level("INFO"):
+                backend = GeminiBackend()
+                await backend.start_session("sys", "hi")
+        assert any("cachedContentTokenCount=1234" in r.message for r in caplog.records)
+
+    async def test_missing_usage_metadata_does_not_raise(self):
+        mock_client = _make_mock_client(_gemini_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"
+
+    async def test_wrong_typed_usage_metadata_does_not_raise(self):
+        body = _gemini_body(FINAL_RAW)
+        body["usageMetadata"] = "not-a-dict"
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"

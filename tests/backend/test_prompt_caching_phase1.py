@@ -135,16 +135,21 @@ class TestFactoryForwardsSettingsFlag:
 class TestKillSwitchIsCurrentlyANoOpOnTheWire:
     """Phase 1 wired the switch through with no backend request-shape change yet.
     Mistral stopped being a no-op in Phase 2 (prompt_cache_key) -- see
-    test_openai_compat.py::TestPromptCacheKey for its payload-shape and
-    kill-switch-parity coverage now. OpenRouter, Gemini, and OpenCode-GO remain
-    untouched (Phases 3-5) and stay covered here as still-no-op."""
+    test_openai_compat.py::TestPromptCacheKey. OpenRouter stopped being a no-op in
+    Phase 4 (cache_control breakpoint) -- see test_openrouter.py::
+    TestPromptCacheControl. OpenCode-GO stopped being a no-op in Phase 5 (same
+    cache_control breakpoint on both its protocols) -- see test_opencode_go.py::
+    TestPromptCacheControlChat / TestPromptCacheControlMessages. Gemini is the one
+    backend that is a PERMANENT no-op by design -- implicit caching needs no
+    request-shape change at all (observability only, see gemini_api.py's module
+    docstring) -- so it is the only backend left to cover here."""
 
-    async def test_openrouter_payload_identical_regardless_of_flag(self):
+    async def test_gemini_payload_identical_regardless_of_flag(self):
         payloads = {}
         for caching in (True, False):
-            mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+            mock_client = _make_mock_client({"candidates": [{"content": {"parts": [{"text": FINAL_RAW}]}, "finishReason": "STOP"}]})
             with patch("httpx.AsyncClient", return_value=mock_client):
-                backend = OpenRouterBackend(prompt_caching=caching)
+                backend = GeminiBackend(prompt_caching=caching)
                 await backend.start_session("sys", "hi")
             payloads[caching] = mock_client.post.call_args.kwargs["json"]
         assert payloads[True] == payloads[False]

@@ -128,6 +128,20 @@ class TestMessagesProtocolEndToEnd:
             backend = OpenCodeGoBackend(model="qwen3.8-max")
             await backend.start_session("my system prompt", "hi")
         payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["system"] == [
+            {"type": "text", "text": "my system prompt", "cache_control": {"type": "ephemeral"}}
+        ]
+        assert all(m["role"] != "system" for m in payload["messages"])
+
+    async def test_system_prompt_stays_bare_string_when_prompt_caching_disabled(self):
+        """Phase 5's cache_control breakpoint is speculative (this gateway
+        documents no cache API) and gated on the kill switch — with it off, the
+        payload must stay byte-identical to the pre-Phase-5 shape."""
+        mock_client = _make_mock_client(_messages_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(model="qwen3.8-max", prompt_caching=False)
+            await backend.start_session("my system prompt", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
         assert payload["system"] == "my system prompt"
         assert all(m["role"] != "system" for m in payload["messages"])
 
@@ -244,3 +258,104 @@ class TestMessagesProtocolEndToEnd:
         backend = OpenCodeGoBackend(model="qwen3.8-max")
         with pytest.raises(TypeError, match="OpenAICompatSessionHandle"):
             await backend.send_message(SessionHandle(id="x"), "hi")
+
+
+def _messages_error_body(message: str = "no eligible provider") -> dict:
+    return {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+
+
+class TestPromptCacheControlChat:
+    """Phase 5 of the prompt-caching plan: the /chat/completions protocol reuses
+    OpenAICompatBackend's _system_content hook exactly as OpenRouter does, so it
+    inherits the Phase 4 _CacheRejected degrade-on-4xx from the shared base for
+    free — this class only smoke-tests that OpenCodeGoBackend actually wires the
+    override in (the degrade mechanism itself is covered once, thoroughly, in
+    test_openrouter.py::TestPromptCacheControl)."""
+
+    async def test_cache_control_sent_by_default(self):
+        mock_client = _make_mock_client(_chat_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend()  # glm-5.3, chat
+            await backend.start_session("sys prompt", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["messages"][0] == {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "sys prompt", "cache_control": {"type": "ephemeral"}}
+            ],
+        }
+
+    async def test_prompt_caching_false_is_byte_identical_to_pre_phase5_payload(self):
+        mock_client = _make_mock_client(_chat_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(prompt_caching=False)
+            await backend.start_session("sys prompt", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["messages"][0] == {"role": "system", "content": "sys prompt"}
+
+
+class TestPromptCacheControlMessages:
+    """Phase 5's speculative cache_control breakpoint on the hand-built /messages
+    protocol path, plus its dedicated _CacheRejected degrade-on-4xx wrapper around
+    _call_messages_api (this protocol does not go through the shared _call_api at
+    all, so it needed its own copy of the catch-and-retry-clean logic)."""
+
+    async def test_permanent_4xx_with_cache_fields_degrades_and_retries_clean(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=400, json=MagicMock(return_value=_messages_error_body()), text="x"),
+                MagicMock(status_code=200, json=MagicMock(return_value=_messages_body(FINAL_RAW)), text="y"),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(model="qwen3.8-max")
+            handle, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"
+        assert backend._prompt_caching is False
+        assert mock_client.post.call_count == 2
+        retried_payload = mock_client.post.call_args.kwargs["json"]
+        assert retried_payload["system"] == "sys"
+
+    async def test_permanent_4xx_persists_after_clean_retry_also_fails_as_plain_unavailable(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=400, json=MagicMock(return_value=_messages_error_body()), text="x"),
+                MagicMock(status_code=400, json=MagicMock(return_value=_messages_error_body("bad model")), text="z"),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(model="qwen3.8-max")
+            with pytest.raises(AgentBackendUnavailable) as exc_info:
+                await backend.start_session("sys", "hi")
+        assert type(exc_info.value) is AgentBackendUnavailable
+        assert backend._prompt_caching is False
+
+    async def test_permanent_4xx_without_prompt_caching_does_not_retry(self):
+        mock_client = _make_mock_client(_messages_error_body("bad model"), status_code=400)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(model="qwen3.8-max", prompt_caching=False)
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.start_session("sys", "hi")
+        assert mock_client.post.call_count == 1
+
+    async def test_cache_tokens_logged_when_present(self, caplog):
+        body = _messages_body(FINAL_RAW)
+        body["usage"] = {"cache_read_input_tokens": 111, "cache_creation_input_tokens": 222}
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            with caplog.at_level("INFO"):
+                backend = OpenCodeGoBackend(model="qwen3.8-max")
+                await backend.start_session("sys", "hi")
+        assert "cache_read_input_tokens=111" in caplog.text
+        assert "cache_creation_input_tokens=222" in caplog.text
+
+    async def test_missing_usage_does_not_raise(self):
+        mock_client = _make_mock_client(_messages_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(model="qwen3.8-max")
+            _, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"
