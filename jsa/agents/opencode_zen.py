@@ -389,7 +389,7 @@ class OpenCodeZenBackend(AgentBackend):
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "system", "content": system_prompt}, *messages],
-            "max_tokens": 8192,
+            "max_tokens": 32000,
         }
         if structured_schema is not None:
             payload["response_format"] = {

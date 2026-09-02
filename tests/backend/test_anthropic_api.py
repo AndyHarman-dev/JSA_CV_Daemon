@@ -571,7 +571,7 @@ class TestStructuredForcedToolRequest:
             )
         call_kwargs = mock_client.messages.create.call_args.kwargs
         assert call_kwargs["model"] == "claude-opus-4-7"
-        assert call_kwargs["max_tokens"] == 8192
+        assert call_kwargs["max_tokens"] == 32000
         assert call_kwargs["system"] == [
             {
                 "type": "text",

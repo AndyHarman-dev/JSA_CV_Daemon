@@ -386,7 +386,7 @@ class TestPromptCacheKey:
                 {"role": "system", "content": "shared system prompt"},
                 {"role": "user", "content": "hi"},
             ],
-            "max_tokens": 8192,
+            "max_tokens": 32000,
         }
 
     async def test_cached_tokens_logged(self, caplog):

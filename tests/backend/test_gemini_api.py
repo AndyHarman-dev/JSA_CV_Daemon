@@ -329,7 +329,7 @@ class TestStructuredRequestShape:
             backend = GeminiBackend()
             await backend.start_session("sys", "hi")
         payload = mock_client.post.call_args.kwargs["json"]
-        assert payload["generationConfig"]["maxOutputTokens"] == 8192
+        assert payload["generationConfig"]["maxOutputTokens"] == 32000
 
         schema = json_schema_for(Stage.cv_adjust)
         mock_client2 = _make_mock_client(_structured_final_body(_cv_payload()))
@@ -337,7 +337,7 @@ class TestStructuredRequestShape:
             backend2 = GeminiBackend()
             await backend2.start_session("sys", "hi", structured_schema=schema)
         payload2 = mock_client2.post.call_args.kwargs["json"]
-        assert payload2["generationConfig"]["maxOutputTokens"] == 8192
+        assert payload2["generationConfig"]["maxOutputTokens"] == 32000
 
 
 class TestContentsRoleNormalization:

@@ -56,7 +56,7 @@ truncation check in its sentinel path) is pre-existing behavior this module does
 need to reproduce: Gemini's extraction has one code path regardless of mode, and a
 truncated sentinel reply is just as broken as a truncated structured one — both should
 spend the self-heal budget rather than being handed to the parser as if complete.
-``generationConfig.maxOutputTokens`` is pinned to 8192 (matching every other
+``generationConfig.maxOutputTokens`` is pinned to 32000 (matching every other
 backend's ``max_tokens``) precisely so this check fires against a limit this project
 chose, not whatever Gemini's un-set default happens to be.
 """
@@ -76,7 +76,7 @@ from jsa.schema.turn_models import inline_defs
 logger = logging.getLogger(__name__)
 
 _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-_MAX_OUTPUT_TOKENS = 8192
+_MAX_OUTPUT_TOKENS = 32000
 
 
 class _SchemaRejected(AgentBackendUnavailable):

@@ -297,7 +297,7 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         cache_fields_present = isinstance(system_content, list)
         payload: dict[str, Any] = {
             "model": self._model,
-            "max_tokens": 8192,
+            "max_tokens": 32000,
             "system": system_content,
             "messages": messages,
         }

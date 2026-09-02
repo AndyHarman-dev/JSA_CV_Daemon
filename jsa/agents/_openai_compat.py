@@ -393,7 +393,7 @@ class OpenAICompatBackend(AgentBackend):
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "system", "content": system_content}, *messages],
-            "max_tokens": 8192,
+            "max_tokens": 32000,
         }
         payload.update(self._extra_payload(system_prompt))
         if structured_schema is not None:
