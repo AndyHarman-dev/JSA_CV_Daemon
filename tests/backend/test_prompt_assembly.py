@@ -103,3 +103,37 @@ class TestStructuredModeComposition:
         schema = json_schema_for(Stage.revising_cl)
         result = assemble_system_prompt("BASE PROMPT", language="en", structured_model=schema)
         assert json.dumps(schema, indent=2) in result
+
+
+class TestForResume:
+    """Regression coverage for the stuck-job bug: structured-capable backends are
+    wire-stateless and resend the system prompt on every restore_session/send_message
+    call, so the structured contract must be re-appended on resume or the model loses
+    the kind/question/payload explanation and can loop forever re-asking its opening
+    question (confirmed live against a cv_adjust job on opencode-go/longcat-2.0)."""
+
+    def test_structured_resume_still_gets_contract(self):
+        schema = json_schema_for(Stage.cv_adjust)
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="en", structured_model=schema, for_resume=True
+        )
+        assert "## Structured output contract" in result
+        assert json.dumps(schema, indent=2) in result
+
+    def test_structured_resume_never_gets_language_directive(self):
+        # Unchanged invariant (CLAUDE.md → "Language preference"): a resumed session
+        # never gets the language directive re-injected, structured mode included.
+        schema = json_schema_for(Stage.cover_letter)
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="fr", structured_model=schema, for_resume=True
+        )
+        assert "## Structured output contract" in result
+        assert "## Output language" not in result
+
+    def test_sentinel_resume_is_unchanged_bare_prompt(self):
+        # CLI-backend behavior (structured_model=None) must stay exactly what every
+        # restore_session call site already relied on: the bare prompt, untouched.
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="fr", structured_model=None, for_resume=True
+        )
+        assert result == "BASE PROMPT"
