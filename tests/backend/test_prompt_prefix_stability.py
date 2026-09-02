@@ -21,10 +21,21 @@ import sys
 
 import pytest
 
-from jsa.db.models import Stage
+from jsa.db.models import Job, JobState, Stage
 from jsa.pipeline.prompt_assembly import assemble_system_prompt
+from jsa.pipeline.stages import _build_fit_user_msg, _build_initial_user_msg, _get_system_prompt
 from jsa.prompts.loader import read_prompt
 from jsa.schema.turn_models import json_schema_for
+
+# One prompt-file name + Stage enum member per stage that actually reaches
+# assemble_system_prompt in stages.py (fit_assessment, cv_adjust, cover_letter —
+# revising_cv/revising_cl reuse cv_adjust/cover_letter's prompt file, see
+# _get_system_prompt, so they are not separate cases here).
+_CASES = [
+    ("fit_assessment", Stage.fit_assessment),
+    ("cv_adjust", Stage.cv_adjust),
+    ("cover_letter", Stage.cover_letter),
+]
 
 _SUBPROCESS_SNIPPET = """
 import hashlib
@@ -34,26 +45,27 @@ from jsa.prompts.loader import read_prompt
 from jsa.schema.turn_models import json_schema_for
 
 prompt = assemble_system_prompt(
-    read_prompt("cv_adjust"),
+    read_prompt({prompt_name!r}),
     language="en",
-    structured_model=json_schema_for(Stage.cv_adjust),
+    structured_model=json_schema_for(Stage.{stage_name}),
 )
 print(hashlib.sha256(prompt.encode("utf-8")).hexdigest())
 """
 
 
-def _assembled_prompt_hash() -> str:
+def _assembled_prompt_hash(prompt_name: str, stage: Stage) -> str:
     prompt = assemble_system_prompt(
-        read_prompt("cv_adjust"),
+        read_prompt(prompt_name),
         language="en",
-        structured_model=json_schema_for(Stage.cv_adjust),
+        structured_model=json_schema_for(stage),
     )
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
-def _subprocess_hash(pythonhashseed: str) -> str:
+def _subprocess_hash(prompt_name: str, stage: Stage, pythonhashseed: str) -> str:
+    snippet = _SUBPROCESS_SNIPPET.format(prompt_name=prompt_name, stage_name=stage.name)
     result = subprocess.run(
-        [sys.executable, "-c", _SUBPROCESS_SNIPPET],
+        [sys.executable, "-c", snippet],
         capture_output=True,
         text=True,
         env={"PYTHONHASHSEED": pythonhashseed, **_inherited_env()},
@@ -77,18 +89,97 @@ def _inherited_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k != "PYTHONHASHSEED"}
 
 
-def test_assembled_system_prompt_is_byte_stable_within_process():
-    first = _assembled_prompt_hash()
-    second = _assembled_prompt_hash()
+@pytest.mark.parametrize("prompt_name,stage", _CASES, ids=[c[0] for c in _CASES])
+def test_assembled_system_prompt_is_byte_stable_within_process(prompt_name, stage):
+    first = _assembled_prompt_hash(prompt_name, stage)
+    second = _assembled_prompt_hash(prompt_name, stage)
     assert first == second
 
 
+@pytest.mark.parametrize("prompt_name,stage", _CASES, ids=[c[0] for c in _CASES])
 @pytest.mark.parametrize("pythonhashseed", ["0", "1"])
-def test_assembled_system_prompt_is_byte_stable_across_processes(pythonhashseed):
-    in_process = _assembled_prompt_hash()
-    out_of_process = _subprocess_hash(pythonhashseed)
+def test_assembled_system_prompt_is_byte_stable_across_processes(prompt_name, stage, pythonhashseed):
+    in_process = _assembled_prompt_hash(prompt_name, stage)
+    out_of_process = _subprocess_hash(prompt_name, stage, pythonhashseed)
     assert out_of_process == in_process, (
-        f"assembled system prompt hash differs under PYTHONHASHSEED={pythonhashseed} "
-        "— prompt caching would silently never hit across server restarts; sort the "
-        "non-deterministic collection at the point it is built (see plan Phase 0)"
+        f"assembled system prompt hash for {prompt_name!r} differs under "
+        f"PYTHONHASHSEED={pythonhashseed} — prompt caching would silently never hit "
+        "across server restarts; sort the non-deterministic collection at the point "
+        "it is built (see plan Phase 0)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-job prefix identity: the plan's actual value claim is that every job at a
+# given (stage, language, structured-mode) sends a BYTE-IDENTICAL system prefix —
+# not just that one job's prefix is stable across restarts. That only holds if no
+# job-derived byte (JD, company, role, CV structure, research brief) ever lands in
+# the system prompt. stages.py's design keeps all of that in the *initial user
+# message* (_build_initial_user_msg / _build_fit_user_msg) instead — this test
+# pins that split directly, against two jobs with deliberately different content,
+# rather than relying on assemble_system_prompt's signature not accepting a job.
+# ---------------------------------------------------------------------------
+
+
+def _make_job(**overrides) -> Job:
+    data = dict(
+        id="job-a",
+        company="Acme Corp",
+        role="Senior Widget Engineer",
+        link="https://example.com/jobs/1",
+        tier="A",
+        jd="Build widgets at scale. Requires 5 years of widget experience.",
+        jd_hash="hash0000deadbeef",
+        cv_text="unused",
+    )
+    data.update(overrides)
+    return Job(**data, state=JobState.pending)
+
+
+class TestCrossJobSystemPromptIdentity:
+    def test_get_system_prompt_ignores_the_job_entirely(self):
+        """_get_system_prompt(stage) takes no job argument at all -- the strongest
+        possible guarantee, checked here so a future signature change trips this
+        test instead of silently reintroducing job-derived bytes."""
+        import inspect
+
+        sig = inspect.signature(_get_system_prompt)
+        assert list(sig.parameters) == ["stage"]
+
+    def test_two_jobs_with_different_jd_and_company_yield_identical_system_prompt(self):
+        job_a = _make_job(id="job-a", company="Acme Corp", role="Widget Engineer", jd="Widgets.")
+        job_b = _make_job(id="job-b", company="Globex Inc", role="Gadget Architect", jd="Gadgets, at a totally different scale, forever.")
+
+        for stage in (Stage.cv_adjust, Stage.cover_letter):
+            prompt = _get_system_prompt(stage)
+            # The system prompt is a pure function of `stage` -- calling it twice
+            # regardless of which job is "in scope" must be identical.
+            assert prompt == _get_system_prompt(stage)
+
+        # The job-derived content actually differs between the two jobs...
+        msg_a = _build_initial_user_msg(job_a, brief=None)
+        msg_b = _build_initial_user_msg(job_b, brief=None)
+        assert msg_a != msg_b
+        assert job_a.jd in msg_a and job_a.jd not in msg_b
+        assert job_b.jd in msg_b and job_b.jd not in msg_a
+
+        # ...and none of it ever appears in the system prompt for either stage.
+        for stage, prompt_name in ((Stage.cv_adjust, "cv_adjust"), (Stage.cover_letter, "cover_letter")):
+            system_prompt = read_prompt(prompt_name)
+            for job in (job_a, job_b):
+                assert job.jd not in system_prompt
+                assert job.company not in system_prompt
+                assert job.role not in system_prompt
+
+    def test_fit_assessment_job_data_stays_out_of_the_system_prompt_too(self):
+        job_a = _make_job(id="job-a", company="Acme Corp", jd="Widgets.")
+        job_b = _make_job(id="job-b", company="Globex Inc", jd="Gadgets, at a totally different scale.")
+
+        msg_a = _build_fit_user_msg(job_a, base_structure=None)
+        msg_b = _build_fit_user_msg(job_b, base_structure=None)
+        assert msg_a != msg_b
+
+        system_prompt = read_prompt("fit_assessment")
+        for job in (job_a, job_b):
+            assert job.jd not in system_prompt
+            assert job.company not in system_prompt

@@ -399,6 +399,45 @@ a timing-sensitive thread-start test that fails only under full-suite parallel l
 passes in isolation — unrelated to this change, not investigated further). Verified:
 proceed to Phase 1.
 
+**2026-09-02 (same session, advisor follow-up)**: the advisor flagged that Phase 0's
+original test only proved *rendering* determinism, not the plan's actual value claim
+("every job at a given (stage, language, structured-mode) sends a byte-identical
+system prefix" — a cross-job claim, not a same-input-twice claim). Verified directly
+by reading `stages.py`'s three real call sites (`run_stage` for cv_adjust/cover_letter/
+their revision variants, and `_run_fit_assessment`): `_get_system_prompt(stage)` takes
+no job argument at all, and all job-derived content (JD, company, role, CV structure,
+research brief) is built exclusively by `_build_initial_user_msg`/`_build_fit_user_msg`
+into the *initial user message*, never the system prompt — confirmed by reading, not
+assumed. Strengthened `test_prompt_prefix_stability.py`: parametrized the existing
+hash tests over all three stages (`fit_assessment`, `cv_adjust`, `cover_letter` — not
+just `cv_adjust`), and added `TestCrossJobSystemPromptIdentity`, which constructs two
+jobs with deliberately different JD/company/role and asserts (a) `_get_system_prompt`'s
+signature takes only `stage`, (b) the two jobs' initial user messages differ and each
+contains only its own JD, and (c) neither job's JD/company/role ever appears in the
+raw prompt file text. All 12 tests pass. Also grepped `_extra_payload` repo-wide ahead
+of Phase 2 (which changes its signature): exactly one call site
+(`_openai_compat.py:352`) and one override (`OpenRouterBackend`), no test calls it
+directly — Phase 2's signature change is unblocked.
+
+**2026-09-02**: Phase 1 — kill switch. Added `Settings.prompt_caching: bool = True`
+(`JSA_PROMPT_CACHING`); `--prompt-caching`/`--no-prompt-caching` CLI flag (tri-state
+`Optional[bool]`, only overrides when explicitly passed, mirroring `--fit-model`'s
+override pattern); `OpenAICompatBackend.__init__` gained `prompt_caching: bool = True`
+stored as `self._prompt_caching` (inherited unchanged by `MistralBackend`,
+`OpenRouterBackend`, `GeminiBackend`, none of which override `__init__`);
+`OpenCodeGoBackend.__init__` forwards the kwarg to `super().__init__`.
+`make_backend_factory` forwards `prompt_caching=settings.prompt_caching` in exactly
+the `mistral`/`openrouter`/`gemini`/`opencode-go` branches — confirmed `opencode-zen`,
+`claude-cli`, `google-cli`, and `anthropic` (Phase 6, not yet wired) all still
+construct without the kwarg. Added `tests/backend/test_prompt_caching_phase1.py` (24
+tests): Settings default/env override, ctor default+override on all four backends,
+factory forwarding (both values, all four backends), the four untouched backends
+still construct fine, and a same-payload assertion proving the switch is currently a
+true no-op on the wire (Phase 1 adds no request field yet — that starts at Phase 2).
+Manually smoke-tested `--help` shows the new flag. Full suite: `pytest -q -m "not
+integration"` → 1669 passed, 2 skipped (dev_tunnel flake from the Phase 0 run did not
+reproduce). Verified: proceed to Phase 2.
+
 ## Decisions Log
 
 *(reserved for the user)*
