@@ -104,6 +104,25 @@ class TestStructuredModeComposition:
         result = assemble_system_prompt("BASE PROMPT", language="en", structured_model=schema)
         assert json.dumps(schema, indent=2) in result
 
+    def test_question_field_self_containment_instruction_present_for_non_fit(self):
+        """Regression for the parked-with-no-strategy bug: opencode-zen/opencode-go
+        models (e.g. nemotron-3.5-lightning-free) returned a bare confirmation
+        question — {"kind":"question","question":"Shall I proceed...","payload":null}
+        — with the Phase-1 written strategy nowhere in the reply, because the schema
+        gives `kind: "question"` turns nowhere else to put it and the contract never
+        said `question` must be self-contained. Confirmed live against two parked
+        cv_adjust jobs (jsa.sqlite, both backend_name=opencode-zen)."""
+        schema = json_schema_for(Stage.cv_adjust)
+        result = assemble_system_prompt("BASE PROMPT", language="en", structured_model=schema)
+        assert "ONLY field the user will see on a question turn" in result
+
+    def test_question_field_self_containment_instruction_absent_for_fit(self):
+        schema = json_schema_for(Stage.fit_assessment)
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="en", structured_model=schema, fit_verdict=True
+        )
+        assert "ONLY field the user will see on a question turn" not in result
+
 
 class TestForResume:
     """Regression coverage for the stuck-job bug: structured-capable backends are
