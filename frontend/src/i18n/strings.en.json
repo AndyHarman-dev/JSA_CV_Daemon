@@ -219,5 +219,8 @@
   "launch.launchAll": "LAUNCH ALL",
   "boot.pickerCaption": "SELECT OUTPUT LANGUAGE BEFORE FIRST RUN",
   "boot.confirmAndBoot": "CONFIRM & BOOT",
-  "boot.setLanguageFailed": "Could not save language preference. Please try again."
+  "boot.setLanguageFailed": "Could not save language preference. Please try again.",
+  "toast.backendSwitched": "{job}: backend switched {from} → {to}. Any pending question was re-asked on the new backend.",
+  "toast.modelSwitched": "{job}: model switched {from} → {to}. Any pending question was re-asked on the new model.",
+  "toast.dismissTitle": "Dismiss"
 }

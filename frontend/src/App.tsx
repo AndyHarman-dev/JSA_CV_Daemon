@@ -7,6 +7,7 @@ import { JobDetail } from "./components/JobDetail";
 import { CvEditor } from "./components/cv-editor/CvEditor";
 import { ScratchBuffer } from "./components/ScratchBuffer";
 import { BootGate } from "./components/BootGate";
+import { Toast } from "./components/Toast";
 import { SHELL_THEME } from "./theme/tokens";
 import { Ambient } from "./theme/Ambient";
 
@@ -44,6 +45,7 @@ function App() {
         <>
           {editorOpen && <CvEditor />}
           <ScratchBuffer />
+          <Toast />
           <Ambient T={T} label="JSA_DAEMON" />
           <Header />
           <div className="flex flex-1 overflow-hidden" style={{ position: "relative", zIndex: 1 }}>

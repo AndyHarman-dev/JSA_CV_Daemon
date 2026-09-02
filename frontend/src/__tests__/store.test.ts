@@ -40,6 +40,7 @@ beforeEach(() => {
     language: "en",
     languages: [],
     cvStructureExists: null,
+    toasts: [],
   });
   vi.clearAllMocks();
 });
@@ -164,6 +165,79 @@ describe("applyEvent - model_switched event", () => {
     await Promise.resolve();
 
     expect(api.getJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it("pushes a toast with the job's company/role label", async () => {
+    useStore.getState().upsertJob(makeJob({ id: "job1", company: "Acme", role: "Engineer" }));
+
+    useStore.getState().applyEvent({
+      type: "model_switched",
+      job_id: "job1",
+      backend: "opencode-go",
+      from_model: "glm-5.3",
+      to_model: "kimi-k2.6",
+    });
+
+    const toasts = useStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({
+      jobId: "job1",
+      jobLabel: "Acme — Engineer",
+      kind: "model",
+      from: "glm-5.3",
+      to: "kimi-k2.6",
+    });
+  });
+});
+
+describe("applyEvent - backend_switched event", () => {
+  it("pushes a toast falling back to the raw job id when the job isn't known locally", async () => {
+    useStore.getState().applyEvent({
+      type: "backend_switched",
+      job_id: "unknown-job",
+      from_backend: "opencode-zen",
+      to_backend: "opencode-go",
+    });
+
+    const toasts = useStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({
+      jobId: "unknown-job",
+      jobLabel: "unknown-job",
+      kind: "backend",
+      from: "opencode-zen",
+      to: "opencode-go",
+    });
+  });
+
+  it("caps the toast queue at 5 entries", () => {
+    for (let i = 0; i < 8; i++) {
+      useStore.getState().applyEvent({
+        type: "backend_switched",
+        job_id: `job${i}`,
+        from_backend: "opencode-zen",
+        to_backend: "opencode-go",
+      });
+    }
+    expect(useStore.getState().toasts).toHaveLength(5);
+    // Keeps the most recent, drops the oldest.
+    expect(useStore.getState().toasts[4].jobId).toBe("job7");
+  });
+});
+
+describe("dismissToast", () => {
+  it("removes the toast with the given id", () => {
+    useStore.getState().applyEvent({
+      type: "backend_switched",
+      job_id: "job1",
+      from_backend: "opencode-zen",
+      to_backend: "opencode-go",
+    });
+    const id = useStore.getState().toasts[0].id;
+
+    useStore.getState().dismissToast(id);
+
+    expect(useStore.getState().toasts).toHaveLength(0);
   });
 });
 

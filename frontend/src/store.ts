@@ -9,6 +9,19 @@ interface BackendSwitchEvent {
   to_backend: string;
 }
 
+// A user-facing notification for a BF-19 backend/model switch (jsa/events/schema.py's
+// BackendSwitchedEvent / ModelSwitchedEvent). These fire mid-conversation — e.g. a
+// follow-up question gets silently re-asked on the new backend/model after a switch —
+// so the toast exists to explain that apparent hang/repeat, not just log it to console.
+export interface ToastItem {
+  id: string;
+  jobId: string;
+  jobLabel: string; // "{company} — {role}", or jobId if the job isn't in the local map
+  kind: "backend" | "model";
+  from: string;
+  to: string;
+}
+
 interface Store {
   jobs: Record<string, JobDTO>;
   selectedId: string | undefined;
@@ -17,6 +30,10 @@ interface Store {
   // Most recent `backend_switched` WS event — additive signal so surfaces (e.g. Header's
   // backend cluster) can react without changing applyEvent's per-type behavior for others.
   lastBackendSwitch: BackendSwitchEvent | null;
+  // Queue of live backend/model-switch notifications for Toast.tsx (bottom-right stack).
+  // Independent of `lastBackendSwitch` above (Header's backend-cluster reordering signal) —
+  // this is the user-visible "why did my answered question just get asked again" surface.
+  toasts: ToastItem[];
   // Global output/UI language preference (ISO 639-1 code). Hydrated from GET /api/preferences
   // on app boot; every component rendering translatable chrome reads this via useT().
   language: string;
@@ -46,6 +63,8 @@ interface Store {
   setWsStatus(s: Store["wsStatus"]): void;
   setEditorOpen(open: boolean): void;
   setCvStructureExists(exists: boolean): void;
+  dismissToast(id: string): void;
+  jobLabelFor(id: string): string;
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
   removeJob(id: string): void;
@@ -64,6 +83,7 @@ export const useStore = create<Store>((set, get) => ({
   wsStatus: "connecting",
   editorOpen: false,
   lastBackendSwitch: null,
+  toasts: [],
   language: "en",
   languages: [],
   selectLanguageMode: false,
@@ -99,6 +119,15 @@ export const useStore = create<Store>((set, get) => ({
     set({ cvStructureExists: exists });
   },
 
+  dismissToast(id: string) {
+    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
+  },
+
+  jobLabelFor(id: string) {
+    const job = get().jobs[id];
+    return job ? `${job.company} — ${job.role}` : id;
+  },
+
   removeJob(id: string) {
     set((state) => {
       const { [id]: _, ...remaining } = state.jobs;
@@ -131,6 +160,19 @@ export const useStore = create<Store>((set, get) => ({
             from_backend: e.from_backend,
             to_backend: e.to_backend,
           },
+          // Capped at 5 — a stuck/unmounted Toast surface (e.g. a background tab) must not
+          // grow this array without bound.
+          toasts: [
+            ...store.toasts,
+            {
+              id: `backend-${e.job_id}-${Date.now()}`,
+              jobId: e.job_id,
+              jobLabel: store.jobLabelFor(e.job_id),
+              kind: "backend" as const,
+              from: e.from_backend,
+              to: e.to_backend,
+            },
+          ].slice(-5),
         });
         store.refetchAll().catch((err: unknown) => {
           console.error("refetchAll failed:", err);
@@ -145,6 +187,19 @@ export const useStore = create<Store>((set, get) => ({
         console.info(
           `[JSA] Model switched for job ${e.job_id} on ${e.backend}: ${e.from_model} → ${e.to_model}`
         );
+        set({
+          toasts: [
+            ...store.toasts,
+            {
+              id: `model-${e.job_id}-${Date.now()}`,
+              jobId: e.job_id,
+              jobLabel: store.jobLabelFor(e.job_id),
+              kind: "model" as const,
+              from: e.from_model,
+              to: e.to_model,
+            },
+          ].slice(-5),
+        });
         store.refetchAll().catch((err: unknown) => {
           console.error("refetchAll failed:", err);
         });
