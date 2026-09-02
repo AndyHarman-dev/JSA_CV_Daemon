@@ -68,6 +68,17 @@ class BackendSwitchedEvent:
 
 
 @dataclass
+class ModelSwitchedEvent:
+    """Emitted when a job hops to the next model rung on the SAME backend
+    (model-first fallback ladder, tried before the BF-19 backend advance)."""
+    type: Literal["model_switched"] = "model_switched"
+    job_id: str = ""
+    backend: str = ""
+    from_model: str = ""
+    to_model: str = ""
+
+
+@dataclass
 class InferProgressEvent:
     """Progress for a standalone CV-structure inference task (no job).
 

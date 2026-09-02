@@ -265,6 +265,11 @@ async def soft_reset_job(session: AsyncSession, job: Job) -> None:
 
     job.retry_count = 1
     job.error = None
+    # A job that burned its model ladder must not restart permanently pinned to the
+    # priciest rung it reached — that would be a silent, surprising expensive-model
+    # default on the next attempt, contradicting the whole point of the ladder.
+    job.model_name = None
+    job.model_hops = 0
     job.updated_at = datetime.utcnow()
     session.add(job)
     await session.commit()
@@ -288,6 +293,10 @@ async def nuclear_reset_job(session: AsyncSession, job: Job) -> None:
     job.session_external_id = None
     job.error = None
     job.retry_count = 0
+    # Same reasoning as soft_reset_job above — a full reset must not carry forward a
+    # stale model-ladder rung either.
+    job.model_name = None
+    job.model_hops = 0
     transition(job, JobState.pending, None)
     job.updated_at = datetime.utcnow()
     session.add(job)
@@ -299,6 +308,9 @@ async def backend_switch_reset(
     job: Job,
     new_backend_name: str,
     failed_stage: "Stage",
+    *,
+    new_model_name: str | None = None,
+    increment_model_hops: bool = False,
 ) -> None:
     """Reset job state after AgentLimitReached so the new backend starts fresh (BF-19).
 
@@ -316,10 +328,25 @@ async def backend_switch_reset(
 
     Session IDs for the failed stage are cleared so run_stage takes the
     fresh-session branch on the next dispatch.
+
+    `new_model_name` / `increment_model_hops` (Phase 4, model-first fallback ladder):
+    when this call is a model-ladder HOP (same backend, next model rung),
+    `new_backend_name` is simply `job.backend_name` unchanged and the caller passes
+    `new_model_name=<next rung>`, `increment_model_hops=True`. When this call is a
+    genuine BACKEND advance (or the ladder is exhausted/inapplicable), the caller
+    passes neither — the unconditional assignment below then nulls `model_name` and
+    zeroes `model_hops` for every existing backend-advance call site with no extra
+    code, so a new backend always starts at its own entry point rather than
+    inheriting a rung it may not even host. Both fields land in this function's
+    single existing commit, satisfying the Checkpoint rule (CLAUDE.md) — assigning
+    them after this call returns would be a second, uncommitted transaction that
+    silently drops the hop.
     """
     from jsa.pipeline.state_machine import transition, set_current_stage
 
     job.backend_name = new_backend_name
+    job.model_name = new_model_name
+    job.model_hops = job.model_hops + 1 if increment_model_hops else 0
 
     if failed_stage in (Stage.revising_cv, Stage.revising_cl):
         # Delete revision-stage Messages and ALL FollowUps for this revision.

@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse as _FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from jsa.agents import model_catalog, model_costs
 from jsa.agents.base import AgentBackend
 from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
@@ -30,13 +31,53 @@ from jsa.store import backend_models as backend_models_store
 logger = logging.getLogger(__name__)
 
 
+def _flat_default_model(settings: Settings, name: str) -> str | None:
+    """The backend's flat per-backend default model (`settings.model` /
+    `settings.opencode_zen_model` / ...), or None for `google-cli` (no model concept).
+
+    Single source of truth for the backend→flat-default mapping, shared by
+    `make_backend_factory`'s `_model_for` and `Orchestrator`'s `model_resolver` (used
+    by the Phase 4 model ladder to know a job's *implicit* starting rung when
+    `job.model_name` is still unset). Do not re-derive this mapping at a new call
+    site — CLAUDE.md documents that doing so once cost the fit gate a 600s timeout
+    instead of 180s.
+    """
+    return {
+        "anthropic": settings.model,
+        "opencode-zen": settings.opencode_zen_model,
+        "mistral": settings.mistral_model,
+        "openrouter": settings.openrouter_model,
+        "gemini": settings.gemini_model,
+        "opencode-go": settings.opencode_go_model,
+        "claude-cli": settings.model,
+        "google-cli": None,
+    }.get(name)
+
+
+def make_model_resolver(settings: Settings) -> Callable[[str], str | None]:
+    """Backend name -> the model a job on it would use if it has never hopped.
+
+    `settings.backend_models[name]` (the runtime UI selection) if set, else that
+    backend's flat default. Deliberately does NOT apply `model_override`
+    (`--fit-model`) — the ladder's per-job rung is a *general*-pipeline concept; the
+    fit gate's pinned model is resolved separately and always wins over any rung, see
+    `make_backend_factory`'s `_model_for`.
+    """
+
+    def _resolve(name: str) -> str | None:
+        return settings.backend_models.get(name) or _flat_default_model(settings, name)
+
+    return _resolve
+
+
 def make_backend_factory(
     settings: Settings,
     *,
     model_override: str | None = None,
     timeout_override: float | None = None,
-) -> Callable[[str], AgentBackend]:
-    """Instantiate a backend by name, forwarding the appropriate settings.
+) -> Callable[[str, str | None], AgentBackend]:
+    """Instantiate a backend by name (+ optional per-call model), forwarding the
+    appropriate settings.
 
     Shared by the app's startup (orchestrator + the CV-structure infer endpoint) and
     the CLI's one-shot bootstrap infer call, so both construct backends identically.
@@ -49,61 +90,67 @@ def make_backend_factory(
     The `fit_assessment` stage is the one caller that passes them — see
     `Settings.fit_model` / `Settings.fit_timeout`.
 
-    Model precedence (when `model_override` is None): `settings.backend_models[name]`
-    (the runtime selection made via PUT /api/backend-models, re-read on every call so a
-    live change reaches the next dispatch) if set, else that backend's flat per-backend
-    default (`settings.model` / `settings.opencode_zen_model`). An explicit
-    `model_override` always wins over both — this is what keeps the fit gate's
-    `--fit-model` pinned regardless of runtime model-selection changes.
+    Model precedence: an explicit `model_override` (`--fit-model`) ALWAYS wins,
+    immovable by anything downstream — this is what makes Phase 4's pinned-fit escape
+    sound (a model-ladder hop on a `--fit-model`-pinned fit stage would otherwise be
+    silently overridden right back to the pinned model, defeating the whole point of
+    hopping). Next, the per-call `model` argument (a job's current model-ladder rung,
+    passed by the orchestrator) — this is deliberately ABOVE the runtime UI selection,
+    because a job mid-ladder-hop must keep running its hopped-to rung even if the user
+    changes the dropdown while it's in flight. Only when neither is present does this
+    fall through to `settings.backend_models[name]` (the runtime selection), then the
+    backend's flat per-backend default.
     """
 
-    def _model_for(name: str, default: str) -> str:
+    def _model_for(name: str, default: str, per_call: str | None = None) -> str:
         if model_override is not None:
             return model_override
+        if per_call is not None:
+            return per_call
         return settings.backend_models.get(name) or default
 
-    def _backend_factory(name: str) -> AgentBackend:
+    def _backend_factory(name: str, model: str | None = None) -> AgentBackend:
         if name == "anthropic":
-            model = _model_for("anthropic", settings.model)
+            resolved = _model_for("anthropic", settings.model, model)
             timeout = settings.anthropic_timeout if timeout_override is None else timeout_override
-            return backend_for("anthropic", model=model, timeout=timeout)
+            return backend_for("anthropic", model=resolved, timeout=timeout)
 
         if name == "opencode-zen":
             # opencode-zen has its own model catalog (nemotron/gpt/gemini/claude
             # mirrors, not JSA's Claude-only `model` setting), so it never falls
-            # back to `settings.model` — only an explicit override or a runtime
-            # selection for "opencode-zen" applies.
-            model = _model_for("opencode-zen", settings.opencode_zen_model)
+            # back to `settings.model` — only an explicit override, a per-call
+            # ladder rung, or a runtime selection for "opencode-zen" applies.
+            resolved = _model_for("opencode-zen", settings.opencode_zen_model, model)
             timeout = settings.opencode_zen_timeout if timeout_override is None else timeout_override
-            return backend_for("opencode-zen", model=model, timeout=timeout)
+            return backend_for("opencode-zen", model=resolved, timeout=timeout)
 
         if name == "mistral":
-            model = _model_for("mistral", settings.mistral_model)
+            resolved = _model_for("mistral", settings.mistral_model, model)
             timeout = settings.mistral_timeout if timeout_override is None else timeout_override
-            return backend_for("mistral", model=model, timeout=timeout)
+            return backend_for("mistral", model=resolved, timeout=timeout)
 
         if name == "openrouter":
-            model = _model_for("openrouter", settings.openrouter_model)
+            resolved = _model_for("openrouter", settings.openrouter_model, model)
             timeout = settings.openrouter_timeout if timeout_override is None else timeout_override
-            return backend_for("openrouter", model=model, timeout=timeout)
+            return backend_for("openrouter", model=resolved, timeout=timeout)
 
         if name == "gemini":
-            model = _model_for("gemini", settings.gemini_model)
+            resolved = _model_for("gemini", settings.gemini_model, model)
             timeout = settings.gemini_timeout if timeout_override is None else timeout_override
-            return backend_for("gemini", model=model, timeout=timeout)
+            return backend_for("gemini", model=resolved, timeout=timeout)
 
         if name == "opencode-go":
-            model = _model_for("opencode-go", settings.opencode_go_model)
+            resolved = _model_for("opencode-go", settings.opencode_go_model, model)
             timeout = settings.opencode_go_timeout if timeout_override is None else timeout_override
-            return backend_for("opencode-go", model=model, timeout=timeout)
+            return backend_for("opencode-go", model=resolved, timeout=timeout)
 
         timeout = settings.agent_timeout if timeout_override is None else timeout_override
         if name == "claude-cli":
-            model = _model_for("claude-cli", settings.model)
-            return backend_for(name, model=model, timeout=timeout)
+            resolved = _model_for("claude-cli", settings.model, model)
+            return backend_for(name, model=resolved, timeout=timeout)
         # google-cli: GoogleCliBackend.__init__ takes no `model` — the agy CLI has no
-        # model flag — so a model override or runtime selection is silently
-        # inapplicable to that backend.
+        # model flag — so a model override, per-call rung, or runtime selection is
+        # silently inapplicable to that backend.
         return backend_for(name, timeout=timeout)
 
     return _backend_factory
@@ -169,6 +216,15 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
         # a selection made in a previous run is honored from the very first dispatch.
         _saved_models = await backend_models_store.load(settings)
         settings.backend_models.update(_saved_models.selected)
+        # Snapshot at startup for the model ladder's curated catalog (Phase 4 reads this,
+        # never a live listing — a failure path must not depend on a network call to the
+        # provider that is already failing). A catalog edit made later via the UI needs a
+        # restart to reach the ladder; this is a deliberate, documented limitation.
+        _catalog_overrides = _saved_models.catalog
+
+        def _model_ladder(backend_name: str) -> list[str]:
+            models = model_catalog.merged_catalog(_catalog_overrides).get(backend_name, [])
+            return model_costs.cost_ordered(backend_name, models)
 
         # Exposed for the job-less CV-structure infer endpoint (routes_cv_structure), which
         # needs a backend the same way the orchestrator does. Tests override this post-startup.
@@ -210,6 +266,11 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
             # start of each worker, so N simultaneous launches don't hit one API key at once.
             max_parallel_per_backend=settings.max_parallel_per_backend,
             dispatch_stagger_seconds=settings.dispatch_stagger_seconds,
+            # Model-first fallback ladder (Phase 4): try the next model on the SAME backend
+            # before advancing to the next backend, on availability failures only.
+            model_ladder=_model_ladder,
+            model_resolver=make_model_resolver(settings),
+            fit_model_pinned=settings.fit_model is not None,
         )
         app.state.orchestrator = orchestrator
 

@@ -53,6 +53,8 @@ class Job(Base):
     cv_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cv_adjust stage
     cl_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)  # resume token for cover_letter stage
     backend_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # active backend for this job (BF-19)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # active model rung for this job (model ladder); None = not yet hopped
+    model_hops: Mapped[int] = mapped_column(Integer, default=0)  # number of model-ladder hops taken (capped at 5)
     language: Mapped[str | None] = mapped_column(String(8), nullable=True)  # snapshot of the global language pref, set on LAUNCH; null until launched (falls back to the live global pref)
     fit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # agent's reason when state==unfit
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

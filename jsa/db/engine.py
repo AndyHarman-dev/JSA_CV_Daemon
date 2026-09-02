@@ -61,6 +61,18 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE revision_requests ADD COLUMN origin_state VARCHAR(24)"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # model_name / model_hops: per-job model-ladder tracking (BF-19 model-first
+        # fallback). Two separate try/except blocks, deliberately not one — if a DB
+        # already has model_name (partial prior migration) but not model_hops, a single
+        # block would raise on the first ALTER and skip the second forever.
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN model_name TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN model_hops INTEGER NOT NULL DEFAULT 0"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

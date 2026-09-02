@@ -12,6 +12,7 @@ from typing import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from jsa.agents import model_catalog, model_costs
 from jsa.agents.base import AgentBackend, AgentBackendUnavailable, AgentLimitReached, AgentTimeout
 from jsa.agents.google_cli import GoogleCliSessionExpiredError
 from jsa.db import repo
@@ -21,6 +22,7 @@ from jsa.events.schema import (
     BackendSwitchedEvent,
     ErrorEvent,
     LogEvent,
+    ModelSwitchedEvent,
     StatusChangedEvent,
     event_to_dict,
 )
@@ -57,31 +59,55 @@ def _next_stage_for(job: Job) -> Stage:
     raise ValueError(f"Job {job.id} is in unexpected state {job.state} for dispatch")
 
 
-def _wrap_factory(backend_factory: Callable) -> Callable[[str], AgentBackend]:
-    """Normalise backend_factory to always accept a backend name string.
+def _wrap_factory(backend_factory: Callable) -> Callable[[str, str | None], AgentBackend]:
+    """Normalise backend_factory to always accept (name, model) and always be CALLED
+    that way by every caller in this module — the returned callable's shape is
+    uniform regardless of what the underlying factory actually accepts.
 
-    Legacy (zero-arg) factories are wrapped so the same code path works for
-    both pre-BF-19 callers (tests) and the new name-parameterised form.
+    Three factory shapes must be told apart by inspecting `sig.parameters` (name/kind),
+    NOT by counting no-default positional params — `(name)` and `(name, model=None)`
+    both count as exactly 1 by that older metric, which would make a real per-job model
+    rung silently vanish into an ignored second argument on every model-selection-aware
+    factory (a caller passing 2 args to a 1-arg legacy factory would raise loudly; this
+    is the opposite, silent failure — the real bug this shape-detection guards against):
+
+    - Zero required positional params (e.g. ``lambda: FakeAgentBackend(...)``, or a bound
+      test double like ``LimitReachedBackend`` used as ``backend_factory=LimitReachedBackend``)
+      → wrapped to accept and ignore both (name, model).
+    - Exposes a `model` parameter, or has >= 2 positional/keyword parameters (the new-style
+      `(name, model=None)` shape used by `server.py::make_backend_factory`) → called as
+      `factory(name, model)`.
+    - Exactly one positional param and no `model` parameter (the old-style
+      `(name: str) -> AgentBackend` shape most existing tests still use) → called as
+      `factory(name)` only — model is NOT passed, since the factory has nowhere to put it.
     """
     try:
         sig = inspect.signature(backend_factory)
-        n_positional = sum(
-            1
+        params = [
+            p
             for p in sig.parameters.values()
             if p.kind in (
                 inspect.Parameter.POSITIONAL_ONLY,
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
             )
-            and p.default is inspect.Parameter.empty
-        )
+        ]
+        n_required = sum(1 for p in params if p.default is inspect.Parameter.empty)
+        has_model_param = "model" in sig.parameters
     except (ValueError, TypeError):
-        n_positional = 0
+        params, n_required, has_model_param = [], 0, False
 
-    if n_positional == 0:
-        # Legacy zero-arg factory — wrap it to accept (and ignore) the name arg
-        return lambda name: backend_factory()
-    # New-style: factory(name: str) -> AgentBackend
-    return backend_factory
+    if n_required == 0:
+        # Legacy zero-arg factory (same criterion as before this change) — wrap it
+        # to accept (and ignore) both args.
+        return lambda name, model=None: backend_factory()
+
+    if has_model_param or len(params) >= 2:
+        # New-style: factory(name: str, model: str | None = None) -> AgentBackend
+        return lambda name, model=None: backend_factory(name, model)
+
+    # Old-style single-arg: factory(name: str) -> AgentBackend. Model has nowhere to
+    # go — do NOT pass it, silently or otherwise.
+    return lambda name, model=None: backend_factory(name)
 
 
 class Orchestrator:
@@ -91,11 +117,19 @@ class Orchestrator:
         sem: Semaphore limiting parallel agent sessions to max_parallel.
         wakeup: Event set by kick() to wake the run() loop.
         _db_session_factory: Callable that returns a new async SQLAlchemy session.
-        _backend_factory: Callable(name: str) -> AgentBackend — instantiates a backend by name.
+        _backend_factory: Callable(name: str, model: str | None) -> AgentBackend —
+            instantiates a backend by name and (optionally) a per-job model rung.
         _fit_backend_factory: Same, but for the fit_assessment stage only (separate
             model/timeout — see Settings.fit_model). None → fit_assessment reuses
             _backend_factory, which is what every test that omits it gets.
         _backends: Ordered list of backend names forming the fallback chain (BF-19).
+        _model_ladder: Callable(backend_name) -> cost-ascending list of model IDs for
+            that backend, or None to disable the model-first fallback ladder (Phase 4).
+        _model_resolver: Callable(backend_name) -> the model a job on it would use if
+            it has never hopped (UI selection, else flat default) — needed to know a
+            job's implicit starting rung when job.model_name is still None.
+        _fit_model_pinned: Whether a `--fit-model` pin is in effect (see the pinned-fit
+            escape in _advance_backend_or_fail).
         _stopping: Flag to signal graceful shutdown.
     """
 
@@ -111,6 +145,9 @@ class Orchestrator:
         preferences_path: Path | None = None,
         max_parallel_per_backend: int = 0,
         dispatch_stagger_seconds: float = 0.0,
+        model_ladder: Callable[[str], list[str]] | None = None,
+        model_resolver: Callable[[str], str | None] | None = None,
+        fit_model_pinned: bool = False,
     ) -> None:
         self.sem = asyncio.Semaphore(max_parallel)
         # Per-backend in-flight cap, on top of the global `sem`. Throttles one *provider
@@ -133,6 +170,15 @@ class Orchestrator:
         self._output_dir = output_dir
         self._cv_structure_path = cv_structure_path
         self._preferences_path = preferences_path
+        # Model-first fallback ladder (Phase 4 of the model-fallback-ladder plan). Both
+        # default to None -> ladder disabled, which is what every existing test/caller
+        # that omits them gets (today's backend-only BF-19 behaviour, unchanged).
+        self._model_ladder = model_ladder
+        self._model_resolver = model_resolver
+        # Whether a `--fit-model` pin is in effect for the fit_assessment stage. The
+        # orchestrator cannot import Settings (circular import via server.py), so this
+        # is threaded through explicitly rather than re-derived here.
+        self._fit_model_pinned = fit_model_pinned
         self._stopping = False
         # Keyed by job_id (not an unkeyed set) so a specific job's in-flight
         # worker task can be looked up and cancelled — see cancel_task().
@@ -407,13 +453,17 @@ class Orchestrator:
                     await session.commit()
 
                 active_backend_name = job.backend_name
-                backend = self._backend_factory(active_backend_name)
+                # job.model_name stays None until the first model-ladder hop, in which
+                # case _backend_factory falls through to its own resolution chain
+                # (runtime UI selection, then flat default) — see server.py's
+                # make_backend_factory precedence docstring.
+                backend = self._backend_factory(active_backend_name, job.model_name)
                 # Built from active_backend_name, not backends[0], so the fit gate
                 # follows the job after a BF-19 limit-triggered backend switch. Only
                 # constructed for the stage that uses it.
                 fit_backend = None
                 if stage == Stage.fit_assessment and self._fit_backend_factory is not None:
-                    fit_backend = self._fit_backend_factory(active_backend_name)
+                    fit_backend = self._fit_backend_factory(active_backend_name, job.model_name)
                 await stages.run_stage(
                     job, backend, stage, session,
                     fit_backend=fit_backend,
@@ -490,15 +540,23 @@ class Orchestrator:
             self.kick()
 
     async def _handle_limit_reached(self, job_id: str, exc: AgentLimitReached) -> None:
-        """Handle AgentLimitReached: switch to next backend or mark failed (BF-19)."""
+        """Handle AgentLimitReached: switch to next backend or mark failed (BF-19).
+
+        `use_ladder=False`: a 429/quota signal is scoped to the provider ACCOUNT, not
+        the model — hopping to a different model on the same account would just add
+        another request to an already-throttled key, so this skips straight to the
+        backend advance exactly like before Phase 4.
+        """
         await self._advance_backend_or_fail(
             job_id,
             switch_reason="Backend limit reached",
             exhausted_message="Backend limit reached — switch backends or wait for quota reset",
+            use_ladder=False,
         )
 
     async def _handle_backend_timeout(self, job_id: str, exc: AgentTimeout) -> None:
-        """Handle AgentTimeout: switch to next backend or mark failed (BF-19).
+        """Handle AgentTimeout: hop to the next model, switch to next backend, or mark
+        failed (BF-19 + Phase 4 model-first fallback ladder).
 
         Mirrors _handle_limit_reached — a timeout means the active backend is
         unavailable right now, which is exactly the condition BF-19's chain exists
@@ -513,10 +571,12 @@ class Orchestrator:
                 "Backend timed out on every configured backend — switch backends "
                 "or increase the timeout"
             ),
+            use_ladder=True,
         )
 
     async def _handle_backend_unavailable(self, job_id: str, exc: AgentBackendUnavailable) -> None:
-        """Handle AgentBackendUnavailable: switch to next backend or mark failed (BF-19).
+        """Handle AgentBackendUnavailable: hop to the next model, switch to next
+        backend, or mark failed (BF-19 + Phase 4 model-first fallback ladder).
 
         Mirrors _handle_limit_reached/_handle_backend_timeout. Distinct message from
         both — "wait for quota reset" (limit) and "increase the timeout" (timeout)
@@ -530,22 +590,92 @@ class Orchestrator:
                 "Backend unavailable on every configured backend — check model/API "
                 "key configuration, or try again later if this was transient overload"
             ),
+            use_ladder=True,
         )
 
+    async def _resolve_model_hop(
+        self, session: AsyncSession, job: Job, current_backend: str, failed_stage: Stage | None
+    ) -> str | None:
+        """Pure decision logic (no mutation, no commit): the next model rung to hop
+        to on `current_backend`, or None if the ladder does not apply.
+
+        Deliberately raises nothing it doesn't have to swallow itself — any exception
+        propagates to the caller, which treats it as "no hop" (falls through to the
+        backend advance) rather than leaving the job stuck `running`. See the
+        model-first fallback ladder design in the plan's Phase 4.
+        """
+        if self._model_ladder is None or self._model_resolver is None:
+            return None  # ladder disabled — what every pre-Phase-4 caller/test gets
+        if not model_catalog.SUPPORTS_MODEL_SELECTION.get(current_backend, False):
+            return None  # e.g. google-cli: no model concept to hop between
+
+        # Pinned-fit escape: with --fit-model in effect, a fit_assessment failure must
+        # advance the backend, never hop the general model — otherwise the pinned
+        # fit model keeps failing, the ladder hops the *general* model, a cv_adjust
+        # rewind re-enters fit_assessment on the same pinned failing model, and the
+        # whole ladder gets spent for zero forward progress.
+        if failed_stage == Stage.fit_assessment and self._fit_model_pinned:
+            return None
+
+        # Hop cap: a count cap (not a cost cap) — some backends (opencode-go) have 20+
+        # rungs, so an unbounded ladder could re-ask the user's question that many times.
+        if job.model_hops >= 5:
+            return None
+
+        # Answered-input brake: a hop discards the in-flight conversation (fresh
+        # session), which re-asks the user's question. If this job has an answered
+        # FollowUp for ANY stage, allow only ONE hop total (model_hops==0 at decision
+        # time) — deliberately job-wide, NOT scoped to the current failed_stage, and
+        # counting HOPS rather than testing `model_name is not None`. Both choices are
+        # what survive the two bypasses the skeptic found in a naively stage-scoped
+        # check: (a) a revising_* backend_switch_reset deletes ALL FollowUps
+        # (including answered ones) for that stage as part of taking the hop itself
+        # (repo.py, explicitly commented there) — but a FRESH answered FollowUp
+        # created during the hopped-to attempt is still visible job-wide before ITS
+        # own reset, so the brake still fires on a second consuming hop; and (b) a
+        # cv_adjust rewind lands the *next* failure at fit_assessment, a stage that
+        # never has FollowUps at all — a stage-scoped query at that second decision
+        # would miss the cv_adjust stage's still-present answered FollowUp entirely
+        # (cv_adjust's own reset branch deletes only UNANSWERED FollowUps) and
+        # wrongly allow unlimited further hops.
+        if failed_stage is not None:
+            answered = await repo.get_follow_ups(session, job.id, answered=True)
+            if job.model_hops > 0 and answered:
+                return None
+
+        current_model = job.model_name or self._model_resolver(current_backend)
+        if current_model is None:
+            return None
+        ladder = self._model_ladder(current_backend)
+        return model_costs.next_model(current_backend, current_model, ladder)
+
     async def _advance_backend_or_fail(
-        self, job_id: str, switch_reason: str, exhausted_message: str
+        self,
+        job_id: str,
+        switch_reason: str,
+        exhausted_message: str,
+        use_ladder: bool = False,
     ) -> None:
         """Shared BF-19 chain-advance logic for AgentLimitReached, AgentTimeout, and
-        AgentBackendUnavailable.
+        AgentBackendUnavailable, with the Phase 4 model-first fallback ladder tried
+        first when `use_ladder` is True.
 
-        If a next backend exists in the chain:
-        1. Persist job.backend_name = next backend.
-        2. Delete failed stage's Message rows (so next dispatch starts fresh).
-        3. Reset job state to the stage's start checkpoint.
-        4. Emit BackendSwitchedEvent.
+        Order of attempts:
+        1. If `use_ladder`: try the next model rung on the SAME backend (see
+           _resolve_model_hop for eligibility). A hop reuses
+           repo.backend_switch_reset with the SAME backend name — verified legal,
+           it's a no-op backend_name assignment — because the reset's Message/
+           FollowUp cleanup and fresh-session forcing is exactly what a
+           protocol-crossing hop (e.g. across opencode-go's chat/messages
+           boundary) needs. Emits ModelSwitchedEvent and returns — does NOT also
+           advance the backend in the same call.
+        2. Otherwise (or if the ladder found no eligible rung): advance to the next
+           backend in the chain via repo.backend_switch_reset (this also nulls
+           model_name/model_hops, so the new backend starts at its own entry
+           point — see that function's docstring). Emits BackendSwitchedEvent.
+        3. Chain exhausted: mark the job failed with `exhausted_message`.
+
         The finally block in _run_one calls kick() which re-triggers dispatch.
-
-        If chain is exhausted: mark the job failed with `exhausted_message`.
         """
         try:
             async with self._db_session_factory() as session:
@@ -556,6 +686,59 @@ class Orchestrator:
 
                 current_backend = job.backend_name or self._backends[0]
                 failed_stage = job.current_stage  # capture before any transition
+
+                if use_ladder:
+                    next_rung: str | None = None
+                    try:
+                        next_rung = await self._resolve_model_hop(
+                            session, job, current_backend, failed_stage
+                        )
+                    except Exception:
+                        # A bug in the ladder's decision logic must degrade to
+                        # today's backend-advance behaviour, not leave the job
+                        # stuck `running` — see Phase 4's fail-safe requirement.
+                        logger.exception(
+                            "_advance_backend_or_fail: model-ladder decision failed for "
+                            "job %s; falling back to backend advance",
+                            job_id,
+                        )
+                        next_rung = None
+
+                    if next_rung is not None:
+                        current_model = job.model_name or (
+                            self._model_resolver(current_backend)
+                            if self._model_resolver is not None
+                            else None
+                        )
+                        await repo.backend_switch_reset(
+                            session,
+                            job,
+                            current_backend,
+                            failed_stage,
+                            new_model_name=next_rung,
+                            increment_model_hops=True,
+                        )
+
+                        switch_msg = (
+                            f"{switch_reason} — trying next model on {current_backend}: "
+                            f"{current_model} → {next_rung}"
+                        )
+                        logger.info("_advance_backend_or_fail: job %s: %s", job_id, switch_msg)
+
+                        await bus.publish(
+                            event_to_dict(LogEvent(job_id=job_id, level="warn", text=switch_msg))
+                        )
+                        await bus.publish(
+                            event_to_dict(
+                                ModelSwitchedEvent(
+                                    job_id=job_id,
+                                    backend=current_backend,
+                                    from_model=current_model or "",
+                                    to_model=next_rung,
+                                )
+                            )
+                        )
+                        return  # hop taken — do not also advance the backend
 
                 # Find the next backend in the chain
                 try:
@@ -585,13 +768,24 @@ class Orchestrator:
                         )
                     )
                 else:
-                    # Chain exhausted — mark failed
-                    await repo.mark_failed(session, job_id, exhausted_message)
+                    # Chain exhausted — mark failed. If the model ladder was tried
+                    # (job.model_hops > 0) on the final backend before landing here,
+                    # say so — the job didn't just exhaust every backend, it also
+                    # exhausted that backend's model ladder. Only appended when hops
+                    # actually happened, so the plain (no-ladder-configured) message
+                    # every existing test asserts on stays byte-identical.
+                    final_message = exhausted_message
+                    if job.model_hops > 0:
+                        final_message = (
+                            f"{exhausted_message} (also tried {job.model_hops} model(s) "
+                            f"on {current_backend})"
+                        )
+                    await repo.mark_failed(session, job_id, final_message)
                     await bus.publish(
-                        event_to_dict(LogEvent(job_id=job_id, level="error", text=exhausted_message))
+                        event_to_dict(LogEvent(job_id=job_id, level="error", text=final_message))
                     )
                     await bus.publish(
-                        event_to_dict(ErrorEvent(job_id=job_id, message=exhausted_message))
+                        event_to_dict(ErrorEvent(job_id=job_id, message=final_message))
                     )
 
         except Exception as inner_exc:

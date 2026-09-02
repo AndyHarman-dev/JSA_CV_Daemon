@@ -165,3 +165,95 @@ class TestModelPrecedence:
 
         settings.backend_models["anthropic"] = "claude-sonnet-5"
         assert backend("anthropic")._model == "claude-sonnet-5"
+
+
+class TestPerCallModelPrecedence:
+    """Phase 3 (model-fallback-ladder): the per-call `model` arg is a job's current
+    model-ladder rung. Precedence: model_override (--fit-model) > per-call model >
+    settings.backend_models[name] (UI selection) > flat default. The per-call model is
+    deliberately ABOVE the UI selection (a job mid-hop must keep running its hopped-to
+    rung even if the dropdown changes while it's in flight), but BELOW model_override
+    (a --fit-model pin must never be movable by a ladder hop -- see the pinned-fit
+    escape in Orchestrator._resolve_model_hop)."""
+
+    def test_per_call_model_beats_runtime_selection(self):
+        settings = Settings(backend_models={"anthropic": "claude-opus-5"})
+        backend = make_backend_factory(settings)
+
+        agent = backend("anthropic", "claude-haiku-4-5")
+        assert agent._model == "claude-haiku-4-5"
+
+    def test_per_call_model_beats_flat_default_when_no_selection(self):
+        settings = Settings()
+        backend = make_backend_factory(settings)
+
+        agent = backend("anthropic", "claude-opus-5")
+        assert agent._model == "claude-opus-5"
+
+    def test_model_override_beats_per_call_model(self):
+        """--fit-model always wins, even over a per-job ladder rung -- this is what
+        keeps the pinned fit gate immovable across a model-ladder hop."""
+        settings = Settings()
+        backend = make_backend_factory(settings, model_override="pinned-model")
+
+        agent = backend("anthropic", "some-hopped-rung")
+        assert agent._model == "pinned-model"
+
+    def test_omitted_per_call_model_falls_through_unchanged(self):
+        """Calling with just (name,) -- the pre-Phase-3 call shape -- must behave
+        identically to before; every existing caller that hasn't been updated to pass
+        a model gets exactly today's resolution chain."""
+        settings = Settings(backend_models={"anthropic": "claude-opus-5"})
+        backend = make_backend_factory(settings)
+
+        agent = backend("anthropic")
+        assert agent._model == "claude-opus-5"
+
+    def test_per_call_model_applies_to_opencode_zen(self):
+        """Sanity check the per-call arg reaches every branch, not just anthropic."""
+        settings = Settings()
+        backend = make_backend_factory(settings)
+
+        agent = backend("opencode-zen", "mimo-v2.5-free")
+        assert agent._model == "mimo-v2.5-free"
+
+    def test_google_cli_ignores_per_call_model(self):
+        settings = Settings()
+        backend = make_backend_factory(settings)
+
+        agent = backend("google-cli", "irrelevant")
+        assert not hasattr(agent, "_model")
+
+
+class TestMakeModelResolver:
+    """model_resolver: backend name -> the model a job on it would use if it has never
+    hopped (UI selection, else flat default). Deliberately does NOT apply
+    model_override -- that's a fit-gate-only concept the resolver has no knowledge of."""
+
+    def test_resolver_returns_flat_default_when_no_selection(self):
+        from jsa.server import make_model_resolver
+
+        settings = Settings()
+        resolver = make_model_resolver(settings)
+        assert resolver("anthropic") == settings.model
+
+    def test_resolver_prefers_runtime_selection(self):
+        from jsa.server import make_model_resolver
+
+        settings = Settings(backend_models={"anthropic": "claude-opus-5"})
+        resolver = make_model_resolver(settings)
+        assert resolver("anthropic") == "claude-opus-5"
+
+    def test_resolver_returns_none_for_google_cli(self):
+        from jsa.server import make_model_resolver
+
+        settings = Settings()
+        resolver = make_model_resolver(settings)
+        assert resolver("google-cli") is None
+
+    def test_resolver_opencode_zen_never_falls_back_to_shared_model(self):
+        from jsa.server import make_model_resolver
+
+        settings = Settings(model="claude-haiku-4-5")
+        resolver = make_model_resolver(settings)
+        assert resolver("opencode-zen") == settings.opencode_zen_model

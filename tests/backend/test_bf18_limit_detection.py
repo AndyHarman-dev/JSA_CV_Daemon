@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 from uuid import uuid4
 
 import pytest
@@ -32,7 +33,7 @@ from jsa.agents.mistral import MistralBackend
 from jsa.agents.opencode_go import OpenCodeGoBackend
 from jsa.agents.openrouter import OpenRouterBackend
 from jsa.db import repo
-from jsa.db.models import Base, Job, JobState, Stage
+from jsa.db.models import Base, FollowUp, Job, JobState, Stage
 from jsa.pipeline.orchestrator import Orchestrator
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
 from tests.backend.fakes.finals import cl_final
@@ -861,3 +862,380 @@ class TestGeminiClassification:
             backend = GeminiBackend()
             with pytest.raises(AgentTimeout):
                 await backend.start_session("sys", "hi")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 (model-fallback-ladder plan): model-first fallback ladder. On
+# AgentTimeout/AgentBackendUnavailable, try the next model on the SAME backend
+# before advancing to the next backend. AgentLimitReached always skips the
+# ladder. Both `model_ladder`/`model_resolver` default to None on Orchestrator,
+# so every test above this section (which omits them) gets today's
+# backend-only BF-19 behaviour unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _two_rung_ladder(backend_name: str) -> list[str]:
+    if backend_name == "opencode-zen":
+        return ["cheap-model", "expensive-model"]
+    return []
+
+
+def _one_rung_ladder(backend_name: str) -> list[str]:
+    if backend_name == "opencode-zen":
+        return ["cheap-model"]
+    return []
+
+
+def _resolver_cheap_model(backend_name: str) -> str | None:
+    return {"opencode-zen": "cheap-model"}.get(backend_name)
+
+
+async def _set_backend_name(factory, job_id: str, backend_name: str) -> None:
+    async with factory() as s:
+        job = await repo.get_job(s, job_id)
+        job.backend_name = backend_name
+        await s.commit()
+
+
+class TestResolveModelHop:
+    """Direct unit tests on Orchestrator._resolve_model_hop -- the pure decision
+    function (no mutation, no commit) that Phase 4's ladder branch relies on."""
+
+    async def test_ladder_disabled_returns_none(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            # model_ladder/model_resolver omitted -> ladder disabled
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.cover_letter)
+        assert hop is None
+
+    async def test_next_rung_returned_for_eligible_backend(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.cover_letter)
+        assert hop == "expensive-model"
+
+    async def test_last_rung_returns_none(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=_one_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.cover_letter)
+        assert hop is None
+
+    async def test_google_cli_has_no_model_selection_never_hops(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+        await _set_backend_name(session_factory, job.id, "google-cli")
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["google-cli"],
+            model_ladder=lambda name: ["a", "b"],
+            model_resolver=lambda name: "a",
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            hop = await orch._resolve_model_hop(s, db_job, "google-cli", Stage.cover_letter)
+        assert hop is None
+
+    async def test_hop_cap_stops_at_five(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=lambda name: [f"model-{i}" for i in range(10)],
+            model_resolver=lambda name: "model-0",
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            db_job.model_hops = 5
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.cover_letter)
+        assert hop is None
+
+    async def test_pinned_fit_escape_skips_ladder_for_fit_assessment(self, session_factory):
+        job = await _insert_job(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+            fit_model_pinned=True,
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.fit_assessment)
+        assert hop is None
+
+    async def test_no_fit_pin_still_hops_on_fit_assessment(self, session_factory):
+        """Without a --fit-model pin, fit_assessment is just another stage -- the
+        ladder applies to it normally."""
+        job = await _insert_job(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+            fit_model_pinned=False,
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.fit_assessment)
+        assert hop == "expensive-model"
+
+    async def test_first_hop_allowed_despite_answered_followup(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+        async with session_factory() as s:
+            s.add(FollowUp(
+                job_id=job.id, stage=Stage.cover_letter, question="What tone?",
+                answer="Formal", answered_at=datetime.utcnow(),
+            ))
+            await s.commit()
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            assert db_job.model_hops == 0
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.cover_letter)
+        assert hop == "expensive-model"  # allowed -- this is the first (only) hop
+
+    async def test_answered_followup_blocks_second_hop_job_wide(self, session_factory):
+        """A job-wide (not stage-scoped) answered FollowUp, combined with
+        model_hops > 0, blocks a further hop -- even when the answered FollowUp
+        belongs to a DIFFERENT stage than the one currently failing (the bypass a
+        naive stage-scoped check would miss after a cv_adjust-style rewind that
+        changes which stage is "current")."""
+        job = await _insert_job_at_cv_done(session_factory)
+        async with session_factory() as s:
+            s.add(FollowUp(
+                job_id=job.id, stage=Stage.cv_adjust, question="Which template?",
+                answer="Modern", answered_at=datetime.utcnow(),
+            ))
+            await s.commit()
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            db_job.model_hops = 1  # already hopped once
+            # Now failing at a DIFFERENT stage (cover_letter) than the one with the
+            # answered FollowUp (cv_adjust) -- a stage-scoped check would miss it.
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.cover_letter)
+        assert hop is None
+
+    async def test_no_answered_followup_allows_hops_up_to_cap(self, session_factory):
+        """A job that never had any NEED_INPUT loop is governed only by the hop cap,
+        not artificially limited to one hop."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: FakeAgentBackend([cl_final()]),
+            backends=["opencode-zen"],
+            model_ladder=lambda name: ["m0", "m1", "m2"],
+            model_resolver=lambda name: "m0",
+        )
+        async with session_factory() as s:
+            db_job = await repo.get_job(s, job.id)
+            db_job.model_hops = 1
+            db_job.model_name = "m1"
+            hop = await orch._resolve_model_hop(s, db_job, "opencode-zen", Stage.cover_letter)
+        assert hop == "m2"
+
+
+class HopThenSucceedBackend(FakeAgentBackend):
+    """Test double: raises AgentTimeout for a "cheap" model, answers normally once
+    called with an "expensive" model -- simulates a busy model that a ladder hop
+    resolves without ever touching a second backend."""
+
+    def __init__(self, ok: bool):
+        super().__init__([cl_final()] if ok else [])
+        self._ok = ok
+
+    async def start_session(self, system_prompt, initial_user_msg):
+        if not self._ok:
+            raise AgentTimeout("opencode-zen timed out after 300.0s")
+        return await super().start_session(system_prompt, initial_user_msg)
+
+
+class TestOrchestratorModelLadder:
+    """End-to-end Orchestrator.run() coverage: the ladder actually engages before
+    the backend advance, and persists correctly (re-read from a FRESH session, per
+    the plan's test note -- an in-memory-object assertion would pass even if the
+    commit were silently lost)."""
+
+    async def test_timeout_hops_to_next_model_keeps_same_backend(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+
+        def backend_factory(name: str, model: str | None = None):
+            return HopThenSucceedBackend(ok=(model == "expensive-model"))
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=backend_factory,
+            backends=["opencode-zen"],  # single backend -- success proves the LADDER engaged
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.backend_name == "opencode-zen"
+        assert refreshed.model_name == "expensive-model"
+        assert refreshed.model_hops == 1
+        assert refreshed.state == JobState.review
+
+    async def test_backend_unavailable_hops_to_next_model_too(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+
+        class HopBackend(FakeAgentBackend):
+            def __init__(self, ok: bool):
+                super().__init__([cl_final()] if ok else [])
+                self._ok = ok
+
+            async def start_session(self, system_prompt, initial_user_msg):
+                if not self._ok:
+                    raise AgentBackendUnavailable("opencode-zen: 502 Bad Gateway")
+                return await super().start_session(system_prompt, initial_user_msg)
+
+        def backend_factory(name: str, model: str | None = None):
+            return HopBackend(ok=(model == "expensive-model"))
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=backend_factory,
+            backends=["opencode-zen"],
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.model_name == "expensive-model"
+        assert refreshed.model_hops == 1
+
+    async def test_limit_reached_does_not_hop_fails_immediately(self, session_factory):
+        """AgentLimitReached must skip the ladder even when one is configured --
+        it's an account-scoped signal, not a model-scoped one."""
+        job = await _insert_job_at_cv_done(session_factory)
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: LimitReachedBackend(),
+            backends=["opencode-zen"],
+            model_ladder=_two_rung_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
+        assert refreshed.model_hops == 0
+        assert refreshed.model_name is None
+        assert "Backend limit reached" in (refreshed.error or "")
+
+    async def test_ladder_exhausted_advances_backend_and_nulls_model_fields(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+
+        def backend_factory(name: str, model: str | None = None):
+            if name == "opencode-zen":
+                return TimeoutBackend()
+            return FakeAgentBackend([cl_final()])
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=backend_factory,
+            backends=["opencode-zen", "claude-cli"],
+            model_ladder=_one_rung_ladder,  # single rung == current model -> no next
+            model_resolver=_resolver_cheap_model,
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.backend_name == "claude-cli"
+        assert refreshed.model_name is None
+        assert refreshed.model_hops == 0
+
+    async def test_google_cli_skips_ladder_fails_with_no_fallback(self, session_factory):
+        job = await _insert_job_at_cv_done(session_factory)
+        await _set_backend_name(session_factory, job.id, "google-cli")
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name, model=None: TimeoutBackend(),
+            backends=["google-cli"],
+            model_ladder=lambda name: ["a", "b"],
+            model_resolver=lambda name: "a",
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.state == JobState.failed
+        assert refreshed.model_hops == 0
+
+    async def test_raising_ladder_callable_still_reaches_backend_advance(self, session_factory):
+        """A bug in the ladder's decision logic must degrade to today's
+        backend-advance behaviour, never leave the job stuck `running`."""
+        job = await _insert_job_at_cv_done(session_factory)
+
+        def broken_ladder(name: str) -> list[str]:
+            raise RuntimeError("boom")
+
+        def backend_factory(name: str, model: str | None = None):
+            if name == "opencode-zen":
+                return TimeoutBackend()
+            return FakeAgentBackend([cl_final()])
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=backend_factory,
+            backends=["opencode-zen", "claude-cli"],
+            model_ladder=broken_ladder,
+            model_resolver=_resolver_cheap_model,
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.review)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+        assert refreshed.backend_name == "claude-cli"
+        assert refreshed.state == JobState.review
