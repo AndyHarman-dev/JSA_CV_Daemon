@@ -89,6 +89,24 @@ the prompt file's sentinel-format section, and a line against embedding sentinel
 inside JSON string values); prompt *files themselves* are never edited to describe
 structured mode, honoring the "prompt files are edited externally by the user" rule above.
 
+**`question` must be self-contained.** On a `kind: "question"` turn, `question` is the
+*only* field the user ever sees — `payload` is required to be `null` there, so there is no
+schema slot for anything else. When a prompt file asks the model to write something up
+before asking for confirmation (e.g. `PROMPT_CDADJUST.md`'s Phase 1 adjustment strategy),
+the contract explicitly instructs the model to put that full write-up inside `question`
+itself, followed by the actual question — not just a bare confirmation prompt. Without this
+instruction the reply is still schema-valid (nothing enforces that `question` contains
+anything beyond a short string), so a weaker model happily returns e.g.
+`{"kind":"question","question":"Shall I proceed with the proposed adjustment strategy, or
+would you like to adjust anything?","payload":null}` with the entire strategy silently
+never generated — confirmed live against two `cv_adjust` jobs parked on
+`opencode-zen`/`nemotron-3.5-lightning-free` with exactly that reply and nothing else in
+the assistant `Message` row. This is backend-agnostic (any structured-capable backend can
+hit it, not just opencode-zen/opencode-go) and is not a code bug — `_route_structured_data`
+correctly read `payload: null` as intended; the model never wrote the content anywhere.
+Do not "simplify" this instruction back out of `_structured_contract`'s `shape_rules` as
+redundant verbosity — it is the fix, not padding.
+
 **Anthropic: forced tool-use.** `AnthropicAPIBackend` (`jsa/agents/anthropic_api.py`)
 implements structured mode as a forced tool call — `tools=[{"name": "respond",
 "input_schema": schema}]` + `tool_choice` forced — not the SDK's native

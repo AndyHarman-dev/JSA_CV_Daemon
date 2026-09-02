@@ -122,7 +122,14 @@ def _structured_contract(schema: dict[str, Any], *, fit_verdict: bool) -> str:
             'either `"question"` or `"final"`. When `kind` is `"question"`, set '
             "`question` to your clarifying question and leave `payload` null. When "
             '`kind` is `"final"`, set `payload` to the completed object described by '
-            "the schema below and leave `question` null."
+            "the schema below and leave `question` null.\n"
+            "`question` is the ONLY field the user will see on a question turn — there is "
+            "no other field to carry explanation, analysis, or a written strategy. If the "
+            "prompt above asks you to propose something (e.g. a strategy, an audit, a plan) "
+            "before asking for confirmation, that full write-up must be included as text "
+            "inside `question` itself, followed by your actual question. A short "
+            "confirmation prompt with none of that content included is incomplete and "
+            "leaves the user with nothing to evaluate."
         )
     return (
         "\n\n## Structured output contract\n"
