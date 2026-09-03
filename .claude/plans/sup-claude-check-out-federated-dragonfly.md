@@ -1,5 +1,5 @@
 ---
-status: InProgress
+status: Done
 ---
 
 # Agent Chat Upgrade — persisted thread, streaming, composer fix, suggested replies
