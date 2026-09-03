@@ -126,29 +126,13 @@ export function ChatBox(props: ChatBoxProps) {
 
   return (
     <div
-      // Sticky-footer composer: docks to the bottom of the scrolling <main> when the
-      // job-detail panel overflows; sits inline when content is short (pure CSS sticky,
-      // no JS). The negative margins bleed the bar to the scroll-container edges and
-      // cancel JobDetail's root padding — they are COUPLED to JobDetail's
-      // `padding: "20px 26px 80px"` (the only place ChatBox is rendered). See
-      // .claude/designs/design_handoff_docked_chat_input.
       style={{
-        position: "sticky",
-        bottom: 0,
-        zIndex: 8,
-        marginLeft: -26,
-        marginRight: -26,
-        marginBottom: -80,
-        paddingLeft: 26,
-        paddingRight: 26,
-        paddingTop: 14,
-        paddingBottom: 20,
+        flex: "none",
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        background: `linear-gradient(${T.canvas}00, ${T.surface} 22%)`,
+        paddingTop: 12,
         borderTop: `1px solid ${T.bd}`,
-        boxShadow: "0 -16px 28px -12px rgba(0,0,0,.5)",
       }}
     >
       <textarea
