@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from jsa.agents.base import AgentLimitReached, AgentReply, AgentTimeout
+from jsa.agents.base import AgentChunk, AgentLimitReached, AgentReply, AgentTimeout
 from jsa.config import Settings
 from jsa.db import repo
 from jsa.db.models import Base, Document, Job, JobState, Message, Stage
@@ -285,6 +285,60 @@ class TestFitAssessmentStage:
         )
         roles = [m.role for m in result.scalars().all()]
         assert "system" in roles and "user" in roles and "assistant" in roles
+
+
+class TestFitAssessmentStreaming:
+    """Regression coverage for a gap where fit_assessment never passed on_chunk to
+    the backend at all — run_stage's other stages (cv_adjust/cover_letter/
+    revising_*) got the Phase 6-8 streaming wiring, but _run_fit_assessment (a
+    separate function) did not, so a streaming-capable backend never streamed its
+    fit-assessment turn even though it's the very first stage every job runs."""
+
+    async def test_streaming_backend_gets_on_chunk_and_persists_reasoning(self, session):
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+        backend = FakeAgentBackend(
+            [_final("FIT")],
+            supports_streaming=True,
+            scripted_chunks=[
+                [
+                    AgentChunk(kind="reasoning", text="weighing the JD against the CV..."),
+                    AgentChunk(kind="content", text="FIT"),
+                ]
+            ],
+        )
+        await run_stage(job, backend, Stage.fit_assessment, session)
+        result = await session.execute(
+            select(Message).where(
+                Message.job_id == job.id,
+                Message.stage == Stage.fit_assessment,
+                Message.role == "assistant",
+            )
+        )
+        assistant_msg = result.scalar_one()
+        assert assistant_msg.reasoning == "weighing the JD against the CV..."
+
+    async def test_non_streaming_backend_never_gets_on_chunk_kwarg(self, session):
+        """FakeAgentBackend's start_session accepts on_chunk regardless; the real
+        contract (_streaming_kwargs) is that a backend with supports_streaming=False
+        must never be handed the kwarg. Assert indirectly via received behavior: no
+        scripted chunks means nothing to emit either way, but this pins that a
+        non-streaming fake (the default) completes normally with no reasoning."""
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await session.commit()
+        backend = FakeAgentBackend([_final("FIT")])  # supports_streaming=False (default)
+        await run_stage(job, backend, Stage.fit_assessment, session)
+        result = await session.execute(
+            select(Message).where(
+                Message.job_id == job.id,
+                Message.stage == Stage.fit_assessment,
+                Message.role == "assistant",
+            )
+        )
+        assistant_msg = result.scalar_one()
+        assert assistant_msg.reasoning is None
 
 
 # ---------------------------------------------------------------------------

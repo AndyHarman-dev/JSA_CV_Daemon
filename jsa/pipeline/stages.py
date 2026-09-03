@@ -1184,7 +1184,15 @@ async def _run_fit_assessment(
         system_prompt, language=language_code, structured_model=schema, fit_verdict=True
     )
 
-    start_kwargs = _schema_kwargs(schema)
+    # Same conditional-kwarg pattern run_stage uses (see _streaming_kwargs) — this
+    # stage was missed when Phase 6-8 wired streaming into run_stage, so a
+    # streaming-capable backend (e.g. claude-cli) never streamed its fit-assessment
+    # turn even though it's the very first stage every job runs.
+    streaming_enabled = getattr(backend, "supports_streaming", False)
+    accumulator = ChunkAccumulator(job.id, Stage.fit_assessment.value) if streaming_enabled else None
+    on_chunk = accumulator.add_chunk if accumulator is not None else None
+
+    start_kwargs = _schema_kwargs(schema) | _streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
     try:
         handle, reply = await backend.start_session(system_prompt, initial_user_msg, **start_kwargs)
     except ProtocolError as exc:
@@ -1211,6 +1219,10 @@ async def _run_fit_assessment(
         current_state = await repo.get_state_fresh(session, job.id)
         if current_state != JobState.running:
             raise StaleJobResult(job.id, current_state)
+        # No clean turn to show — discard whatever streamed before the parse failed
+        # so the frontend's live bubble doesn't linger past the unfit modal.
+        if accumulator is not None:
+            await accumulator.end_turn(superseded=True)
         job.fit_reason = _FIT_FALLBACK_REASON
         await checkpoint(session, job, JobState.unfit, None)
         await _publish_transcript_changed(job)
@@ -1222,12 +1234,22 @@ async def _run_fit_assessment(
     if current_state != JobState.running:
         raise StaleJobResult(job.id, current_state)
 
+    # Deliberately after the stale-job guard, before checkpoint — mirrors run_stage's
+    # ordering (see its comment): telling the frontend "turn complete, keep the
+    # streamed content" before confirming the job is still live would let a stale
+    # result announce completion with nothing actually persisted.
+    if accumulator is not None:
+        await accumulator.end_turn(superseded=False)
+
     await _log_session_mode(job, Stage.fit_assessment, schema, handle)
 
+    assistant_msg = {"role": "assistant", "content": reply.raw}
+    if accumulator is not None:
+        assistant_msg["reasoning"] = accumulator.take_reasoning()
     accumulated_messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": initial_user_msg},
-        {"role": "assistant", "content": reply.raw},
+        assistant_msg,
     ]
     job.session_external_id = handle.external_id
 

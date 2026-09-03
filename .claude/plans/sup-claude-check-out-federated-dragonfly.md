@@ -848,6 +848,42 @@ unrelated to this change. Not verified: the plan's manual live-run check (a
 no fake REASONING card) — no local sqlite DB/job exists in this checkout to drive
 that state, same limitation noted for Phase 1's visual check.
 
+2026-09-03 (bugfix): Context — user ran a real `jsa` job and reported that
+"thinking"/"reasoning" never appeared in the UI despite this plan claiming Phases
+6-8 (streaming) were implemented and reviewed. Investigation: verified the
+streaming plumbing itself is real and correct — live-tested `claude
+--output-format stream-json --include-partial-messages --verbose --model
+claude-haiku-4-5` and confirmed `thinking_delta` events fire even for a trivial
+prompt (extended thinking is on by default for this model via the CLI, no
+special flag needed) — then traced `run_stage` and confirmed `on_chunk`/the
+`ChunkAccumulator` are correctly wired into all of `cv_adjust`/`cover_letter`/
+`revising_cv`/`revising_cl`. Found the actual gap: `_run_fit_assessment` — a
+separate function, not part of `run_stage`'s branches — was never touched by
+Phase 6/7/8 at all (confirmed via `git log -p` across all three commits: zero
+hits). It called `backend.start_session(...)` with no `on_chunk`/`on_retry`
+kwarg, so a streaming-capable backend never streamed its fit-assessment turn.
+Since `fit_assessment` is the mandatory first stage of every job (see CLAUDE.md
+→ "Fit-assessment gate"), this fully explains the report — the user's job(s)
+likely never got to see any streamed reasoning because the very first thing
+every job does was silently non-streaming. Action: wired the same
+`ChunkAccumulator`/`_streaming_kwargs`/`_on_retry_for` pattern `run_stage` uses
+into `_run_fit_assessment` (`jsa/pipeline/stages.py`) — accumulator created when
+`backend.supports_streaming`, `on_chunk` passed to `start_session`,
+`end_turn(superseded=True)` on the `ProtocolError` failure path (discards any
+partial stream before the unfit modal), `end_turn(superseded=False)` after the
+existing stale-job guard and before checkpoint (mirrors `run_stage`'s own
+ordering rationale), and `accumulator.take_reasoning()` persisted onto the
+assistant message's `reasoning` field via the existing `Message.reasoning`
+column. Added `TestFitAssessmentStreaming` (2 tests) to
+`tests/backend/test_fit_assessment.py` pinning both the streaming-backend
+reasoning-persisted case and the non-streaming-backend no-reasoning case.
+Verification: verified — `tests/backend/test_fit_assessment.py` (50/50) and the
+full backend suite (1750/1750, up from 1748 with the 2 new tests) pass. Not
+independently re-verified: the live end-to-end UI check (running a real job
+through fit_assessment and watching the REASONING card render) — same
+no-local-DB limitation noted for every other manual-verification gap in this
+plan; the user should confirm this resolves what they observed.
+
 ## Decisions Log
 
 _Reserved for the user. Not to be written by the agent._
