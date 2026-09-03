@@ -7,7 +7,8 @@ import { MarkdownPreview } from "./MarkdownPreview";
 import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { Icon } from "../theme/Icon";
-import { panelBase, Spinner } from "../theme/chrome";
+import { panelBase } from "../theme/chrome";
+import { ReasoningCard } from "./ReasoningCard";
 
 const T = SHELL_THEME;
 
@@ -124,9 +125,14 @@ function avatarFor(role: TranscriptTurn["role"], t: (key: string) => string) {
   );
 }
 
+// A settled agent turn. `turn.reasoning` is already persisted and served by
+// jsa/api/transcript.py — it was simply never rendered, so a turn's reasoning used to
+// vanish the moment the live buffer was cleared. Here it comes back as the card's
+// settled state: bolt icon, a check per step, collapsed behind a step count.
 function TurnBubble({ turn }: { turn: TranscriptTurn }) {
   const t = useT();
   const isUser = turn.role === "user";
+  const reasoning = !isUser && turn.reasoning ? turn.reasoning.trim() : "";
   return (
     <div
       style={{
@@ -138,7 +144,8 @@ function TurnBubble({ turn }: { turn: TranscriptTurn }) {
       }}
     >
       {avatarFor(turn.role, t)}
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: "82%" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: "82%", width: "100%" }}>
+        {reasoning.length > 0 && <ReasoningCard reasoning={reasoning} running={false} />}
         <div
           style={{
             display: "flex",
@@ -203,22 +210,16 @@ function NoticeLine({ turn }: { turn: TranscriptTurn }) {
 // is never absent while the turn has no content yet, regardless of whether the
 // backend actually streamed reasoning (claude-cli's thinking_delta) or not (a
 // structured-mode/google-cli session, or a routed model with no reasoning_content
-// channel at all): with real reasoning it shows the streamed text, otherwise it
-// falls back to a static "Thinking…" placeholder — there must always be SOME live
-// affordance, never a silent gap. Once content starts arriving, the card only shows
-// if real reasoning was actually captured (no stale "Thinking…" once the model has
-// visibly moved on to answering).
+// channel at all): with real reasoning it shows the streamed text chunked into steps,
+// otherwise it falls back to a static "Thinking…" placeholder — there must always be
+// SOME live affordance, never a silent gap. Once content starts arriving, the card only
+// shows if real reasoning was actually captured (no stale "Thinking…" once the model
+// has visibly moved on to answering).
 //
-// The reasoning body is collapsed by default once real text starts streaming in —
-// a raw, continuously growing wall of reasoning text inline in the thread reads as
-// spam, not signal. Collapsed still shows the live spinner + label (so the "a turn
-// is in flight" affordance from the comment above never disappears), just not the
-// growing text itself; a click expands it to peek at the actual stream. There's
-// nothing to toggle before any reasoning has arrived (the "Thinking…" placeholder
-// has no body to hide), so the chevron only appears once hasReasoning is true.
+// The card itself (both its running and settled states, the step chunking, and the
+// live step window that stops a long trace from inflating it) lives in ReasoningCard.
 function LiveBubble({ content, reasoning }: { content: string; reasoning: string }) {
   const t = useT();
-  const [expanded, setExpanded] = useState(false);
   const hasReasoning = reasoning.trim().length > 0;
   const hasContent = content.trim().length > 0;
   const showReasoningCard = hasReasoning || !hasContent;
@@ -226,87 +227,7 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
     <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, width: "100%" }}>
       {avatarFor("assistant", t)}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: "82%", width: "100%" }}>
-        {showReasoningCard && (
-          // Design handoff's thinkCard, "not done" state — always the case here, since
-          // this card only exists while the turn is still in flight: chamfered panel
-          // with an accent2-tinted border and glow, and a ring spinner instead of the
-          // settled "bolt" icon. Unlike the mock (which forces this state open, since it
-          // never lets the body grow past a few discrete step lines), this app streams
-          // raw, open-ended reasoning text — collapsible by the user once there's
-          // something to collapse, see the function comment above.
-          <div
-            style={{
-              ...panelBase(T, { border: `color-mix(in srgb, ${T.accent2} 45%, ${T.bd})`, chamfer: 10 }),
-              boxShadow: `0 0 0 1px color-mix(in srgb, ${T.accent2} 30%, transparent), 0 0 20px ${T.accent2}22`,
-              overflow: "hidden",
-            }}
-          >
-            <div
-              role={hasReasoning ? "button" : undefined}
-              tabIndex={hasReasoning ? 0 : undefined}
-              onClick={hasReasoning ? () => setExpanded((v) => !v) : undefined}
-              onKeyDown={
-                hasReasoning
-                  ? (e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setExpanded((v) => !v);
-                      }
-                    }
-                  : undefined
-              }
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 7,
-                padding: "9px 12px",
-                cursor: hasReasoning ? "pointer" : "default",
-              }}
-            >
-              <Spinner color={T.accent2} size={8} />
-              <span
-                style={{
-                  font: `600 10px ${T.mono}`,
-                  letterSpacing: ".1em",
-                  color: T.ink,
-                  textTransform: "uppercase",
-                }}
-              >
-                {t("agentThread.reasoning")}
-              </span>
-              {!hasReasoning && (
-                <span style={{ font: `400 11px ${T.mono}`, color: T.ink3 }}>{t("agentThread.thinking")}</span>
-              )}
-              {hasReasoning && (
-                <span
-                  style={{
-                    marginLeft: "auto",
-                    display: "flex",
-                    color: T.ink3,
-                    transform: expanded ? "rotate(90deg)" : "none",
-                    transition: "transform .12s ease",
-                  }}
-                >
-                  <Icon name="chevron" size={11} />
-                </span>
-              )}
-            </div>
-            {hasReasoning && expanded && (
-              <div
-                style={{
-                  borderTop: `1px solid ${T.bd}`,
-                  padding: "8px 12px",
-                  font: `400 12px/1.5 ${T.ui}`,
-                  color: T.ink2,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}
-              >
-                {reasoning}
-              </div>
-            )}
-          </div>
-        )}
+        {showReasoningCard && <ReasoningCard reasoning={reasoning} running />}
         {hasContent && (
           <div
             style={{
@@ -433,7 +354,27 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
 
   const turns = transcript ?? [];
 
+  // Auto-scroll only while the user is already parked at the bottom. This effect fires
+  // on EVERY streamed reasoning token, and the REASONING card is expanded by default
+  // while a turn is live (see ReasoningCard) — so an unconditional scrollIntoView yanks
+  // the viewport back down every few milliseconds and makes it impossible to read back
+  // up the thread mid-turn. The sentinel below the thread is the probe: if it was in
+  // view before this update, the user was at the bottom and wants to follow along.
+  // Defaults to the previous always-scroll behaviour where IntersectionObserver is
+  // unavailable (jsdom).
+  const atBottomRef = useRef(true);
   useEffect(() => {
+    const sentinel = bottomRef.current;
+    if (!sentinel || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      atBottomRef.current = entries[entries.length - 1].isIntersecting;
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!atBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [turns.length, liveBuffer?.content.length, liveBuffer?.reasoning.length]);
 

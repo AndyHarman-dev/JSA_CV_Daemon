@@ -1029,6 +1029,54 @@ structured-mode streaming regression itself).
 
 ---
 
+## REASONING card — step chunking (frontend)
+
+The card's body is a list of **separated step rows**, not one growing block of text.
+`frontend/src/lib/reasoningSteps.ts::segmentReasoning` chunks the raw reasoning buffer;
+`frontend/src/components/ReasoningCard.tsx` renders both card states (running and
+settled) and is used by BOTH `LiveBubble` and `TurnBubble` in `AgentThread.tsx`.
+
+**Prefix stability is the load-bearing invariant.** The segmenter runs on every render
+against a buffer that only grows by appended tokens, so a boundary decided at char 250
+must never move once more text arrives — otherwise rendered rows re-flow, the card
+visibly jitters mid-stream, and index-based React keys stop being safe. Every rule is
+evaluated left-to-right against the **prefix only**, and may fire only once the
+currently-available text confirms it (a trailing `\n` is not yet a blank line; a
+trailing `.` is not yet a sentence end — the next token may make it `v1.2`). Pinned by
+`frontend/src/__tests__/reasoningSteps.test.ts`, which re-segments **every prefix** of
+several samples and asserts each one's closed steps are a prefix of the final list.
+
+This is why the obvious rule — *split on `\n\n` if the buffer has any, else fall back
+to single `\n`* — is **deliberately not used**: that is a decision about the whole
+buffer, not a prefix, so a stream that opens with single newlines and later emits one
+blank line re-segments everything already on screen. Do not "simplify" the layered rules
+back into it. The rules, in order: blank line (always) → sentence end past
+`SENTENCE_FLOOR` (200) → hard cut at the last whitespace by `HARD_CAP` (600). Backends
+differ wildly in whether they paragraph reasoning at all, so the layering degrades
+rather than betting on one convention.
+
+**Two default-expansion states, both intentional.** Running = expanded (the design
+handoff's `open = threadOpen[key] ?? !m.done`); settled = collapsed behind a step count.
+The running card additionally windows to the last `LIVE_STEP_WINDOW` (5) steps behind a
+"+N earlier" toggle — chunking separates a long trace but does not **bound** it, and an
+unbounded card inflating into a wall is the behaviour this card exists to stop.
+
+**`TurnBubble` renders `turn.reasoning`.** That field was already persisted and served
+(`jsa/api/transcript.py`) but never rendered, so a turn's reasoning used to vanish the
+moment the live stream buffer was cleared.
+
+**Tool rows are frontend-only today.** `ReasoningStep` is a discriminated union
+(`{kind:"text"} | {kind:"tool"}`) so tool calls render through the same row renderer and
+separator idiom. **No backend channel exists** — `AgentChunk.kind` is
+`"content" | "reasoning"` (`jsa/agents/base.py`) and nothing emits a tool call. The only
+way to see the row is the `import.meta.env.DEV`-guarded toggle in the card header, fed by
+`frontend/src/lib/reasoningMock.ts`. The `import.meta.env.DEV &&` guard on the
+`interleaveMockTools` call is **required, not redundant** — without it Rollup cannot
+prove the runtime `mockTools` state is never set and the fixture ships in the production
+bundle. When a real channel lands it replaces that call and nothing else.
+
+---
+
 ## How to test a phase
 
 After each phase is implemented, verify it with the following steps in order.

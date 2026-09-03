@@ -236,7 +236,10 @@ describe("AgentThread", () => {
     expect(screen.getByText("Thinking…")).toBeInTheDocument();
   });
 
-  it("collapses the real streamed reasoning text by default, expanding it on click", async () => {
+  it("shows the streamed reasoning expanded while the turn is live, collapsing it on click", async () => {
+    // The live card is expanded by default (the design mock's `open = ... ?? !m.done`).
+    // The old wall-of-text objection to that is gone: the text is now chunked into
+    // separated step rows and the live view is windowed to the last few of them.
     (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     useStore.setState({
       streamBuffers: {
@@ -250,12 +253,113 @@ describe("AgentThread", () => {
       expect(screen.getByText("REASONING")).toBeInTheDocument();
     });
     expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
-    expect(screen.queryByText("weighing the JD against the CV...")).not.toBeInTheDocument();
+    expect(screen.getByText(/weighing the JD against the CV/)).toBeInTheDocument();
 
     const user = (await import("@testing-library/user-event")).default.setup();
     await user.click(screen.getByRole("button", { name: /REASONING/ }));
 
-    expect(screen.getByText("weighing the JD against the CV...")).toBeInTheDocument();
+    expect(screen.queryByText(/weighing the JD against the CV/)).not.toBeInTheDocument();
+  });
+
+  it("chunks a multi-paragraph reasoning stream into separate step rows", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    useStore.setState({
+      streamBuffers: {
+        job1: {
+          stage: "cv_adjust",
+          content: "",
+          reasoning: "Reading the JD.\n\nComparing it to the CV.\n\nDrafting the change",
+        },
+      },
+    });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("REASONING")).toBeInTheDocument();
+    });
+    expect(screen.getAllByTestId("reasoning-step")).toHaveLength(3);
+    expect(screen.getByText("3 steps")).toBeInTheDocument();
+  });
+
+  it("windows a long live reasoning stream instead of letting the card inflate", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const reasoning = Array.from({ length: 12 }, (_, i) => `Step number ${i}.`).join("\n\n");
+    useStore.setState({
+      streamBuffers: { job1: { stage: "cv_adjust", content: "", reasoning } },
+    });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("REASONING")).toBeInTheDocument();
+    });
+    expect(screen.getAllByTestId("reasoning-step")).toHaveLength(5);
+    expect(screen.getByText("Step number 11.")).toBeInTheDocument();
+    expect(screen.queryByText("Step number 0.")).not.toBeInTheDocument();
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByText("+7 earlier steps"));
+    expect(screen.getAllByTestId("reasoning-step")).toHaveLength(12);
+    expect(screen.getByText("Step number 0.")).toBeInTheDocument();
+  });
+
+  it("renders a settled turn's persisted reasoning, collapsed behind a step count", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        seq: 1,
+        kind: "question",
+        role: "assistant",
+        stage: "cv_adjust",
+        text: "Which title should I lead with?",
+        created_at: "2026-09-03T10:00:00Z",
+        follow_up_id: null,
+        suggested_replies: null,
+        reasoning: "Checked the JD.\n\nChecked the CV.",
+      },
+    ]);
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Which title should I lead with?")).toBeInTheDocument();
+    });
+    expect(screen.getByText("REASONING")).toBeInTheDocument();
+    expect(screen.getByText("2 steps")).toBeInTheDocument();
+    // Settled = collapsed by default; the user opens it deliberately.
+    expect(screen.queryByTestId("reasoning-step")).not.toBeInTheDocument();
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: /REASONING/ }));
+    expect(screen.getAllByTestId("reasoning-step")).toHaveLength(2);
+  });
+
+  it("renders tool-call rows through the same step list (dev preview toggle)", async () => {
+    // The backend has no tool channel yet — the DEV-only toggle in the card header is
+    // how the row is exercised until one lands. It renders through the same
+    // ReasoningStep union and the same row/separator idiom as reasoning prose, so
+    // wiring a real channel later is additive.
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    useStore.setState({
+      streamBuffers: {
+        job1: { stage: "cv_adjust", content: "", reasoning: "Reading the JD.\n\nComparing to the CV." },
+      },
+    });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("REASONING")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("reasoning-tool-step")).not.toBeInTheDocument();
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByText("TOOLS:OFF"));
+
+    expect(screen.getAllByTestId("reasoning-tool-step")).toHaveLength(1);
+    expect(screen.getByText("read_file")).toBeInTheDocument();
+    expect(screen.getByText("~/.jsa/cv_structure.json")).toBeInTheDocument();
+    expect(screen.getByText("TOOL")).toBeInTheDocument();
   });
 
   it("hides the REASONING card once content has started arriving with no reasoning captured", async () => {
