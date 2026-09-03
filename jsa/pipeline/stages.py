@@ -39,6 +39,7 @@ from jsa.events.schema import (
     LogEvent,
     StageCompleteEvent,
     StatusChangedEvent,
+    TranscriptChangedEvent,
     event_to_dict,
 )
 from jsa.pipeline.checkpoints import checkpoint
@@ -324,6 +325,13 @@ async def _log_session_mode(
             LogEvent(job_id=job.id, level="info", text=f"Stage {stage.value}: session mode = {mode}")
         )
     )
+
+
+async def _publish_transcript_changed(job: Job) -> None:
+    """Invalidation-only hint: Messages/FollowUps/Documents/RevisionRequests changed
+    for this job. Emit after every checkpoint() call that writes any of those rows
+    (see CLAUDE.md / the transcript-projection plan for the full call-site list)."""
+    await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job.id)))
 
 
 # How many times to re-prompt the same session when a FINAL block fails content
@@ -991,6 +999,7 @@ async def _handle_needs_input(
         messages=accumulated_messages,
         follow_up=follow_up_data,
     )
+    await _publish_transcript_changed(job)
 
 
 # ---------------------------------------------------------------------------
@@ -1115,6 +1124,7 @@ async def _run_fit_assessment(
             raise StaleJobResult(job.id, current_state)
         job.fit_reason = _FIT_FALLBACK_REASON
         await checkpoint(session, job, JobState.unfit, None)
+        await _publish_transcript_changed(job)
         await _publish_fit_outcome(job, is_fit=False)
         return
 
@@ -1143,6 +1153,7 @@ async def _run_fit_assessment(
         None,
         messages=accumulated_messages,
     )
+    await _publish_transcript_changed(job)
     await backend.end_session(handle)
     await _publish_fit_outcome(job, is_fit=is_fit)
 
@@ -1247,6 +1258,7 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        await _publish_transcript_changed(job)
         if output_dir is not None:
             await _render_cv(session, job, output_dir)
     elif stage == Stage.cover_letter:
@@ -1262,6 +1274,7 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        await _publish_transcript_changed(job)
         if output_dir is not None:
             await _render_for_review(session, job, output_dir)
     elif stage in (Stage.revising_cv, Stage.revising_cl):
@@ -1292,6 +1305,7 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        await _publish_transcript_changed(job)
         if output_dir is not None:
             if dest_state == JobState.cv_review:
                 await _render_cv(session, job, output_dir)

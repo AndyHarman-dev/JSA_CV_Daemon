@@ -12,10 +12,17 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from jsa.api.transcript import build_transcript
 from jsa.db import repo
-from jsa.db.models import Document, FollowUp, Job, JobState, RevisionRequest, Stage
+from jsa.db.models import Document, FollowUp, Job, JobState, Message, RevisionRequest, Stage
 from jsa.events.bus import bus
-from jsa.events.schema import ApprovedEvent, StatusChangedEvent, JobRemovedEvent, event_to_dict
+from jsa.events.schema import (
+    ApprovedEvent,
+    StatusChangedEvent,
+    JobRemovedEvent,
+    TranscriptChangedEvent,
+    event_to_dict,
+)
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
 from jsa.store import preferences as preferences_store
@@ -174,6 +181,37 @@ async def get_job(request: Request, job_id: str):
         return _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
 
+@router.get("/api/jobs/{job_id}/transcript")
+async def get_transcript(request: Request, job_id: str):
+    """Return the display-ready, ordered transcript turns for a job. 404 if not found.
+
+    Loads messages explicitly (Message.id ascending — the only reliable order, see
+    build_transcript's docstring) rather than via `_fetch_job_with_relations`, which
+    intentionally does not eager-load `messages` (many mutating endpoints share that
+    helper and would each pay for an unused eager-load).
+    """
+    sf = _session_factory(request)
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+
+        msg_result = await session.execute(
+            select(Message).where(Message.job_id == job_id).order_by(Message.id.asc())
+        )
+        messages = list(msg_result.scalars().all())
+
+        rev_result = await session.execute(
+            select(RevisionRequest).where(RevisionRequest.job_id == job_id)
+        )
+        revision_requests = list(rev_result.scalars().all())
+
+        follow_ups = sorted(job.follow_ups, key=lambda fu: (fu.asked_at, fu.id))
+        documents = list(job.documents)
+
+    return build_transcript(job, messages, follow_ups, documents, revision_requests)
+
+
 @router.post("/api/jobs/{job_id}/answer")
 async def answer_follow_up(request: Request, job_id: str, body: AnswerBody):
     """Record the user's answer to a follow-up question."""
@@ -215,6 +253,8 @@ async def answer_follow_up(request: Request, job_id: str, body: AnswerBody):
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
+
+    await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job_id)))
 
     # Kick the orchestrator after releasing the session
     request.app.state.orchestrator.kick()
@@ -417,6 +457,8 @@ async def revise_job(request: Request, job_id: str, body: ReviseBody):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         job_dict = _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
+    await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job_id)))
+
     request.app.state.orchestrator.kick()
 
     return job_dict
@@ -505,6 +547,8 @@ async def ignore_fit(request: Request, job_id: str):
             )
         )
     )
+    # fit_reason cleared above → the verdict turn disappears from the transcript.
+    await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job_id)))
 
     request.app.state.orchestrator.kick()
 
@@ -724,6 +768,9 @@ async def reset_job(request: Request, job_id: str):
                 )
             )
         )
+        # soft_reset_job/nuclear_reset_job delete Messages/FollowUps/RevisionRequests
+        # (and, for nuclear, Documents too) — the transcript must be invalidated.
+        await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job_id)))
 
     # Re-fetch with relationships for the response
     async with sf() as session:

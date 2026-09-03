@@ -25,6 +25,7 @@ from jsa.events.schema import (
     LogEvent,
     ModelSwitchedEvent,
     StatusChangedEvent,
+    TranscriptChangedEvent,
     event_to_dict,
 )
 from jsa.pipeline import stages
@@ -774,6 +775,8 @@ class Orchestrator:
                                 )
                             )
                         )
+                        # backend_switch_reset deletes Messages/FollowUps/RevisionRequests.
+                        await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job_id)))
                         return  # hop taken — do not also advance the backend
 
                 # Find the next backend in the chain
@@ -803,6 +806,8 @@ class Orchestrator:
                             )
                         )
                     )
+                    # backend_switch_reset deletes Messages/FollowUps/RevisionRequests.
+                    await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job_id)))
                 else:
                     # Chain exhausted — mark failed. If the model ladder was tried
                     # (job.model_hops > 0) on the final backend before landing here,
@@ -859,6 +864,8 @@ class Orchestrator:
                             )
                         )
                     )
+                    # soft_reset_job deletes Messages/FollowUps/RevisionRequests.
+                    await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job_id)))
                     self.kick()
                 # retry_count > 0: already auto-recovered once — leave as failed
         except Exception as inner_exc:

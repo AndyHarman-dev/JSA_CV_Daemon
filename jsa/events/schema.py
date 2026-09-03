@@ -79,6 +79,15 @@ class ModelSwitchedEvent:
 
 
 @dataclass
+class TranscriptChangedEvent:
+    """Invalidation hint only — no content. Emitted whenever a job's Message,
+    FollowUp, Document, or RevisionRequest rows change (including reset paths that
+    delete them), so clients know to refetch GET /api/jobs/{id}/transcript."""
+    type: Literal["transcript_changed"] = "transcript_changed"
+    job_id: str = ""
+
+
+@dataclass
 class InferProgressEvent:
     """Progress for a standalone CV-structure inference task (no job).
 
