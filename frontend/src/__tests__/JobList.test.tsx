@@ -29,6 +29,22 @@ function groupHeader(label: string): HTMLElement {
   return el;
 }
 
+/** A job row's StatusBadge text (e.g. "RUNNING") can collide with the queue filter chips,
+ *  which deliberately reuse the same short uppercase words — so scope to inside a .jrow. */
+function jobRowBadge(label: string): HTMLElement | undefined {
+  return screen.queryAllByText(label).find((el) => el.closest("button.jrow"));
+}
+
+/** The filter chip button itself (as opposed to a same-worded StatusBadge, which is a
+ *  <span> inside a .jrow, never a top-level .jbtn button). */
+function filterChip(label: string): HTMLElement {
+  const el = screen
+    .getAllByText(label)
+    .find((e) => e.tagName === "BUTTON" && e.className.includes("jbtn"));
+  expect(el).not.toBeUndefined();
+  return el!;
+}
+
 beforeEach(() => {
   useStore.setState({
     jobs: {},
@@ -73,7 +89,7 @@ describe("JobList", () => {
     expect(screen.getByText("Corp")).toBeInTheDocument();
     expect(screen.getByText("Lead")).toBeInTheDocument();
     // StatusBadge renders the uppercase "RUNNING" label distinct from the group header
-    expect(screen.getByText("RUNNING")).toBeInTheDocument();
+    expect(jobRowBadge("RUNNING")).not.toBeUndefined();
   });
 
   it("shows the effective model on the job row when set", () => {
@@ -98,7 +114,7 @@ describe("JobList", () => {
     render(<JobList />);
 
     // Only the status badge and company/role text should render — no stray model chip.
-    expect(screen.getByText("RUNNING")).toBeInTheDocument();
+    expect(jobRowBadge("RUNNING")).not.toBeUndefined();
   });
 
   it("shows an unfit job under the Needs Review section", () => {
@@ -111,7 +127,7 @@ describe("JobList", () => {
     expect(screen.getByText("Bad Robot")).toBeInTheDocument();
     expect(screen.getByText("Principal")).toBeInTheDocument();
     // StatusBadge renders the uppercase "NEEDS REVIEW" label
-    expect(screen.getByText("NEEDS REVIEW")).toBeInTheDocument();
+    expect(jobRowBadge("NEEDS REVIEW")).not.toBeUndefined();
   });
 
   it("shows an awaiting_input job under the Inbox section", () => {
@@ -160,7 +176,7 @@ describe("JobList", () => {
     groupHeader("Failed");
     expect(screen.getByText("Fail Ltd")).toBeInTheDocument();
     expect(screen.getByText("QA")).toBeInTheDocument();
-    expect(screen.getByText("FAILED")).toBeInTheDocument();
+    expect(jobRowBadge("FAILED")).not.toBeUndefined();
   });
 
   it("shows a review job under the Review section", () => {
@@ -177,7 +193,7 @@ describe("JobList", () => {
     groupHeader("Review");
     expect(screen.getByText("Review Corp")).toBeInTheDocument();
     expect(screen.getByText("Scientist")).toBeInTheDocument();
-    expect(screen.getByText("REVIEW")).toBeInTheDocument();
+    expect(jobRowBadge("REVIEW")).not.toBeUndefined();
   });
 
   it("clicking a job row calls selectJob with the correct id", () => {
@@ -228,7 +244,7 @@ describe("JobList", () => {
     expect(screen.getByText("Fresh Co")).toBeInTheDocument();
     // The LAUNCH pill replaces the usual StatusBadge for a queued row.
     expect(screen.getByText("LAUNCH")).toBeInTheDocument();
-    expect(screen.queryByText("QUEUED")).not.toBeInTheDocument();
+    expect(jobRowBadge("QUEUED")).toBeUndefined();
   });
 
   it("a single queued job does not show the Launch All action", () => {
@@ -270,6 +286,154 @@ describe("JobList", () => {
     expect(screen.queryByText("Done")).toBeNull();
     // "Failed" is not present anywhere — no failed jobs and no group header
     expect(screen.queryByText("Failed")).toBeNull();
+  });
+
+  it("filters jobs by company name (case-insensitive)", () => {
+    const acme = makeJob({ id: "a1", company: "Acme Corp", role: "Engineer" });
+    const beta = makeJob({ id: "b1", company: "Beta Inc", role: "Designer" });
+    useStore.setState({ jobs: { a1: acme, b1: beta } });
+
+    render(<JobList />);
+    fireEvent.change(screen.getByPlaceholderText("Search company or role…"), {
+      target: { value: "acme" },
+    });
+
+    expect(screen.getByText("Acme Corp")).toBeInTheDocument();
+    expect(screen.queryByText("Beta Inc")).toBeNull();
+  });
+
+  it("filters jobs by role", () => {
+    const acme = makeJob({ id: "a1", company: "Acme Corp", role: "Engineer" });
+    const beta = makeJob({ id: "b1", company: "Beta Inc", role: "Designer" });
+    useStore.setState({ jobs: { a1: acme, b1: beta } });
+
+    render(<JobList />);
+    fireEvent.change(screen.getByPlaceholderText("Search company or role…"), {
+      target: { value: "design" },
+    });
+
+    expect(screen.getByText("Beta Inc")).toBeInTheDocument();
+    expect(screen.queryByText("Acme Corp")).toBeNull();
+  });
+
+  it("shows a 'no matches' message when the search excludes every job", () => {
+    const acme = makeJob({ id: "a1", company: "Acme Corp", role: "Engineer" });
+    useStore.setState({ jobs: { a1: acme } });
+
+    render(<JobList />);
+    fireEvent.change(screen.getByPlaceholderText("Search company or role…"), {
+      target: { value: "nonexistent" },
+    });
+
+    expect(screen.getByText("No jobs match your search.")).toBeInTheDocument();
+    expect(screen.queryByText("Acme Corp")).toBeNull();
+  });
+
+  it("clears the search via the clear button and restores all jobs", () => {
+    const acme = makeJob({ id: "a1", company: "Acme Corp", role: "Engineer" });
+    const beta = makeJob({ id: "b1", company: "Beta Inc", role: "Designer" });
+    useStore.setState({ jobs: { a1: acme, b1: beta } });
+
+    render(<JobList />);
+    const input = screen.getByPlaceholderText("Search company or role…");
+    fireEvent.change(input, { target: { value: "acme" } });
+    expect(screen.queryByText("Beta Inc")).toBeNull();
+
+    fireEvent.click(screen.getByTitle("Clear"));
+
+    expect(input).toHaveValue("");
+    expect(screen.getByText("Acme Corp")).toBeInTheDocument();
+    expect(screen.getByText("Beta Inc")).toBeInTheDocument();
+  });
+
+  it("shows a filter chip with a count for each group that has jobs, and none for empty groups", () => {
+    const running = makeJob({ id: "r1", state: "running", company: "Run Co", role: "Dev" });
+    const failed = makeJob({ id: "f1", state: "failed", company: "Fail Co", role: "Dev" });
+    useStore.setState({ jobs: { r1: running, f1: failed } });
+
+    render(<JobList />);
+
+    const runningChip = filterChip("RUNNING");
+    expect(runningChip).toHaveTextContent("1");
+    filterChip("FAILED");
+    expect(screen.queryByText("DONE")).toBeNull();
+    expect(screen.queryByText("DISMISSED")).toBeNull();
+  });
+
+  it("clicking a filter chip narrows the list to that group only", () => {
+    const running = makeJob({ id: "r1", state: "running", company: "Run Co", role: "Dev" });
+    const failed = makeJob({ id: "f1", state: "failed", company: "Fail Co", role: "Dev" });
+    useStore.setState({ jobs: { r1: running, f1: failed } });
+
+    render(<JobList />);
+    fireEvent.click(filterChip("FAILED"));
+
+    expect(screen.getByText("Fail Co")).toBeInTheDocument();
+    expect(screen.queryByText("Run Co")).toBeNull();
+    expect(screen.queryByText("Running")).toBeNull(); // group header gone
+  });
+
+  it("clicking an active filter chip again deselects it and restores all groups", () => {
+    const running = makeJob({ id: "r1", state: "running", company: "Run Co", role: "Dev" });
+    const failed = makeJob({ id: "f1", state: "failed", company: "Fail Co", role: "Dev" });
+    useStore.setState({ jobs: { r1: running, f1: failed } });
+
+    render(<JobList />);
+    fireEvent.click(filterChip("FAILED"));
+    fireEvent.click(filterChip("FAILED"));
+
+    expect(screen.getByText("Fail Co")).toBeInTheDocument();
+    expect(screen.getByText("Run Co")).toBeInTheDocument();
+  });
+
+  it("selecting multiple filter chips shows the union of their groups", () => {
+    const running = makeJob({ id: "r1", state: "running", company: "Run Co", role: "Dev" });
+    const failed = makeJob({ id: "f1", state: "failed", company: "Fail Co", role: "Dev" });
+    const done = makeJob({ id: "d1", state: "approved", company: "Done Co", role: "Dev" });
+    useStore.setState({ jobs: { r1: running, f1: failed, d1: done } });
+
+    render(<JobList />);
+    fireEvent.click(filterChip("FAILED"));
+    fireEvent.click(filterChip("RUNNING"));
+
+    expect(screen.getByText("Fail Co")).toBeInTheDocument();
+    expect(screen.getByText("Run Co")).toBeInTheDocument();
+    expect(screen.queryByText("Done Co")).toBeNull();
+  });
+
+  it("shows a CLEAR chip only once a filter is active, and it resets all filters", () => {
+    const running = makeJob({ id: "r1", state: "running", company: "Run Co", role: "Dev" });
+    const failed = makeJob({ id: "f1", state: "failed", company: "Fail Co", role: "Dev" });
+    useStore.setState({ jobs: { r1: running, f1: failed } });
+
+    render(<JobList />);
+    expect(screen.queryByText("CLEAR")).toBeNull();
+
+    fireEvent.click(filterChip("FAILED"));
+    expect(screen.getByText("CLEAR")).toBeInTheDocument();
+    expect(screen.queryByText("Run Co")).toBeNull();
+
+    fireEvent.click(screen.getByText("CLEAR"));
+    expect(screen.queryByText("CLEAR")).toBeNull();
+    expect(screen.getByText("Run Co")).toBeInTheDocument();
+    expect(screen.getByText("Fail Co")).toBeInTheDocument();
+  });
+
+  it("combines an active filter with the search box (both must match)", () => {
+    const runA = makeJob({ id: "r1", state: "running", company: "Acme Corp", role: "Dev" });
+    const runB = makeJob({ id: "r2", state: "running", company: "Beta Inc", role: "Dev" });
+    const failedA = makeJob({ id: "f1", state: "failed", company: "Acme Corp", role: "QA" });
+    useStore.setState({ jobs: { r1: runA, r2: runB, f1: failedA } });
+
+    render(<JobList />);
+    fireEvent.click(filterChip("RUNNING"));
+    fireEvent.change(screen.getByPlaceholderText("Search company or role…"), {
+      target: { value: "acme" },
+    });
+
+    expect(screen.getByText("Acme Corp")).toBeInTheDocument();
+    expect(screen.queryByText("Beta Inc")).toBeNull(); // excluded by search
+    expect(screen.queryByText("QA")).toBeNull(); // excluded by the RUNNING filter
   });
 
   it("shows the CV setup gate banner when cvStructureExists is false", () => {

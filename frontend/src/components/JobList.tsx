@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useStore } from "../store";
 import { StatusBadge } from "./StatusBadge";
 import { LaunchButton } from "./LaunchButton";
@@ -5,28 +6,39 @@ import type { JobDTO, JobState } from "../types";
 import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase } from "../theme/chrome";
+import { Icon } from "../theme/Icon";
 
 const T = SHELL_THEME;
 
 const TIER_COLOR: Record<string, string> = { A: T.green, B: T.accent2, C: T.ink3 };
 
 interface Group {
+  code: string;
   labelKey: string;
+  chipKey: string;
   states: JobState[];
 }
 
 // `labelKey` is a translation key, resolved by the component below via `t()`.
 // "jobList.queued" is deliberately its own top-most group (not folded into "running")
 // so fresh, never-launched jobs are visually distinct from ones already dispatching.
+// `code` is a stable identifier for the filter-chip toggle state (queueFilters); `chipKey`
+// is a separate, terser translation key for the filter chip itself, since the section
+// header text (e.g. "Queued — Not Started") is too long to render as a chip.
 const GROUPS: Group[] = [
-  { labelKey: "jobList.queued", states: ["queued"] },
-  { labelKey: "jobList.inbox", states: ["awaiting_input"] },
-  { labelKey: "jobList.needsReview", states: ["unfit"] },
-  { labelKey: "jobList.running", states: ["running", "pending", "fit_done", "cv_done", "cl_done"] },
-  { labelKey: "jobList.review", states: ["cv_review", "review"] },
-  { labelKey: "jobList.done", states: ["approved"] },
-  { labelKey: "jobList.failed", states: ["failed"] },
-  { labelKey: "jobList.dismissed", states: ["dismissed"] },
+  { code: "queued", labelKey: "jobList.queued", chipKey: "jobList.filterQueued", states: ["queued"] },
+  { code: "inbox", labelKey: "jobList.inbox", chipKey: "jobList.filterInbox", states: ["awaiting_input"] },
+  { code: "needsReview", labelKey: "jobList.needsReview", chipKey: "jobList.filterNeedsReview", states: ["unfit"] },
+  {
+    code: "running",
+    labelKey: "jobList.running",
+    chipKey: "jobList.filterRunning",
+    states: ["running", "pending", "fit_done", "cv_done", "cl_done"],
+  },
+  { code: "review", labelKey: "jobList.review", chipKey: "jobList.filterReview", states: ["cv_review", "review"] },
+  { code: "done", labelKey: "jobList.done", chipKey: "jobList.filterDone", states: ["approved"] },
+  { code: "failed", labelKey: "jobList.failed", chipKey: "jobList.filterFailed", states: ["failed"] },
+  { code: "dismissed", labelKey: "jobList.dismissed", chipKey: "jobList.filterDismissed", states: ["dismissed"] },
 ];
 
 function JobRow({
@@ -120,6 +132,133 @@ function JobRow({
   );
 }
 
+function QueueSearch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const t = useT();
+  return (
+    <div
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        margin: "0 4px 8px",
+        background: T.sunk,
+        border: `1px solid ${T.bd2}`,
+        borderRadius: T.btnRadius,
+        padding: "0 9px",
+      }}
+    >
+      <span style={{ color: T.ink3, display: "flex", flex: "none" }}>
+        <Icon name="search" size={12} />
+      </span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={t("jobList.searchPlaceholder")}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          border: "none",
+          background: "transparent",
+          outline: "none",
+          padding: "8px 8px",
+          font: `400 12px ${T.ui}`,
+          color: T.ink,
+        }}
+      />
+      {value && (
+        <button
+          type="button"
+          className="jbtn"
+          onClick={() => onChange("")}
+          title={t("jobList.searchClear")}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: T.ink3,
+            cursor: "pointer",
+            padding: 3,
+            display: "flex",
+            flex: "none",
+            borderRadius: T.btnRadius,
+          }}
+        >
+          <Icon name="x" size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function QueueFilters({
+  counts,
+  active,
+  onToggle,
+  onClear,
+}: {
+  counts: Record<string, number>;
+  active: string[];
+  onToggle: (code: string) => void;
+  onClear: () => void;
+}) {
+  const t = useT();
+  const chips = GROUPS.map((g) => {
+    const n = counts[g.code] || 0;
+    const on = active.includes(g.code);
+    if (!n && !on) return null;
+    return (
+      <button
+        key={g.code}
+        type="button"
+        className="jbtn"
+        onClick={() => onToggle(g.code)}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          padding: "4px 9px",
+          border: `1px solid ${on ? T.a : T.bd}`,
+          borderRadius: T.btnRadius,
+          background: on ? T.aSoft : T.sunk,
+          color: on ? T.a : T.ink2,
+          font: `500 9.5px ${T.mono}`,
+          letterSpacing: ".05em",
+          cursor: "pointer",
+        }}
+      >
+        {t(g.chipKey)}
+        <span style={{ color: on ? T.a : T.ink3, opacity: 0.8 }}>{n}</span>
+      </button>
+    );
+  });
+  if (!chips.some(Boolean)) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 5, margin: "0 4px 14px" }}>
+      {chips}
+      {active.length > 0 && (
+        <button
+          type="button"
+          className="jbtn"
+          onClick={onClear}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            padding: "4px 9px",
+            border: `1px solid ${T.bd}`,
+            borderRadius: T.btnRadius,
+            background: "transparent",
+            color: T.ink3,
+            font: `500 9.5px ${T.mono}`,
+            letterSpacing: ".05em",
+            cursor: "pointer",
+          }}
+        >
+          {t("jobList.filterClear")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function CvGateBanner() {
   const setEditorOpen = useStore((s) => s.setEditorOpen);
   const t = useT();
@@ -167,6 +306,23 @@ export function JobList() {
   const launchAll = useStore((s) => s.launchAll);
   const cvStructureExists = useStore((s) => s.cvStructureExists);
   const t = useT();
+  const [search, setSearch] = useState("");
+  const [activeFilters, setActiveFilters] = useState<string[]>([]);
+
+  const query = search.trim().toLowerCase();
+  const bySearch = query
+    ? jobs.filter((j) => j.company.toLowerCase().includes(query) || j.role.toLowerCase().includes(query))
+    : jobs;
+  const counts: Record<string, number> = {};
+  GROUPS.forEach((g) => {
+    counts[g.code] = bySearch.filter((j) => (g.states as string[]).includes(j.state)).length;
+  });
+  const visibleGroups = GROUPS.filter((g) => !activeFilters.length || activeFilters.includes(g.code));
+
+  const toggleFilter = (code: string) =>
+    setActiveFilters((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
+
+  const anyRendered = visibleGroups.some((g) => (counts[g.code] || 0) > 0);
 
   return (
     <nav
@@ -191,8 +347,15 @@ export function JobList() {
         PROCESS_QUEUE
       </div>
       {cvStructureExists === false && <CvGateBanner />}
-      {GROUPS.map((group) => {
-        const groupJobs = jobs.filter((j) => (group.states as string[]).includes(j.state));
+      <QueueSearch value={search} onChange={setSearch} />
+      <QueueFilters
+        counts={counts}
+        active={activeFilters}
+        onToggle={toggleFilter}
+        onClear={() => setActiveFilters([])}
+      />
+      {visibleGroups.map((group) => {
+        const groupJobs = bySearch.filter((j) => (group.states as string[]).includes(j.state));
         if (groupJobs.length === 0) return null;
         return (
           <section key={group.labelKey} style={{ marginBottom: 16 }}>
@@ -250,6 +413,11 @@ export function JobList() {
       {jobs.length === 0 && (
         <p style={{ font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: "italic", padding: "0 4px" }}>
           {t("jobList.noJobsLoaded")}
+        </p>
+      )}
+      {jobs.length > 0 && !anyRendered && (
+        <p style={{ font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: "italic", padding: "0 4px" }}>
+          {t("jobList.noSearchMatches")}
         </p>
       )}
     </nav>
