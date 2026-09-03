@@ -198,6 +198,110 @@ function NoticeLine({ turn }: { turn: TranscriptTurn }) {
   );
 }
 
+// Phase 8 — the live, in-progress agent turn rendered from the streaming buffer. Only
+// shows the REASONING card when reasoning chunks actually arrived (claude-cli's
+// thinking_delta) — a structured-mode or google-cli session never streams reasoning, and
+// showing an empty collapsible card there would be a fake affordance. No content and no
+// reasoning yet -> the plain "working…" indicator, the honest ceiling for those sessions.
+function LiveBubble({ content, reasoning }: { content: string; reasoning: string }) {
+  const t = useT();
+  const [reasoningOpen, setReasoningOpen] = useState(true);
+  const hasReasoning = reasoning.trim().length > 0;
+  const hasContent = content.trim().length > 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, width: "100%" }}>
+      {avatarFor("assistant", t)}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: "82%", width: "100%" }}>
+        {hasReasoning && (
+          <div
+            style={{
+              border: `1px dashed ${T.bd2}`,
+              borderRadius: T.radius,
+              background: T.sunk,
+              overflow: "hidden",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setReasoningOpen((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                width: "100%",
+                padding: "6px 10px",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                font: `600 9px ${T.mono}`,
+                letterSpacing: ".1em",
+                color: T.ink3,
+                textTransform: "uppercase",
+              }}
+            >
+              <Icon name="bolt" size={11} />
+              {t("agentThread.reasoning")}
+              <span
+                style={{
+                  marginLeft: "auto",
+                  display: "flex",
+                  transform: reasoningOpen ? "rotate(90deg)" : "rotate(0deg)",
+                  transition: "transform .12s ease",
+                }}
+              >
+                <Icon name="chevron" size={11} />
+              </span>
+            </button>
+            {reasoningOpen && (
+              <div
+                style={{
+                  padding: "0 10px 8px",
+                  font: `400 11.5px/1.5 ${T.mono}`,
+                  color: T.ink3,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {reasoning}
+              </div>
+            )}
+          </div>
+        )}
+        {hasContent ? (
+          <div
+            style={{
+              background: T.aSoft,
+              border: `1px solid ${T.aBorder}`,
+              borderRadius: T.radius,
+              padding: "10px 13px",
+              font: `400 13px/1.55 ${T.ui}`,
+              color: T.ink,
+            }}
+          >
+            <MarkdownPreview markdown={content} style={{ color: T.ink }} />
+          </div>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              font: `400 12.5px ${T.ui}`,
+              color: T.ink3,
+              fontStyle: "italic",
+            }}
+          >
+            <span style={{ display: "flex", animation: "jsspin 1s linear infinite" }}>
+              <Icon name="refresh" size={12} />
+            </span>
+            {t("agentThread.working")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PlumbingLine({ turn }: { turn: TranscriptTurn }) {
   const t = useT();
   return (
@@ -233,6 +337,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
   const t = useT();
   const transcript = useStore((s) => s.transcripts[jobId]);
   const fetchTranscript = useStore((s) => s.fetchTranscript);
+  const streamBuffer = useStore((s) => s.streamBuffers[jobId]);
   const [loading, setLoading] = useState(transcript === undefined);
   const [error, setError] = useState<string | null>(null);
   const [showInternals, setShowInternals] = useState(false);
@@ -259,7 +364,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [turns.length]);
+  }, [turns.length, streamBuffer?.content.length, streamBuffer?.reasoning.length]);
 
   const openFollowUpId = mode === "answer" ? findOpenFollowUpId(turns) : null;
   const openFollowUpTurn =
@@ -337,6 +442,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
             }
             return <TurnBubble key={turn.seq} turn={turn} />;
           })}
+        {streamBuffer && <LiveBubble content={streamBuffer.content} reasoning={streamBuffer.reasoning} />}
         <div ref={bottomRef} />
       </div>
 

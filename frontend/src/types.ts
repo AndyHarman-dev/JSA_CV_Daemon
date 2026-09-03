@@ -74,7 +74,15 @@ export type WSEvent =
       label: string;
       status: "active" | "done" | "error";
       message: string;
-    };
+    }
+  // Phase 8 — streaming. A batched slice of in-progress model output, already coalesced
+  // server-side (jsa/pipeline/streaming.py::ChunkAccumulator). Mirrors
+  // jsa/events/schema.py::AgentChunkEvent exactly.
+  | { type: "agent_chunk"; job_id: string; stage: string; kind: "content" | "reasoning"; text: string }
+  // Marks the end of one streamed turn. superseded=true means discard the buffer outright
+  // (a retry/nudge/self-heal path replayed the whole turn). Mirrors
+  // jsa/events/schema.py::AgentTurnEndEvent exactly.
+  | { type: "agent_turn_end"; job_id: string; stage: string; superseded: boolean };
 
 // --- CV Structure Editor — the CVDocument schema (mirrors jsa/schema/cv.py) -------------
 // The editor reads/writes exactly this shape. `kind`/`id` are UI-only and stripped on export.

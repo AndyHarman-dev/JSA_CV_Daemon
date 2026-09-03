@@ -61,6 +61,12 @@ interface Store {
   // until first fetched. Never capped — see CLAUDE.md-adjacent plan note: the toast
   // `.slice(-5)` pattern bounds ephemeral notifications, not conversation history.
   transcripts: Record<string, TranscriptTurn[]>;
+  // Phase 8 — per-job in-progress streamed content, keyed by job_id. Cleared on
+  // agent_turn_end (discarded outright when superseded=true, since that means a
+  // retry/nudge/self-heal path replayed the whole turn and this buffer is stale).
+  // Not persisted anywhere — a page reload loses an in-flight stream, same as today's
+  // "loading" state until the next transcript fetch lands.
+  streamBuffers: Record<string, { stage: string; content: string; reasoning: string }>;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setViewedStage(stage: Store["viewedStage"]): void;
@@ -98,6 +104,7 @@ export const useStore = create<Store>((set, get) => ({
   cvStructureExists: null,
   viewedStage: null,
   transcripts: {},
+  streamBuffers: {},
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -249,6 +256,31 @@ export const useStore = create<Store>((set, get) => ({
       case "infer_progress":
         // Job-less editor event — drive the inferring checklist in the editor store.
         useEditorStore.getState().onInferProgress(e);
+        break;
+      case "agent_chunk":
+        set((state) => {
+          const existing = state.streamBuffers[e.job_id];
+          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "" };
+          return {
+            streamBuffers: {
+              ...state.streamBuffers,
+              [e.job_id]: {
+                stage: e.stage,
+                content: e.kind === "content" ? base.content + e.text : base.content,
+                reasoning: e.kind === "reasoning" ? base.reasoning + e.text : base.reasoning,
+              },
+            },
+          };
+        });
+        break;
+      case "agent_turn_end":
+        // Either the turn completed (checkpoint already landed — transcript_changed will
+        // follow and render the real turn) or it was superseded (discard outright). Either
+        // way the live buffer's job is done.
+        set((state) => {
+          const { [e.job_id]: _, ...rest } = state.streamBuffers;
+          return { streamBuffers: rest };
+        });
         break;
     }
   },
