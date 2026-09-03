@@ -1059,6 +1059,56 @@ manual-verification gap in this plan) — the user should confirm the placeholde
 appears on their next live run regardless of whether their configured model streams
 any reasoning at all.
 
+2026-09-03 (visual, follow-up): The user pointed at the design handoff zip again
+("right now it's a raw just box in the messages") — investigation confirmed
+`AgentThread.tsx` was never migrated onto this codebase's shared chrome primitives
+(`frontend/src/theme/chrome.tsx`'s `panelBase`/`chamferPath`/`Spinner`, ported from
+the design's `panelBase`/`chamferPath`/ring-spinner and already used by every other
+panel in the app — `JobList`, `Header`, `JobDetail`, `ChatBox`, `ReviewPane`,
+`UnfitModal`, `Toast`, `BootGate`, `ScratchBuffer`). Every bubble in this file
+(`TurnBubble`, and both parts of `LiveBubble`) used a hand-rolled `borderRadius:
+T.radius` instead — which ignores the "hud" skin's chamfer entirely, so under that
+skin every other panel in the app has angular chamfered corners while chat bubbles
+stayed plain rounded rectangles. That mismatch is the "raw box" the user meant, not a
+missing feature.
+
+Compared the design's `thinkCard` (mock lines ~733-747) against the current
+`LiveBubble` reasoning card specifically, since that's the widget in question: the
+spec uses `panelBase(T, { border: color-mix(accent2 45%, bd), chamfer: 10 })` plus a
+glow `boxShadow` while `!m.done`, a small ring spinner (not a rotating icon) next to
+the bright-`ink` "REASONING" label with an inline one-line summary next to it, and —
+critically — NO collapse chevron while `!m.done`: the mock only makes the card
+collapsible/toggleable once a turn is finished and persisted; a still-streaming card
+is always forced open. That maps exactly onto our `LiveBubble`, which by construction
+only ever exists in the `!m.done` (live) state — so the old manual expand/collapse
+toggle (`reasoningOpen` state + chevron button) was actually a spec deviation, not a
+feature to preserve.
+
+Rewrote `TurnBubble` and both parts of `LiveBubble` (reasoning card, content bubble)
+to use `panelBase(T, { ..., chamfer: 10 })` for their background/border/corner
+treatment, matching every other panel in the app. `LiveBubble`'s reasoning card now
+also gets the accent2-tinted border + glow `boxShadow` and a `Spinner` (this
+codebase's existing ring-spinner component, `theme/chrome.tsx` — already an exact
+port of the design's inline ring-spinner markup, just not previously reused here)
+instead of the rotating `Icon("refresh")`. The header row now shows the spinner +
+bright "REASONING" label + an inline "Thinking…" summary (only while `!hasReasoning`
+— once real reasoning text streams in, it renders in a bordered body section below
+the header instead, no summary text needed at that point). Removed the collapse
+chevron/toggle entirely per the above — matches the mock's forced-open live state, and
+simplifies the component (no `reasoningOpen` state needed). The persisted/finished-
+turn case (a collapsible reasoning card on a completed `TurnBubble`) is NOT
+implemented here — `turn.reasoning` still isn't rendered for finished turns at all,
+same pre-existing gap noted in an earlier entry; out of scope for this pass, which
+was about the live card's chrome specifically.
+
+Verification: verified — `tsc --noEmit` clean, full frontend suite (307/307,
+unchanged count — no tests needed updating since the visible text assertions
+("REASONING", "Thinking…") still hold, just from different DOM structure), and `npm
+run build` (rebuilt `jsa/static`) all pass. Not independently re-verified: live
+visual comparison against the actual mockup in a browser (same no-local-DB limitation
+as every prior entry) — the user should confirm the card now reads as a proper
+chamfered panel with the glow/spinner treatment rather than a plain box.
+
 ## Decisions Log
 
 _Reserved for the user. Not to be written by the agent._

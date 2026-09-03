@@ -7,6 +7,7 @@ import { MarkdownPreview } from "./MarkdownPreview";
 import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { Icon } from "../theme/Icon";
+import { panelBase, Spinner } from "../theme/chrome";
 
 const T = SHELL_THEME;
 
@@ -154,9 +155,7 @@ function TurnBubble({ turn }: { turn: TranscriptTurn }) {
         </div>
         <div
           style={{
-            background: isUser ? T.sunk : T.aSoft,
-            border: `1px solid ${isUser ? T.bd2 : T.aBorder}`,
-            borderRadius: T.radius,
+            ...panelBase(T, { bg: isUser ? T.sunk : T.aSoft, border: isUser ? T.bd2 : T.aBorder, chamfer: 10 }),
             padding: "10px 13px",
             font: `400 13px/1.55 ${T.ui}`,
             color: T.ink,
@@ -211,7 +210,6 @@ function NoticeLine({ turn }: { turn: TranscriptTurn }) {
 // visibly moved on to answering).
 function LiveBubble({ content, reasoning }: { content: string; reasoning: string }) {
   const t = useT();
-  const [reasoningOpen, setReasoningOpen] = useState(true);
   const hasReasoning = reasoning.trim().length > 0;
   const hasContent = content.trim().length > 0;
   const showReasoningCard = hasReasoning || !hasContent;
@@ -220,65 +218,46 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
       {avatarFor("assistant", t)}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: "82%", width: "100%" }}>
         {showReasoningCard && (
+          // Design handoff's thinkCard, "not done" state — always the case here, since
+          // this card only exists while the turn is still in flight: chamfered panel
+          // with an accent2-tinted border and glow, forced open (no collapse chevron —
+          // that's only for the persisted/finished-turn state, which this isn't), and a
+          // ring spinner instead of the settled "bolt" icon.
           <div
             style={{
-              border: `1px dashed ${T.bd2}`,
-              borderRadius: T.radius,
-              background: T.sunk,
+              ...panelBase(T, { border: `color-mix(in srgb, ${T.accent2} 45%, ${T.bd})`, chamfer: 10 }),
+              boxShadow: `0 0 0 1px color-mix(in srgb, ${T.accent2} 30%, transparent), 0 0 20px ${T.accent2}22`,
               overflow: "hidden",
             }}
           >
-            <button
-              type="button"
-              onClick={() => setReasoningOpen((v) => !v)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                width: "100%",
-                padding: "6px 10px",
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-                font: `600 9px ${T.mono}`,
-                letterSpacing: ".1em",
-                color: T.ink3,
-                textTransform: "uppercase",
-              }}
-            >
-              <Icon name="bolt" size={11} />
-              {t("agentThread.reasoning")}
+            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 12px" }}>
+              <Spinner color={T.accent2} size={8} />
               <span
                 style={{
-                  marginLeft: "auto",
-                  display: "flex",
-                  transform: reasoningOpen ? "rotate(90deg)" : "rotate(0deg)",
-                  transition: "transform .12s ease",
+                  font: `600 10px ${T.mono}`,
+                  letterSpacing: ".1em",
+                  color: T.ink,
+                  textTransform: "uppercase",
                 }}
               >
-                <Icon name="chevron" size={11} />
+                {t("agentThread.reasoning")}
               </span>
-            </button>
-            {reasoningOpen && (
+              {!hasReasoning && (
+                <span style={{ font: `400 11px ${T.mono}`, color: T.ink3 }}>{t("agentThread.thinking")}</span>
+              )}
+            </div>
+            {hasReasoning && (
               <div
                 style={{
-                  padding: "0 10px 8px",
-                  font: `400 11.5px/1.5 ${T.mono}`,
-                  color: T.ink3,
+                  borderTop: `1px solid ${T.bd}`,
+                  padding: "8px 12px",
+                  font: `400 12px/1.5 ${T.ui}`,
+                  color: T.ink2,
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                 }}
               >
-                {hasReasoning ? (
-                  reasoning
-                ) : (
-                  <span style={{ display: "flex", alignItems: "center", gap: 7, fontStyle: "italic" }}>
-                    <span style={{ display: "flex", animation: "jsspin 1s linear infinite" }}>
-                      <Icon name="refresh" size={12} />
-                    </span>
-                    {t("agentThread.thinking")}
-                  </span>
-                )}
+                {reasoning}
               </div>
             )}
           </div>
@@ -286,9 +265,7 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
         {hasContent && (
           <div
             style={{
-              background: T.aSoft,
-              border: `1px solid ${T.aBorder}`,
-              borderRadius: T.radius,
+              ...panelBase(T, { bg: T.aSoft, border: T.aBorder, chamfer: 10 }),
               padding: "10px 13px",
               font: `400 13px/1.55 ${T.ui}`,
               color: T.ink,
