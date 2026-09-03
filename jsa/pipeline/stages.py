@@ -936,9 +936,6 @@ async def run_stage(
         accumulator=accumulator,
     )
 
-    if accumulator is not None:
-        await accumulator.end_turn(superseded=False)
-
     # Guard against a stale result: the agent turn above may have run for a long
     # time, during which the job could have been dismissed/cancelled/deleted on
     # a separate session. checkpoint()'s transition() guard only validates
@@ -946,9 +943,19 @@ async def run_stage(
     # re-check a stale NEED_INPUT/FINAL would silently overwrite the real DB
     # state (e.g. resurrect a dismissed job — see StaleJobResult docstring).
     # Read via a fresh session: this session may hold a stale snapshot.
+    #
+    # accumulator.end_turn(superseded=False) -- telling the frontend the streamed
+    # turn is final -- deliberately runs AFTER this guard, not before: firing it
+    # first would tell a connected client "turn complete, keep the streamed
+    # content" even when the job turns out to be stale and no Message/Document
+    # ever gets persisted for this turn, leaving the client's view permanently
+    # out of sync with the DB until reload.
     current_state = await repo.get_state_fresh(session, job.id)
     if current_state != JobState.running:
         raise StaleJobResult(job.id, current_state)
+
+    if accumulator is not None:
+        await accumulator.end_turn(superseded=False)
 
     # Handle the reply
     if reply.kind == "needs_input":

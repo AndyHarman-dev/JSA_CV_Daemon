@@ -297,12 +297,20 @@ class OpenCodeGoBackend(OpenAICompatBackend):
                 on_retry=on_retry,
             )
 
-    async def _consume_messages_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
+    async def _consume_messages_sse(self, response: httpx.Response, on_chunk: OnChunk) -> tuple[str, str]:
         """Drain an Anthropic Messages-shape SSE stream
         (``event: content_block_delta`` / ``data: {"delta": {"type": "text_delta",
-        "text": ...}}``), forwarding content deltas through ``on_chunk``."""
+        "text": ...}}``), forwarding content deltas through ``on_chunk``.
+
+        Returns ``(joined_content_text, raw_body_text)`` — ``raw_body_text`` is
+        every line received, joined back together, so the caller can recover and
+        classify a genuine HTTP-200 JSON error envelope when the "stream" wasn't
+        SSE-shaped at all (mirrors _openai_compat.py's identical fallback)."""
         content_parts: list[str] = []
+        raw_lines: list[str] = []
         async for line in response.aiter_lines():
+            if line:
+                raw_lines.append(line)
             if not line or not line.startswith("data:"):
                 continue
             data = line[len("data:"):].strip()
@@ -321,7 +329,7 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             if text:
                 content_parts.append(text)
                 await on_chunk(AgentChunk(kind="content", text=text))
-        return "".join(content_parts)
+        return "".join(content_parts), "".join(raw_lines)
 
     async def _call_messages_api_once(
         self, system_prompt: str, messages: list[dict], on_chunk: OnChunk | None = None
@@ -364,6 +372,7 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             "Content-Type": "application/json",
         }
         streamed_content: str | None = None
+        streamed_raw: str = ""
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
             if use_stream:
@@ -371,7 +380,7 @@ class OpenCodeGoBackend(OpenAICompatBackend):
                     "POST", _MESSAGES_ENDPOINT, headers=headers, json=payload
                 ) as response:
                     if response.status_code == 200:
-                        streamed_content = await self._consume_messages_sse(response, on_chunk)
+                        streamed_content, streamed_raw = await self._consume_messages_sse(response, on_chunk)
                     else:
                         await response.aread()
             else:
@@ -392,20 +401,32 @@ class OpenCodeGoBackend(OpenAICompatBackend):
                 f"{self.name} API (messages) rate limit reached: {response.text[:500]}"
             )
 
-        if streamed_content is not None:
-            if not streamed_content:
+        if streamed_content:
+            return streamed_content
+
+        if streamed_content == "":
+            # HTTP 200, streamed, but no delta content was extracted. Try to
+            # recover the raw stream body as a JSON error envelope before
+            # assuming a generic transient/empty-stream failure -- mirrors
+            # _openai_compat.py's identical fallback for the same failure mode.
+            try:
+                body = json.loads(streamed_raw) if streamed_raw else None
+            except ValueError:
+                body = None
+            if not (isinstance(body, dict) and body.get("type") == "error"):
                 raise TransientBackendError(
                     f"{self.name} API (messages) stream returned no text content"
                 )
-            return streamed_content
-
-        try:
-            body = response.json()
-        except ValueError:
-            detail = f"{self.name} API (messages) error {response.status_code}: {response.text[:500]}"
-            if response.status_code >= 500:
-                raise TransientBackendError(detail) from None
-            raise AgentBackendUnavailable(detail) from None
+            # Fall through to the "type" == "error" classification below, using
+            # the body recovered from the stream instead of response.json().
+        else:
+            try:
+                body = response.json()
+            except ValueError:
+                detail = f"{self.name} API (messages) error {response.status_code}: {response.text[:500]}"
+                if response.status_code >= 500:
+                    raise TransientBackendError(detail) from None
+                raise AgentBackendUnavailable(detail) from None
 
         def _permanent_4xx(detail: str) -> Exception:
             return _CacheRejected(detail) if cache_fields_present else AgentBackendUnavailable(detail)

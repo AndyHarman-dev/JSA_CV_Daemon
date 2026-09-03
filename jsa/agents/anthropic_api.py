@@ -17,6 +17,7 @@ from jsa.agents.base import (
     AgentTimeout,
     HistoryTurn,
     OnChunk,
+    OnRetry,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -137,9 +138,13 @@ class AnthropicAPIBackend(AgentBackend):
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[AnthropicSessionHandle, AgentReply]:
         """Open a fresh session: send the initial user message and return the handle + first reply."""
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
+        # on_retry is accepted-but-unused here per base.py's OnRetry contract:
+        # this backend has no in-flight replay-and-retry shape of its own (no
+        # sentinel-nudge loop, no in-backend transient-HTTP retry loop).
         raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk)
         reply = _parse_reply_for(raw, structured_schema)
         messages.append({"role": "assistant", "content": raw})
@@ -181,6 +186,7 @@ class AnthropicAPIBackend(AgentBackend):
         text: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Append a user turn, call the API, parse and store the assistant reply.
 

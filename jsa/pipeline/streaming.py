@@ -115,9 +115,19 @@ class ChunkAccumulator:
     async def end_turn(self, *, superseded: bool = False) -> None:
         """Force-flush, then publish AgentTurnEndEvent. ``superseded=True`` marks a
         turn whose streamed buffer must be discarded by the frontend (a replay
-        path produced a superseding second assistant turn)."""
+        path produced a superseding second assistant turn) -- this is also the
+        on_retry callback bound in stages.py, so it fires right before a backend
+        replays the whole turn (a sentinel-nudge retry or an in-backend transient
+        retry). In that case it also discards the accumulated ``_full_reasoning``
+        for the attempt being abandoned, same as ``reset()`` does: without this,
+        the retried attempt's reasoning chunks would append onto the discarded
+        attempt's, and ``take_reasoning()`` would return their concatenation --
+        silently persisting a stale attempt's reasoning into the DB alongside the
+        real one."""
         try:
             await self.force_flush()
+            if superseded:
+                self._full_reasoning = []
             await bus.publish(
                 event_to_dict(
                     AgentTurnEndEvent(job_id=self._job_id, stage=self._stage, superseded=superseded)

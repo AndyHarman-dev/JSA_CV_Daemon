@@ -426,12 +426,24 @@ class OpenAICompatBackend(AgentBackend):
                 on_retry=retry_cb,
             )
 
-    async def _consume_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
+    async def _consume_sse(self, response: httpx.Response, on_chunk: OnChunk) -> tuple[str, str]:
         """Drain an SSE ``chat/completions`` stream, emitting content/reasoning
-        deltas through ``on_chunk`` as they arrive, and returning the joined
-        content text (never fabricates a reasoning chunk a model didn't send)."""
+        deltas through ``on_chunk`` as they arrive, and returning
+        ``(joined_content_text, raw_body_text)`` (never fabricates a reasoning
+        chunk a model didn't send).
+
+        ``raw_body_text`` is every line received, joined back together
+        regardless of whether it was ``data:``-prefixed or parsed as a delta —
+        it exists so the caller can recover and classify a genuine error when
+        the "stream" wasn't SSE-shaped at all (this API can return an HTTP 200
+        response whose body is a single JSON error envelope, not a real SSE
+        stream — see the module docstring's "HTTP 200 with an error payload"
+        note)."""
         content_parts: list[str] = []
+        raw_lines: list[str] = []
         async for line in response.aiter_lines():
+            if line:
+                raw_lines.append(line)
             if not line or not line.startswith("data:"):
                 continue
             data = line[len("data:"):].strip()
@@ -452,7 +464,7 @@ class OpenAICompatBackend(AgentBackend):
             reasoning_piece = delta.get("reasoning_content")
             if reasoning_piece:
                 await on_chunk(AgentChunk(kind="reasoning", text=reasoning_piece))
-        return "".join(content_parts)
+        return "".join(content_parts), "".join(raw_lines)
 
     async def _call_api_once(
         self,
@@ -494,6 +506,7 @@ class OpenAICompatBackend(AgentBackend):
             "Content-Type": "application/json",
         }
         streamed_content: str | None = None
+        streamed_raw: str = ""
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
             if use_stream:
@@ -501,7 +514,7 @@ class OpenAICompatBackend(AgentBackend):
                     "POST", self.endpoint_url, headers=headers, json=payload
                 ) as response:
                     if response.status_code == 200:
-                        streamed_content = await self._consume_sse(response, on_chunk)
+                        streamed_content, streamed_raw = await self._consume_sse(response, on_chunk)
                     else:
                         # Not a stream — read the full (error) body for classification
                         # below, exactly as the non-streaming branch would receive it.
@@ -527,21 +540,35 @@ class OpenAICompatBackend(AgentBackend):
         if response.status_code == 429:
             raise AgentLimitReached(f"{self.name} API rate limit reached: {response.text[:500]}")
 
-        if streamed_content is not None:
-            if not streamed_content:
+        if streamed_content:
+            return streamed_content
+
+        if streamed_content == "":
+            # HTTP 200, streamed, but no delta content was extracted. Before
+            # assuming a generic transient/empty-stream failure, try to recover
+            # the raw stream body as a JSON error envelope -- this API can
+            # return a 200-status response whose body is a single JSON error
+            # object rather than a real SSE stream (see module docstring), which
+            # _consume_sse's "data:"-only parsing would otherwise silently drop.
+            try:
+                body = json.loads(streamed_raw) if streamed_raw else None
+            except ValueError:
+                body = None
+            if not isinstance(body, dict) or "error" not in body:
                 raise TransientBackendError(
                     f"{self.name} API stream produced no content (model may have "
                     "produced only reasoning tokens before hitting max_tokens)"
                 )
-            return streamed_content
-
-        try:
-            body = response.json()
-        except ValueError:
-            detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
-            if response.status_code >= 500:
-                raise TransientBackendError(detail) from None
-            raise _permanent_4xx(detail) from None
+            # Fall through to the shared "error" in body classification below,
+            # using the body recovered from the stream instead of response.json().
+        else:
+            try:
+                body = response.json()
+            except ValueError:
+                detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
+                if response.status_code >= 500:
+                    raise TransientBackendError(detail) from None
+                raise _permanent_4xx(detail) from None
 
         if "error" in body:
             err = body["error"]

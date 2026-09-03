@@ -381,12 +381,20 @@ class OpenCodeZenBackend(AgentBackend):
             f"OpenCode Zen API still failing after {_MAX_ATTEMPTS} attempts: {last_exc}"
         ) from None
 
-    async def _consume_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
+    async def _consume_sse(self, response: httpx.Response, on_chunk: OnChunk) -> tuple[str, str]:
         """Drain a chat/completions SSE stream (identical wire shape to
         _openai_compat.py's copy — see the module docstring for why this file
-        keeps its own independent copy rather than sharing that base)."""
+        keeps its own independent copy rather than sharing that base).
+
+        Returns ``(joined_content_text, raw_body_text)`` — ``raw_body_text`` is
+        every line received, joined back together, so the caller can recover and
+        classify a genuine HTTP-200 JSON error envelope (this backend's own
+        documented failure mode) when the "stream" wasn't SSE-shaped at all."""
         content_parts: list[str] = []
+        raw_lines: list[str] = []
         async for line in response.aiter_lines():
+            if line:
+                raw_lines.append(line)
             if not line or not line.startswith("data:"):
                 continue
             data = line[len("data:"):].strip()
@@ -407,7 +415,7 @@ class OpenCodeZenBackend(AgentBackend):
             reasoning_piece = delta.get("reasoning_content")
             if reasoning_piece:
                 await on_chunk(AgentChunk(kind="reasoning", text=reasoning_piece))
-        return "".join(content_parts)
+        return "".join(content_parts), "".join(raw_lines)
 
     async def _call_api_once(
         self,
@@ -468,6 +476,7 @@ class OpenCodeZenBackend(AgentBackend):
             "Content-Type": "application/json",
         }
         streamed_content: str | None = None
+        streamed_raw: str = ""
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
             if use_stream:
@@ -475,7 +484,7 @@ class OpenCodeZenBackend(AgentBackend):
                     "POST", _ENDPOINT, headers=headers, json=payload
                 ) as response:
                     if response.status_code == 200:
-                        streamed_content = await self._consume_sse(response, on_chunk)
+                        streamed_content, streamed_raw = await self._consume_sse(response, on_chunk)
                     else:
                         await response.aread()
             else:
@@ -504,25 +513,42 @@ class OpenCodeZenBackend(AgentBackend):
         if response.status_code == 429:
             raise AgentLimitReached(f"OpenCode Zen API rate limit reached: {response.text[:500]}")
 
-        if streamed_content is not None:
-            if not streamed_content:
+        if streamed_content:
+            return streamed_content
+
+        if streamed_content == "":
+            # HTTP 200, streamed, but no delta content was extracted. Before
+            # assuming a generic transient/empty-stream failure, try to recover
+            # the raw stream body as a JSON error envelope -- this backend is
+            # documented to sometimes return a 200-status response whose body is
+            # a single JSON error object (e.g. a transient upstream 502 surfaced
+            # as {"error": {"type": "server_error"}} at HTTP 200) rather than a
+            # real SSE stream, which _consume_sse's "data:"-only parsing would
+            # otherwise silently drop.
+            try:
+                body = json.loads(streamed_raw) if streamed_raw else None
+            except ValueError:
+                body = None
+            if not isinstance(body, dict) or "error" not in body:
                 raise _TransientOpenCodeError(
                     "OpenCode Zen API stream produced no content (model may have "
                     "produced only reasoning tokens before hitting max_tokens)"
                 )
-            return streamed_content
-
-        # A gateway-level failure (e.g. a 502/503 from the proxy in front of the API,
-        # as opposed to the API's own JSON error envelope) can return non-JSON — HTML,
-        # plain text. Check that *before* touching status_code>=400 below, since that
-        # branch depends on `body` and must never be reached via a JSONDecodeError.
-        try:
-            body = response.json()
-        except ValueError:
-            detail = f"OpenCode Zen API error {response.status_code}: {response.text[:500]}"
-            if response.status_code >= 500:
-                raise _TransientOpenCodeError(detail) from None
-            raise AgentBackendUnavailable(detail) from None
+            # Fall through to the shared "error" in body classification below,
+            # using the body recovered from the stream instead of response.json().
+        else:
+            # A gateway-level failure (e.g. a 502/503 from the proxy in front of the
+            # API, as opposed to the API's own JSON error envelope) can return
+            # non-JSON — HTML, plain text. Check that *before* touching
+            # status_code>=400 below, since that branch depends on `body` and must
+            # never be reached via a JSONDecodeError.
+            try:
+                body = response.json()
+            except ValueError:
+                detail = f"OpenCode Zen API error {response.status_code}: {response.text[:500]}"
+                if response.status_code >= 500:
+                    raise _TransientOpenCodeError(detail) from None
+                raise AgentBackendUnavailable(detail) from None
 
         if "error" in body:
             err = body["error"]

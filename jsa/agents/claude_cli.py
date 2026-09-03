@@ -43,6 +43,12 @@ class ClaudeSessionExpiredError(ClaudeCliError):
     """Raised when claude reports the session ID is no longer known."""
 
 
+# Shared with _run_streaming's error-shaped "result" event classification below --
+# the same keyword set _parse_with_nudge's raw-text scan uses for the
+# non-streaming (--output-format text) call site.
+_RESULT_LIMIT_KEYWORDS = ("usage limit", "rate limit", "limit reached", "quota")
+
+
 @dataclass(kw_only=True)
 class ClaudeSessionHandle(SessionHandle):
     """Session handle for ClaudeCliBackend — carries the claude CLI session UUID."""
@@ -168,9 +174,10 @@ class ClaudeCliBackend(AgentBackend):
         assembled_parts: list[str] = []
         fallback_parts: list[str] = []
         limit_event: dict | None = None
+        error_result_event: dict | None = None
 
         async def on_line(raw_line: bytes) -> None:
-            nonlocal limit_event
+            nonlocal limit_event, error_result_event
             text_line = raw_line.decode("utf-8", errors="replace").strip()
             if not text_line:
                 return
@@ -210,7 +217,18 @@ class ClaudeCliBackend(AgentBackend):
                 limit_event = event
             elif etype == "result":
                 if event.get("is_error") or event.get("subtype") not in (None, "success"):
-                    limit_event = limit_event or event
+                    # Only classify this as a quota/limit signal if the event's own
+                    # content actually says so (same keyword set _parse_with_nudge's
+                    # raw-text scan uses) -- an error-shaped result subtype (e.g.
+                    # error_max_turns, error_during_execution) is not necessarily
+                    # quota-related, and misclassifying it as AgentLimitReached would
+                    # make BF-19 skip the same-backend model ladder and jump straight
+                    # to the next configured backend for a non-quota failure.
+                    event_text = json.dumps(event).lower()
+                    if any(kw in event_text for kw in _RESULT_LIMIT_KEYWORDS):
+                        limit_event = limit_event or event
+                    else:
+                        error_result_event = error_result_event or event
 
         returncode, stdout_bytes, stderr_bytes = await run_killable_streaming(
             streaming_cmd,
@@ -247,6 +265,13 @@ class ClaudeCliBackend(AgentBackend):
         if limit_event is not None:
             raise AgentLimitReached(json.dumps(limit_event)[:500])
 
+        if error_result_event is not None:
+            ctx = f" [{context}]" if context else ""
+            raise ClaudeCliError(
+                f"claude CLI reported an error-shaped result{ctx}: "
+                f"{json.dumps(error_result_event)[:500]}"
+            )
+
         return raw
 
     # ------------------------------------------------------------------
@@ -280,8 +305,7 @@ class ClaudeCliBackend(AgentBackend):
             # Before nudging, check whether the raw output indicates a usage/rate
             # limit. If so, skip the nudge and surface a clear error immediately.
             raw_lower = raw.lower()
-            _LIMIT_KEYWORDS = ("usage limit", "rate limit", "limit reached", "quota")
-            if any(kw in raw_lower for kw in _LIMIT_KEYWORDS):
+            if any(kw in raw_lower for kw in _RESULT_LIMIT_KEYWORDS):
                 raise AgentLimitReached(raw[:500])
             logger.warning(
                 "_parse_with_nudge: no sentinel block in reply — sending nudge and retrying once (session=%s)",

@@ -174,12 +174,28 @@ class GeminiBackend(OpenAICompatBackend):
                 handle.structured_enabled = False
             return await super().send_message(handle, text, None, on_chunk, on_retry)
 
-    async def _consume_gemini_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
+    async def _consume_gemini_sse(self, response: httpx.Response, on_chunk: OnChunk) -> tuple[str, str]:
         """Drain a ``streamGenerateContent?alt=sse`` stream, forwarding text parts
         (and thought-summary parts, when a model actually emits them) through
-        ``on_chunk`` as they arrive."""
+        ``on_chunk`` as they arrive.
+
+        Also tracks each event's ``finishReason`` (the last one seen wins, same
+        as the non-streaming path reading it off the final response body) and
+        raises the identical ``ProtocolError`` on ``MAX_TOKENS`` that the
+        non-streaming branch raises below — a streamed reply that gets cut off
+        must fail loudly the same way a buffered one does, not silently return
+        the truncated partial text as if it were a complete reply.
+
+        Returns ``(joined_content_text, raw_body_text)`` — ``raw_body_text`` is
+        every line received, joined back together, so the caller can recover and
+        classify a genuine HTTP-200 JSON error envelope when the "stream" wasn't
+        SSE-shaped at all (mirrors _openai_compat.py's identical fallback)."""
         content_parts: list[str] = []
+        raw_lines: list[str] = []
+        finish_reason: str | None = None
         async for line in response.aiter_lines():
+            if line:
+                raw_lines.append(line)
             if not line or not line.startswith("data:"):
                 continue
             data = line[len("data:"):].strip()
@@ -192,7 +208,10 @@ class GeminiBackend(OpenAICompatBackend):
             candidates = event.get("candidates") or []
             if not candidates:
                 continue
-            parts = (candidates[0].get("content") or {}).get("parts") or []
+            candidate = candidates[0]
+            if candidate.get("finishReason"):
+                finish_reason = candidate["finishReason"]
+            parts = (candidate.get("content") or {}).get("parts") or []
             for part in parts:
                 if not isinstance(part, dict):
                     continue
@@ -203,7 +222,12 @@ class GeminiBackend(OpenAICompatBackend):
                 if kind == "content":
                     content_parts.append(text)
                 await on_chunk(AgentChunk(kind=kind, text=text))
-        return "".join(content_parts)
+        if finish_reason == "MAX_TOKENS":
+            raise ProtocolError(
+                "structured reply truncated: finishReason == 'MAX_TOKENS' "
+                "(output cut off before the reply completed)"
+            )
+        return "".join(content_parts), "".join(raw_lines)
 
     async def _call_api_once(
         self,
@@ -241,6 +265,7 @@ class GeminiBackend(OpenAICompatBackend):
             params = None
         headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
         streamed_content: str | None = None
+        streamed_raw: str = ""
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
             if use_stream:
@@ -248,7 +273,7 @@ class GeminiBackend(OpenAICompatBackend):
                     "POST", url, headers=headers, json=payload, params=params
                 ) as response:
                     if response.status_code == 200:
-                        streamed_content = await self._consume_gemini_sse(response, on_chunk)
+                        streamed_content, streamed_raw = await self._consume_gemini_sse(response, on_chunk)
                     else:
                         await response.aread()
             else:
@@ -266,20 +291,32 @@ class GeminiBackend(OpenAICompatBackend):
         if response.status_code == 429:
             raise AgentLimitReached(f"{self.name} API rate limit reached: {response.text[:500]}")
 
-        if streamed_content is not None:
-            if not streamed_content:
+        if streamed_content:
+            return streamed_content
+
+        if streamed_content == "":
+            # HTTP 200, streamed, but no text content was extracted. Try to
+            # recover the raw stream body as a JSON error envelope before
+            # assuming a generic transient/empty-stream failure -- mirrors
+            # _openai_compat.py's identical fallback for the same failure mode.
+            try:
+                body = json.loads(streamed_raw) if streamed_raw else None
+            except ValueError:
+                body = None
+            if not (isinstance(body, dict) and "error" in body):
                 raise TransientBackendError(
                     f"{self.name} API stream returned no text content"
                 )
-            return streamed_content
-
-        try:
-            body = response.json()
-        except ValueError:
-            detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
-            if response.status_code >= 500:
-                raise TransientBackendError(detail) from None
-            raise _permanent_4xx(detail) from None
+            # Fall through to the "error" in body classification below, using
+            # the body recovered from the stream instead of response.json().
+        else:
+            try:
+                body = response.json()
+            except ValueError:
+                detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
+                if response.status_code >= 500:
+                    raise TransientBackendError(detail) from None
+                raise _permanent_4xx(detail) from None
 
         if isinstance(body, dict) and "error" in body:
             err = body["error"] if isinstance(body["error"], dict) else {}

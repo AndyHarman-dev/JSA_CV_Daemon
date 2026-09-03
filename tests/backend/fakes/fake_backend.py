@@ -4,7 +4,15 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from jsa.agents.base import AgentBackend, AgentChunk, AgentReply, HistoryTurn, OnChunk, SessionHandle
+from jsa.agents.base import (
+    AgentBackend,
+    AgentChunk,
+    AgentReply,
+    HistoryTurn,
+    OnChunk,
+    OnRetry,
+    SessionHandle,
+)
 
 
 @dataclass
@@ -91,6 +99,7 @@ class FakeAgentBackend(AgentBackend):
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[FakeSessionHandle, AgentReply]:
         """Consume the first reply and return (handle, reply)."""
         self.start_session_call_count += 1
@@ -127,6 +136,7 @@ class FakeAgentBackend(AgentBackend):
         text: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Consume and return the next scripted reply."""
         await self._emit_scripted_chunks(on_chunk)
