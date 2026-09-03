@@ -3,7 +3,7 @@
 ``assemble_system_prompt`` is the ONLY place that appends runtime instructions to a
 stage's file-authored system prompt (``jsa/prompts/*.md``, read via
 ``jsa/prompts/loader.py`` and never edited programmatically — see CLAUDE.md → "Prompt
-files"). It owns two independent concerns:
+files"). It owns three independent concerns:
 
 1. **Language directive** — ported verbatim from the pre-existing
    ``jsa/pipeline/stages.py::_language_directive`` / ``_with_language_directive`` (see
@@ -12,13 +12,28 @@ files"). It owns two independent concerns:
    ``tests/backend/test_prompt_assembly.py``'s parity-gate assertion against it). The
    sentinel-mode branch (``structured_model=None``) MUST stay byte-identical to that
    original output forever — every CLI backend (``claude-cli``, ``google-cli``) depends
-   on it verbatim.
+   on it verbatim. This is why the current-date directive below is strictly opt-in via
+   the ``now`` kwarg (default ``None`` → no-op) rather than unconditional: the golden
+   fixture's 84 cases call this function without ``now`` and must keep passing.
 2. **Structured-output contract** (only when ``structured_model`` is given) — the
    runtime-assembled instructions a structured-output API backend's session needs:
    ``kind``/``verdict`` semantics, the per-stage JSON schema, explicit precedence over
    the prompt file's sentinel-format section, and a "never embed sentinel markers in a
    payload string value" guard. This section is assembled here, at runtime, and is
    never written into the prompt files themselves.
+3. **Current-date directive** (only when ``now`` is given) — a day-granularity "today's
+   date is X, treat CV/JD dates as fact, not as training-cutoff inconsistencies"
+   section (``_current_date_directive``). Every real call site (``jsa/pipeline/
+   stages.py``) always passes ``now=datetime.utcnow()``; ``now=None`` exists only so
+   tests — including the golden-fixture parity gate above — can get the pre-existing
+   output with no date section at all. Always appended LAST, after the language
+   directive and the structured contract, so it can never land in the middle of either
+   section's internal self-references ("the prompt above", "the schema below"). Day
+   granularity (``%Y-%m-%d``, never clock time) is deliberate: this text lands in the
+   cross-job system prefix the prompt-caching effort keys on (see CLAUDE.md → "Prompt
+   caching (HTTP API backends)"); seconds-precision would make every request's prefix
+   unique and defeat caching outright, while day granularity only invalidates the
+   cached prefix once every 24h — looser than every provider's cache TTL here.
 
 For sentinel-mode sessions (``structured_model=None``), only ever call this for NEW
 sessions (``start_session``) — never for a ``restore_session`` path; a resumed
@@ -44,11 +59,19 @@ re-asked "shall I proceed with this strategy" indefinitely after repeated approv
 skips the language directive — resending identical contract text does not "contradict
 history" the way a changed language directive would, so the language-directive
 exclusion above is untouched by this.
+
+The current-date directive follows the structured-contract's resend rule, not the
+language directive's: it IS re-appended on ``for_resume=True`` for structured-mode
+sessions (wire-stateless, so a job parked overnight in ``awaiting_input`` resumes with
+the correct date, not the one at job launch), and it is NOT appended on the
+sentinel-mode ``for_resume=True`` early return (a real CLI session already carries the
+date from its fresh start; nothing needs to change there).
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from jsa.i18n.languages import language_name
@@ -153,6 +176,34 @@ def _structured_contract(schema: dict[str, Any], *, fit_verdict: bool) -> str:
     )
 
 
+def _current_date_directive(now: datetime) -> str:
+    """Day-granularity "what date is it" directive — never clock time.
+
+    Day granularity is deliberate, not an oversight: this text lands in the same
+    system prefix the prompt-caching effort keys on (see CLAUDE.md → "Prompt caching
+    (HTTP API backends)"). Seconds-precision would make every request's prefix unique
+    and defeat caching entirely; day granularity only invalidates the cached prefix
+    once every 24h, which is already looser than every provider's cache TTL here.
+
+    The instruction half is the actual fix, not the date alone — models trained
+    before this date otherwise read a CV's future-relative-to-training-cutoff dates
+    (e.g. a 2026 role) as an inconsistency to flag rather than a fact to accept,
+    which is exactly the failure mode this directive exists to prevent (confirmed
+    live: a fit-assessment verdict parking a job as unfit over a "future" CV date).
+    """
+    today = now.strftime("%Y-%m-%d")
+    return (
+        "\n\n## Current date\n"
+        f"Today's date is {today}. Your training data has a cutoff before this date, "
+        "so information in the CV, cover letter, or job description that is more "
+        "recent than your training — including dates at or before today, such as "
+        "current or recent job experience — is not an error, inconsistency, or "
+        "hallucination. Treat every date and fact in the provided materials as "
+        "accurate; never 'correct', flag, or question them for appearing to be in "
+        "the future relative to your training data."
+    )
+
+
 def assemble_system_prompt(
     prompt_text: str,
     *,
@@ -160,36 +211,55 @@ def assemble_system_prompt(
     structured_model: dict[str, Any] | None = None,
     fit_verdict: bool = False,
     for_resume: bool = False,
+    now: datetime | None = None,
 ) -> str:
     """Compose a session's system prompt from the file-authored ``prompt_text``.
 
-    ``structured_model=None`` (the sentinel-mode / CLI-backend path) is byte-identical
-    to the pre-existing ``stages.py::_with_language_directive`` — see the module
-    docstring's parity note. In this mode ``for_resume=True`` returns ``prompt_text``
-    unchanged (no language directive) — CLI backends have a real session, so a resumed
-    call needs nothing appended; this is what every ``restore_session`` call site got
-    before ``for_resume`` existed.
+    ``structured_model=None`` with ``now=None`` (the sentinel-mode / CLI-backend path,
+    at its parity-gate default) is byte-identical to the pre-existing
+    ``stages.py::_with_language_directive`` — see the module docstring's parity note.
+    In this mode ``for_resume=True`` returns ``prompt_text`` unchanged regardless of
+    ``now`` (no language directive, no date directive) — CLI backends have a real
+    session, so a resumed call needs nothing appended; this is what every
+    ``restore_session`` call site got before ``for_resume`` existed.
 
     ``structured_model``, when given, is the JSON schema (``jsa.schema.turn_models
     .json_schema_for(stage)``) the destination backend will enforce; passing it appends
     the structured-output contract section. On a fresh session (``for_resume=False``)
     it also appends the structured-mode language directive when ``language != "en"``.
     On a resumed session (``for_resume=True``) the language directive is always
-    skipped — only the contract is re-appended — see the module docstring for why
-    resending the contract is required for these (wire-stateless) backends while
-    resending the language directive is deliberately still excluded.
+    skipped — only the contract (and the date directive, see below) is re-appended —
+    see the module docstring for why resending the contract is required for these
+    (wire-stateless) backends while resending the language directive is deliberately
+    still excluded.
     ``fit_verdict=True`` selects the fit-assessment shape in both the contract and the
     language directive.
+
+    ``now``, when given, appends the current-date directive (``_current_date_directive``)
+    LAST, after everything else. Every real call site passes ``now=datetime.utcnow()``;
+    only tests pass ``now=None`` to get the pre-date-directive output. See the module
+    docstring's point 3 for the resend/day-granularity rationale.
     """
     if structured_model is not None:
         prompt = prompt_text + _structured_contract(structured_model, fit_verdict=fit_verdict)
         if not for_resume and language != "en":
             prompt += _structured_language_directive(language, fit_verdict=fit_verdict)
+        # Wire-stateless backends resend the system prompt every call (see module
+        # docstring), so injecting on resume too keeps a job parked overnight in
+        # awaiting_input resuming with the correct date, not the one at job launch.
+        if now is not None:
+            prompt += _current_date_directive(now)
         return prompt
 
     if for_resume:
+        # Real CLI session — it already carries the date from its fresh start (below);
+        # nothing is appended here on resume, deliberately, same as the language
+        # directive this path has always skipped.
         return prompt_text
 
-    if language == "en":
-        return prompt_text
-    return prompt_text + _sentinel_language_directive(language, fit_verdict=fit_verdict)
+    prompt = prompt_text
+    if language != "en":
+        prompt += _sentinel_language_directive(language, fit_verdict=fit_verdict)
+    if now is not None:
+        prompt += _current_date_directive(now)
+    return prompt

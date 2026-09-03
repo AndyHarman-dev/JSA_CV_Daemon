@@ -783,18 +783,40 @@ URLs, or HUD-style terminal abbreviations that are intentionally code-like (see
 
 **The cross-job system-prefix invariant.** `assemble_system_prompt` (`jsa/pipeline/
 prompt_assembly.py`) builds the system prompt from only the on-disk prompt file,
-the language code, and the stage's JSON schema — **no per-job bytes** (JD, company,
-role, CV structure, research brief) ever land in it; those go into the initial user
-message (`_build_initial_user_msg`/`_build_fit_user_msg`). So every job at a given
-(stage, language, structured-mode) sends a **byte-identical system prefix**, which is
-what makes prompt caching worth doing here: cache the system prompt, not the message
-tail. `tests/backend/test_prompt_prefix_stability.py` pins this two ways — same-input
-determinism (including across `PYTHONHASHSEED` values, since schema generation must
-never iterate a `set`) and cross-job identity (two jobs with different JD/company/role
-produce the same system prompt and different user messages). Do not add a
-message-tail cache breakpoint — the tail is separated by human answer latency
-(`awaiting_input` → user answers), so it's usually cold, and it would collide with
-`adapt_history`/`_parse_with_nudge` rewriting message content.
+the language code, the stage's JSON schema, and (see "Current-date directive" below)
+the calendar day — **no per-job bytes** (JD, company, role, CV structure, research
+brief) ever land in it; those go into the initial user message
+(`_build_initial_user_msg`/`_build_fit_user_msg`). So every job at a given (stage,
+language, structured-mode) dispatched on the same calendar day sends a
+**byte-identical system prefix**, which is what makes prompt caching worth doing
+here: cache the system prompt, not the message tail. `tests/backend/
+test_prompt_prefix_stability.py` pins this two ways — same-input determinism
+(including across `PYTHONHASHSEED` values, since schema generation must never
+iterate a `set`) and cross-job identity (two jobs with different JD/company/role
+produce the same system prompt and different user messages); it calls
+`assemble_system_prompt` with no `now` argument, so it is unaffected by the calendar
+day the tests happen to run on. Do not add a message-tail cache breakpoint — the tail
+is separated by human answer latency (`awaiting_input` → user answers), so it's
+usually cold, and it would collide with `adapt_history`/`_parse_with_nudge` rewriting
+message content.
+
+**Current-date directive.** `assemble_system_prompt`'s `now` kwarg (every real call
+site in `stages.py` passes `now=datetime.utcnow()`) appends a day-granularity
+"today's date is X, treat CV/JD dates as fact, not as training-cutoff
+inconsistencies" section, last, after everything else. This exists because a model
+whose training cutoff predates the CV's own dates (e.g. a 2026 role) otherwise reads
+them as an error to flag rather than a fact to accept — confirmed live via a
+fit-assessment verdict parking a job as `unfit` over a "future" CV date. Day
+granularity (`%Y-%m-%d`, never clock time) is deliberate, not an oversight: the
+directive lands in the cross-job system prefix above, so seconds-precision would
+make every request's prefix unique and defeat caching outright, while day
+granularity only invalidates the cached prefix once every 24h — looser than every
+provider's cache TTL in this file. `now=None` (the default) omits the section
+entirely and exists only so tests — including the golden-fixture parity gate in
+`tests/backend/test_prompt_assembly.py` — get the pre-existing, date-directive-free
+output; do not make the directive unconditional; that would silently break that
+gate's byte-identity promise. See `jsa/pipeline/prompt_assembly.py`'s module
+docstring for the structured-vs-sentinel resend rules on `for_resume=True`.
 
 **Kill switch.** `Settings.prompt_caching: bool = True` (`JSA_PROMPT_CACHING`),
 `--prompt-caching`/`--no-prompt-caching` (tri-state, only overrides when explicitly

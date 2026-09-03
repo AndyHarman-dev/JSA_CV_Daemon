@@ -769,7 +769,11 @@ async def run_stage(
     # kind/question/payload explanation and can loop forever re-asking its opening
     # question. Sentinel-mode (structured=False) resumes unchanged (real CLI session).
     resume_system_prompt = assemble_system_prompt(
-        system_prompt, language=language_code, structured_model=schema, for_resume=True
+        system_prompt,
+        language=language_code,
+        structured_model=schema,
+        for_resume=True,
+        now=datetime.utcnow(),
     )
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
@@ -887,7 +891,10 @@ async def run_stage(
                 cv_block = await _base_structure_cv_block(cv_structure_path)
             initial_user_msg = _build_initial_user_msg(job, brief, cv_block)
             fresh_system_prompt = assemble_system_prompt(
-                system_prompt, language=language_code, structured_model=schema
+                system_prompt,
+                language=language_code,
+                structured_model=schema,
+                now=datetime.utcnow(),
             )
             handle, reply = await _start_session_with_retry(
                 general_purpose_backend, fresh_system_prompt, initial_user_msg, schema, stage, job,
@@ -1181,7 +1188,11 @@ async def _run_fit_assessment(
     schema = _structured_schema_for(backend, Stage.fit_assessment)
     # Always a fresh start_session (no resume path for this stage) — safe to inject here.
     system_prompt = assemble_system_prompt(
-        system_prompt, language=language_code, structured_model=schema, fit_verdict=True
+        system_prompt,
+        language=language_code,
+        structured_model=schema,
+        fit_verdict=True,
+        now=datetime.utcnow(),
     )
 
     # Same conditional-kwarg pattern run_stage uses (see _streaming_kwargs) — this
