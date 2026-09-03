@@ -63,13 +63,22 @@ chose, not whatever Gemini's un-set default happens to be.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import httpx
 
 from jsa.agents._openai_compat import OpenAICompatBackend, OpenAICompatSessionHandle, TransientBackendError
-from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentReply, AgentTimeout, SessionHandle
+from jsa.agents.base import (
+    AgentBackendUnavailable,
+    AgentChunk,
+    AgentLimitReached,
+    AgentReply,
+    AgentTimeout,
+    OnChunk,
+    SessionHandle,
+)
 from jsa.agents.protocol import ProtocolError
 from jsa.schema.turn_models import inline_defs
 
@@ -117,15 +126,22 @@ class GeminiBackend(OpenAICompatBackend):
     # Assesser's CHEAP tier (providers/tiers.py, verified Aug 2026) and confirmed
     # present + generateContent-capable in the live Phase-0 /models probe.
     default_model = "gemini-3.1-flash-lite"
+    # :streamGenerateContent?alt=sse — content always; thinkingConfig thought
+    # summaries when the configured model surfaces them. Never attempted in
+    # structured mode (a partial JSON candidate is not useful to stream).
+    supports_streaming = True
 
     async def start_session(
         self,
         system_prompt: str,
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         try:
-            return await super().start_session(system_prompt, initial_user_msg, structured_schema)
+            return await super().start_session(
+                system_prompt, initial_user_msg, structured_schema, on_chunk
+            )
         except _SchemaRejected as exc:
             if structured_schema is None:
                 raise  # pragma: no cover — cannot occur, see _call_api_once
@@ -134,16 +150,17 @@ class GeminiBackend(OpenAICompatBackend):
                 "downgrading to sentinel mode and retrying once",
                 self.name, exc,
             )
-            return await super().start_session(system_prompt, initial_user_msg, None)
+            return await super().start_session(system_prompt, initial_user_msg, None, on_chunk)
 
     async def send_message(
         self,
         handle: SessionHandle,
         text: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> AgentReply:
         try:
-            return await super().send_message(handle, text, structured_schema)
+            return await super().send_message(handle, text, structured_schema, on_chunk)
         except _SchemaRejected as exc:
             logger.warning(
                 "%s rejected the structured-output schema (%s) mid-session — "
@@ -152,13 +169,45 @@ class GeminiBackend(OpenAICompatBackend):
             )
             if isinstance(handle, OpenAICompatSessionHandle):
                 handle.structured_enabled = False
-            return await super().send_message(handle, text, None)
+            return await super().send_message(handle, text, None, on_chunk)
+
+    async def _consume_gemini_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
+        """Drain a ``streamGenerateContent?alt=sse`` stream, forwarding text parts
+        (and thought-summary parts, when a model actually emits them) through
+        ``on_chunk`` as they arrive."""
+        content_parts: list[str] = []
+        async for line in response.aiter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data:
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            candidates = event.get("candidates") or []
+            if not candidates:
+                continue
+            parts = (candidates[0].get("content") or {}).get("parts") or []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if not text:
+                    continue
+                kind = "reasoning" if part.get("thought") else "content"
+                if kind == "content":
+                    content_parts.append(text)
+                await on_chunk(AgentChunk(kind=kind, text=text))
+        return "".join(content_parts)
 
     async def _call_api_once(
         self,
         system_prompt: str,
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> str:
         """Single POST to ``{model}:generateContent``; classifies and raises on any
         failure. Never retries itself — the inherited ``_call_api`` wraps this in
@@ -180,14 +229,27 @@ class GeminiBackend(OpenAICompatBackend):
             "generationConfig": generation_config,
         }
 
-        url = f"{_API_BASE}/{self._model}:generateContent"
+        use_stream = on_chunk is not None and structured_schema is None
+        if use_stream:
+            url = f"{_API_BASE}/{self._model}:streamGenerateContent"
+            params = {"alt": "sse"}
+        else:
+            url = f"{_API_BASE}/{self._model}:generateContent"
+            params = None
+        headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+        streamed_content: str | None = None
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
-            response = await client.post(
-                url,
-                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                json=payload,
-            )
+            if use_stream:
+                async with client.stream(
+                    "POST", url, headers=headers, json=payload, params=params
+                ) as response:
+                    if response.status_code == 200:
+                        streamed_content = await self._consume_gemini_sse(response, on_chunk)
+                    else:
+                        await response.aread()
+            else:
+                response = await client.post(url, headers=headers, json=payload)
         except httpx.TimeoutException:
             raise AgentTimeout(f"{self.name} API timed out after {self._timeout}s") from None
         except httpx.HTTPError as exc:
@@ -200,6 +262,13 @@ class GeminiBackend(OpenAICompatBackend):
 
         if response.status_code == 429:
             raise AgentLimitReached(f"{self.name} API rate limit reached: {response.text[:500]}")
+
+        if streamed_content is not None:
+            if not streamed_content:
+                raise TransientBackendError(
+                    f"{self.name} API stream returned no text content"
+                )
+            return streamed_content
 
         try:
             body = response.json()

@@ -60,6 +60,11 @@ class GoogleCliBackend(AgentBackend):
 
     name = "google-cli"
     RESEARCH_TIMEOUT = 300.0  # web search + multiple fetches can exceed the 120s message-turn default
+    # `agy --help` has no output-format/stream/json flag (re-verified live during
+    # the agent-chat-upgrade plan's Phase 7) — no token-level channel exists here.
+    # Left as the inherited AgentBackend default (False), explicit for clarity;
+    # the pipeline shows a plain "working..." indicator for this backend instead.
+    supports_streaming = False
 
     def __init__(self, timeout: float = 120.0) -> None:
         self._timeout = timeout

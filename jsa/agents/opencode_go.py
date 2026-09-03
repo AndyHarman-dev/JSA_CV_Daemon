@@ -33,6 +33,7 @@ unmodified (verified via a repo-wide grep before landing this).
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any, Literal
@@ -49,10 +50,12 @@ from jsa.agents._openai_compat import (
 )
 from jsa.agents.base import (
     AgentBackendUnavailable,
+    AgentChunk,
     AgentLimitReached,
     AgentReply,
     AgentTimeout,
     HistoryTurn,
+    OnChunk,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -111,6 +114,12 @@ class OpenCodeGoBackend(OpenAICompatBackend):
     """AgentBackend implementation for the OpenCode Go gateway (dual protocol)."""
 
     name = "opencode-go"
+    # "chat" protocol streams for free via the inherited OpenAICompatBackend SSE
+    # path; "messages" protocol gets its own hand-built stream below. Both are
+    # speculative for this gateway (see the module docstring's forced-tool-use
+    # gap precedent) — degrade to the synchronous reply on any streaming failure,
+    # same best-effort contract as every other streaming backend.
+    supports_streaming = True
     endpoint_url = "https://opencode.ai/zen/go/v1/chat/completions"
     env_vars = ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY")
     # Corroborated "chat" model — see _PROTOCOL's provenance note above.
@@ -152,10 +161,11 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         system_prompt: str,
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         if self._protocol == "messages":
-            return await self._start_session_messages(system_prompt, initial_user_msg)
-        return await super().start_session(system_prompt, initial_user_msg, structured_schema)
+            return await self._start_session_messages(system_prompt, initial_user_msg, on_chunk)
+        return await super().start_session(system_prompt, initial_user_msg, structured_schema, on_chunk)
 
     async def restore_session(
         self,
@@ -173,10 +183,11 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         handle: SessionHandle,
         text: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> AgentReply:
         if self._protocol == "messages":
-            return await self._send_message_messages(handle, text)
-        return await super().send_message(handle, text, structured_schema)
+            return await self._send_message_messages(handle, text, on_chunk)
+        return await super().send_message(handle, text, structured_schema, on_chunk)
 
     # end_session is inherited unchanged from OpenAICompatBackend — both protocols
     # share the same handle shape, and clearing handle.messages is protocol-agnostic.
@@ -186,10 +197,10 @@ class OpenCodeGoBackend(OpenAICompatBackend):
     # ------------------------------------------------------------------
 
     async def _start_session_messages(
-        self, system_prompt: str, initial_user_msg: str
+        self, system_prompt: str, initial_user_msg: str, on_chunk: OnChunk | None = None
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_messages_api(system_prompt, messages)
+        raw = await self._call_messages_api(system_prompt, messages, on_chunk)
         reply = await self._parse_with_nudge_messages(system_prompt, messages, raw)
         messages.append({"role": "assistant", "content": reply.raw})
         handle = OpenAICompatSessionHandle(
@@ -215,13 +226,15 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             structured_enabled=False,
         )
 
-    async def _send_message_messages(self, handle: SessionHandle, text: str) -> AgentReply:
+    async def _send_message_messages(
+        self, handle: SessionHandle, text: str, on_chunk: OnChunk | None = None
+    ) -> AgentReply:
         if not isinstance(handle, OpenAICompatSessionHandle):
             raise TypeError(
                 f"expected OpenAICompatSessionHandle, got {type(handle).__name__}"
             )
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_messages_api(handle.system_prompt, pending_messages)
+        raw = await self._call_messages_api(handle.system_prompt, pending_messages, on_chunk)
         reply = await self._parse_with_nudge_messages(handle.system_prompt, pending_messages, raw)
         handle.messages.append({"role": "user", "content": text})
         handle.messages.append({"role": "assistant", "content": reply.raw})
@@ -245,7 +258,9 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             raw2 = await self._call_messages_api(system_prompt, nudge_messages)
             return parse_reply(raw2)  # Propagate on second failure
 
-    async def _call_messages_api(self, system_prompt: str, messages: list[dict]) -> str:
+    async def _call_messages_api(
+        self, system_prompt: str, messages: list[dict], on_chunk: OnChunk | None = None
+    ) -> str:
         """POST to the /messages endpoint via retry_transient. A ``_CacheRejected``
         (a permanent 4xx while cache_control fields were present) is caught here,
         OUTSIDE ``retry_transient``'s budget — same rule and same mechanism as
@@ -255,7 +270,7 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         dual-protocol split)."""
         try:
             return await retry_transient(
-                lambda: self._call_messages_api_once(system_prompt, messages),
+                lambda: self._call_messages_api_once(system_prompt, messages, on_chunk),
                 unavailable_message=f"{self.name} API (messages) still failing",
             )
         except _CacheRejected as exc:
@@ -267,11 +282,39 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             )
             self._prompt_caching = False
             return await retry_transient(
-                lambda: self._call_messages_api_once(system_prompt, messages),
+                lambda: self._call_messages_api_once(system_prompt, messages, on_chunk),
                 unavailable_message=f"{self.name} API (messages) still failing",
             )
 
-    async def _call_messages_api_once(self, system_prompt: str, messages: list[dict]) -> str:
+    async def _consume_messages_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
+        """Drain an Anthropic Messages-shape SSE stream
+        (``event: content_block_delta`` / ``data: {"delta": {"type": "text_delta",
+        "text": ...}}``), forwarding content deltas through ``on_chunk``."""
+        content_parts: list[str] = []
+        async for line in response.aiter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data:
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "content_block_delta":
+                continue
+            delta = event.get("delta") or {}
+            if delta.get("type") != "text_delta":
+                continue
+            text = delta.get("text", "")
+            if text:
+                content_parts.append(text)
+                await on_chunk(AgentChunk(kind="content", text=text))
+        return "".join(content_parts)
+
+    async def _call_messages_api_once(
+        self, system_prompt: str, messages: list[dict], on_chunk: OnChunk | None = None
+    ) -> str:
         """Single POST to the Anthropic-shape /messages endpoint; classifies and
         raises on any failure. Never retries itself — see _call_messages_api.
 
@@ -301,17 +344,27 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             "system": system_content,
             "messages": messages,
         }
+        use_stream = on_chunk is not None
+        if use_stream:
+            payload["stream"] = True
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": _ANTHROPIC_VERSION,
+            "Content-Type": "application/json",
+        }
+        streamed_content: str | None = None
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
-            response = await client.post(
-                _MESSAGES_ENDPOINT,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": _ANTHROPIC_VERSION,
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+            if use_stream:
+                async with client.stream(
+                    "POST", _MESSAGES_ENDPOINT, headers=headers, json=payload
+                ) as response:
+                    if response.status_code == 200:
+                        streamed_content = await self._consume_messages_sse(response, on_chunk)
+                    else:
+                        await response.aread()
+            else:
+                response = await client.post(_MESSAGES_ENDPOINT, headers=headers, json=payload)
         except httpx.TimeoutException:
             raise AgentTimeout(
                 f"{self.name} API (messages) timed out after {self._timeout}s"
@@ -327,6 +380,13 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             raise AgentLimitReached(
                 f"{self.name} API (messages) rate limit reached: {response.text[:500]}"
             )
+
+        if streamed_content is not None:
+            if not streamed_content:
+                raise TransientBackendError(
+                    f"{self.name} API (messages) stream returned no text content"
+                )
+            return streamed_content
 
         try:
             body = response.json()

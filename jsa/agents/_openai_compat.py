@@ -23,6 +23,7 @@ subclass-specific top-level payload key (OpenRouter's routing guard).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -34,10 +35,12 @@ import httpx
 from jsa.agents.base import (
     AgentBackend,
     AgentBackendUnavailable,
+    AgentChunk,
     AgentLimitReached,
     AgentReply,
     AgentTimeout,
     HistoryTurn,
+    OnChunk,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -175,6 +178,13 @@ class OpenAICompatBackend(AgentBackend):
     """
 
     supports_structured_output = True
+    # Real SSE channel via `stream: true` on the chat-completions endpoint. Content
+    # always; `reasoning_content` only when a routed model actually emits it (never
+    # fabricated). Structured mode (response_format) is NOT streamed — a partial
+    # JSON object is not useful to show the user turn-by-turn, and self-heal/wire-
+    # retry parsing needs the complete body regardless — so streaming is only
+    # attempted when structured_schema is None for a given call.
+    supports_streaming = True
 
     endpoint_url: ClassVar[str]
     env_vars: ClassVar[tuple[str, ...]]
@@ -218,10 +228,11 @@ class OpenAICompatBackend(AgentBackend):
         system_prompt: str,
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         """Open a fresh session: send the initial user message and return the handle + first reply."""
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_api(system_prompt, messages, structured_schema)
+        raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
             system_prompt, messages, raw, structured_schema
         )
@@ -262,6 +273,7 @@ class OpenAICompatBackend(AgentBackend):
         handle: SessionHandle,
         text: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> AgentReply:
         """Append a user turn, call the API, parse and store the assistant reply.
 
@@ -274,7 +286,7 @@ class OpenAICompatBackend(AgentBackend):
             )
         schema = _active_schema(handle, structured_schema)
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_api(handle.system_prompt, pending_messages, schema)
+        raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
             handle.system_prompt, pending_messages, raw, schema
         )
@@ -347,6 +359,7 @@ class OpenAICompatBackend(AgentBackend):
         system_prompt: str,
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> str:
         """POST to ``endpoint_url``, retrying transient overload/gateway failures on
         THIS backend up to ``_MAX_ATTEMPTS`` before giving up. See
@@ -358,10 +371,17 @@ class OpenAICompatBackend(AgentBackend):
         shares a budget with retries of the identical request. Prompt caching is
         disabled for the rest of this backend instance's life and the call is
         retried exactly once, clean.
+
+        ``on_chunk``, when structured mode is off (see ``supports_streaming``
+        above), is forwarded to ``_call_api_once`` for a real SSE stream. Not
+        attempted for a structured-schema call — a partial JSON payload is not
+        useful to stream, and the wire-retry/self-heal machinery needs the
+        complete body regardless.
         """
+        stream_cb = on_chunk if structured_schema is None else None
         try:
             return await retry_transient(
-                lambda: self._call_api_once(system_prompt, messages, structured_schema),
+                lambda: self._call_api_once(system_prompt, messages, structured_schema, stream_cb),
                 unavailable_message=f"{self.name} API still failing after {_MAX_ATTEMPTS} attempts",
             )
         except _CacheRejected as exc:
@@ -372,15 +392,44 @@ class OpenAICompatBackend(AgentBackend):
             )
             self._prompt_caching = False
             return await retry_transient(
-                lambda: self._call_api_once(system_prompt, messages, structured_schema),
+                lambda: self._call_api_once(system_prompt, messages, structured_schema, stream_cb),
                 unavailable_message=f"{self.name} API still failing after {_MAX_ATTEMPTS} attempts",
             )
+
+    async def _consume_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
+        """Drain an SSE ``chat/completions`` stream, emitting content/reasoning
+        deltas through ``on_chunk`` as they arrive, and returning the joined
+        content text (never fabricates a reasoning chunk a model didn't send)."""
+        content_parts: list[str] = []
+        async for line in response.aiter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = event.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                content_parts.append(piece)
+                await on_chunk(AgentChunk(kind="content", text=piece))
+            reasoning_piece = delta.get("reasoning_content")
+            if reasoning_piece:
+                await on_chunk(AgentChunk(kind="reasoning", text=reasoning_piece))
+        return "".join(content_parts)
 
     async def _call_api_once(
         self,
         system_prompt: str,
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> str:
         """Single POST to the chat-completions endpoint; classifies and raises on
         any failure. Never retries itself — see _call_api. Mirrors
@@ -407,16 +456,30 @@ class OpenAICompatBackend(AgentBackend):
                     "schema": structured_schema,
                 },
             }
+        use_stream = on_chunk is not None
+        if use_stream:
+            payload["stream"] = True
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        streamed_content: str | None = None
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
-            response = await client.post(
-                self.endpoint_url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+            if use_stream:
+                async with client.stream(
+                    "POST", self.endpoint_url, headers=headers, json=payload
+                ) as response:
+                    if response.status_code == 200:
+                        streamed_content = await self._consume_sse(response, on_chunk)
+                    else:
+                        # Not a stream — read the full (error) body for classification
+                        # below, exactly as the non-streaming branch would receive it.
+                        await response.aread()
+            else:
+                response = await client.post(
+                    self.endpoint_url, headers=headers, json=payload,
+                )
         except httpx.TimeoutException:
             raise AgentTimeout(
                 f"{self.name} API timed out after {self._timeout}s"
@@ -433,6 +496,14 @@ class OpenAICompatBackend(AgentBackend):
 
         if response.status_code == 429:
             raise AgentLimitReached(f"{self.name} API rate limit reached: {response.text[:500]}")
+
+        if streamed_content is not None:
+            if not streamed_content:
+                raise TransientBackendError(
+                    f"{self.name} API stream produced no content (model may have "
+                    "produced only reasoning tokens before hitting max_tokens)"
+                )
+            return streamed_content
 
         try:
             body = response.json()

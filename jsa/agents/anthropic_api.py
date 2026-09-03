@@ -9,7 +9,16 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from jsa.agents.base import AgentBackend, AgentLimitReached, AgentReply, AgentTimeout, HistoryTurn, SessionHandle
+from jsa.agents.base import (
+    AgentBackend,
+    AgentChunk,
+    AgentLimitReached,
+    AgentReply,
+    AgentTimeout,
+    HistoryTurn,
+    OnChunk,
+    SessionHandle,
+)
 from jsa.agents.protocol import ProtocolError, parse_reply
 from jsa.schema.turn_models import parse_structured_reply_for_schema
 
@@ -107,6 +116,10 @@ class AnthropicAPIBackend(AgentBackend):
 
     name = "anthropic"
     supports_structured_output = True
+    # SDK messages.stream() for content only. Structured mode (forced tool-use)
+    # streams nothing — the tool_use input JSON is not useful to show
+    # token-by-token, and _extract_structured_text needs the complete block.
+    supports_streaming = True
 
     def __init__(
         self,
@@ -123,10 +136,11 @@ class AnthropicAPIBackend(AgentBackend):
         system_prompt: str,
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> tuple[AnthropicSessionHandle, AgentReply]:
         """Open a fresh session: send the initial user message and return the handle + first reply."""
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_api(system_prompt, messages, structured_schema)
+        raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk)
         reply = _parse_reply_for(raw, structured_schema)
         messages.append({"role": "assistant", "content": raw})
         handle = AnthropicSessionHandle(
@@ -166,6 +180,7 @@ class AnthropicAPIBackend(AgentBackend):
         handle: SessionHandle,
         text: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> AgentReply:
         """Append a user turn, call the API, parse and store the assistant reply.
 
@@ -180,7 +195,7 @@ class AnthropicAPIBackend(AgentBackend):
             )
         schema = structured_schema if structured_schema is not None else handle.structured_schema
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_api(handle.system_prompt, pending_messages, schema)
+        raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk)
         reply = _parse_reply_for(raw, schema)
         # Mutate only after success so handle stays consistent on error
         handle.messages.append({"role": "user", "content": text})
@@ -200,6 +215,7 @@ class AnthropicAPIBackend(AgentBackend):
         system_prompt: str,
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> str:
         """Call the Anthropic messages API and return the raw reply text.
 
@@ -249,12 +265,19 @@ class AnthropicAPIBackend(AgentBackend):
         if structured_schema is not None:
             create_kwargs.update(_forced_tool_kwargs(structured_schema))
 
+        use_stream = structured_schema is None and on_chunk is not None
         client = anthropic.AsyncAnthropic()
         try:
-            response = await asyncio.wait_for(
-                client.messages.create(**create_kwargs),
-                timeout=self._timeout,
-            )
+            if use_stream:
+                response = await asyncio.wait_for(
+                    self._stream_and_collect(client, create_kwargs, on_chunk),
+                    timeout=self._timeout,
+                )
+            else:
+                response = await asyncio.wait_for(
+                    client.messages.create(**create_kwargs),
+                    timeout=self._timeout,
+                )
         except asyncio.TimeoutError:
             raise AgentTimeout(
                 f"Anthropic API timed out after {self._timeout}s"
@@ -271,6 +294,20 @@ class AnthropicAPIBackend(AgentBackend):
         if structured_schema is None:
             return response.content[0].text
         return _extract_structured_text(response)
+
+    async def _stream_and_collect(
+        self, client: Any, create_kwargs: dict[str, Any], on_chunk: OnChunk
+    ) -> Any:
+        """Stream content deltas through ``on_chunk`` via the SDK's
+        ``messages.stream()`` helper, then return the final assembled
+        ``Message`` object — same shape ``client.messages.create`` returns, so
+        the caller's post-processing (``_log_cache_usage``,
+        ``response.content[0].text``) is unchanged."""
+        async with client.messages.stream(**create_kwargs) as stream:
+            async for text in stream.text_stream:
+                if text:
+                    await on_chunk(AgentChunk(kind="content", text=text))
+            return await stream.get_final_message()
 
 
 def _log_cache_usage(response: Any) -> None:
