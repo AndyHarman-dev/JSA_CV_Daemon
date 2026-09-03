@@ -962,9 +962,17 @@ shared `_openai_compat.py::_reasoning_delta_text` / `_split_content_delta`:
 
 | Convention | Who | Shape |
 |---|---|---|
-| `delta.reasoning_content` | `opencode-go`'s routed models, `opencode-zen` | plain string |
+| `delta.reasoning_content` | `opencode-go`'s routed models | plain string |
 | `delta.reasoning` / `delta.reasoning_details` | `openrouter` | legacy string / array of objects — OpenRouter sends **both for the same tokens**, so the first non-empty wins; concatenating doubles the text |
 | list-shaped `delta.content` | `mistral` | `[{"type": "thinking", "thinking": [...]}, {"type": "text", ...}]` — reasoning is inside `content` itself, there is no separate field |
+
+**`opencode-zen` is NOT covered by that table.** Per this file's no-shared-base rule it
+keeps its own independent copy of the streaming machinery, and its `_consume_sse` still
+reads `delta.reasoning_content` **only** — so a routed model that answers with
+`reasoning`/`reasoning_details` is silently missed there while `openrouter` catches it.
+That gap is deliberate-by-omission, not verified-unnecessary: closing it means porting
+`_reasoning_delta_text`/`_split_content_delta` into that file the same way
+`_reasoning_only` was already duplicated into it, NOT wiring it onto the shared base.
 
 Mistral's list shape is a **type guard, not just a feature**: before `_split_content_delta`
 existed, a list `content` was appended straight into the content accumulator and the
@@ -984,7 +992,8 @@ below):
 | `openrouter` | top-level `{"reasoning": {"enabled": True}}` |
 | `mistral` | top-level `{"reasoning_effort": "high"}` — the parameter is two-valued (`high`/`none`), there is no middle setting, so asking for reasoning at all means `high` |
 | `gemini` | `generationConfig.thinkingConfig = {"includeThoughts": True}` — merged in `_call_api_once`, not a top-level key; without it the API never sets `"thought": true` on any part, so streaming alone yields nothing |
-| `opencode-zen`, `opencode-go`, `anthropic`, `claude-cli` | none — these emit reasoning without being asked |
+| `opencode-zen`, `opencode-go`, `claude-cli` | none — these emit reasoning without being asked |
+| `anthropic` | **unwired, both halves.** It neither sends `thinking: {"type": "enabled", "budget_tokens": N}` nor parses `thinking_delta` events — `anthropic_api.py` only ever emits `AgentChunk(kind="content", ...)`. Not "doesn't need an opt-in"; simply never built. |
 
 An override MUST return `{}` when `self._reasoning` is False, or the degrade can't
 degrade.
