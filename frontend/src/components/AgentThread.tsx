@@ -376,6 +376,17 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
   const transcript = useStore((s) => s.transcripts[jobId]);
   const fetchTranscript = useStore((s) => s.fetchTranscript);
   const streamBuffer = useStore((s) => s.streamBuffers[jobId]);
+  // A live turn's buffer entry only exists once the FIRST agent_chunk WS event
+  // arrives -- but a turn that streams no reasoning AND has its content chunks
+  // filtered (structured mode, see _reasoning_only in the backend layer) or a
+  // turn on a non-streaming backend never sends one at all, so streamBuffer can
+  // stay undefined for the turn's ENTIRE duration. Falling back to job.state ===
+  // "running" here is what makes LiveBubble's placeholder actually show up in
+  // that case -- without it, "the UI feedback must be shown anyway" silently
+  // depended on at least one chunk having streamed, which is exactly the case
+  // it's meant to cover when there is none.
+  const isJobRunning = useStore((s) => s.jobs[jobId]?.state === "running");
+  const liveBuffer = streamBuffer ?? (isJobRunning ? { stage: "", content: "", reasoning: "" } : undefined);
   const [loading, setLoading] = useState(transcript === undefined);
   const [error, setError] = useState<string | null>(null);
   const [showInternals, setShowInternals] = useState(false);
@@ -402,7 +413,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [turns.length, streamBuffer?.content.length, streamBuffer?.reasoning.length]);
+  }, [turns.length, liveBuffer?.content.length, liveBuffer?.reasoning.length]);
 
   const openFollowUpId = mode === "answer" ? findOpenFollowUpId(turns) : null;
   const openFollowUpTurn =
@@ -478,7 +489,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
             }
             return <TurnBubble key={turn.seq} turn={turn} />;
           })}
-        {streamBuffer && <LiveBubble content={streamBuffer.content} reasoning={streamBuffer.reasoning} />}
+        {liveBuffer && <LiveBubble content={liveBuffer.content} reasoning={liveBuffer.reasoning} />}
         <div ref={bottomRef} />
       </div>
 

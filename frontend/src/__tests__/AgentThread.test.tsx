@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { AgentThread } from "../components/AgentThread";
 import { api } from "../api";
 import { useStore } from "../store";
-import type { TranscriptTurn } from "../types";
+import type { JobDTO, TranscriptTurn } from "../types";
 
 vi.mock("../api", () => ({
   api: {
@@ -29,6 +29,29 @@ function turn(overrides: Partial<TranscriptTurn> = {}): TranscriptTurn {
     follow_up_id: null,
     suggested_replies: null,
     reasoning: null,
+    ...overrides,
+  };
+}
+
+function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
+  return {
+    id: "job1",
+    company: "Acme",
+    role: "Engineer",
+    link: "https://example.com",
+    tier: "A",
+    jd: "",
+    state: "running",
+    current_stage: "cv_adjust",
+    backend_name: "opencode-zen",
+    model_name: null,
+    effective_model: null,
+    language: null,
+    fit_reason: null,
+    error: null,
+    retry_count: 0,
+    updated_at: "2026-01-01T00:00:00Z",
+    created_at: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -239,6 +262,37 @@ describe("AgentThread", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Adjusted CV so far...")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("REASONING")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+  });
+
+  it("shows the Thinking placeholder while the job is running even with ZERO chunks ever streamed", async () => {
+    // The real gap this pins: a backend can be actively running a turn (structured
+    // mode filtering out every content chunk, and the routed model never sending a
+    // reasoning_content delta at all) without a single agent_chunk WS event ever
+    // arriving -- streamBuffers[jobId] then never gets created. The live bubble
+    // must still show, driven by job.state === "running" alone, not by streamBuffer
+    // presence.
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    useStore.setState({ jobs: { job1: makeJob({ state: "running" }) } });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("REASONING")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Thinking…")).toBeInTheDocument();
+  });
+
+  it("shows no live bubble at all when the job isn't running and nothing has streamed", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    useStore.setState({ jobs: { job1: makeJob({ state: "awaiting_input" }) } });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No conversation yet.")).toBeInTheDocument();
     });
     expect(screen.queryByText("REASONING")).not.toBeInTheDocument();
     expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();

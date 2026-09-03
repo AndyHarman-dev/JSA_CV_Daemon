@@ -1014,6 +1014,51 @@ re-verified: the live browser appearance (no local job/DB to drive `job.state ==
 "running"` in this checkout, same limitation noted throughout this plan) — the user
 should confirm the placeholder renders as expected on their next live run.
 
+2026-09-03 (bugfix, continued): The user ran a live job and reported the "Thinking…"
+placeholder from the previous entry never appeared anywhere — confirming the previous
+entry's own unverified caveat was, in fact, the real bug. Root cause: `LiveBubble`
+(and its placeholder) only renders when `streamBuffers[jobId]` is truthy
+(`frontend/src/components/AgentThread.tsx`), and that store entry is only ever
+created by the `agent_chunk` WS handler in `store.ts` — i.e. only after the FIRST
+chunk streams in. But with the earlier backend fix (`_reasoning_only`), a structured-
+mode call now filters out EVERY `content` chunk and forwards only `reasoning` ones —
+so for a routed model that never sends a `reasoning_content` delta at all (the common
+case, per the design handoff's own caveat: "do not fabricate a reasoning stream"),
+ZERO chunks are ever forwarded to `on_chunk`, `ChunkAccumulator.add_chunk` is never
+called, no `AgentChunkEvent` is ever published, and `streamBuffers[jobId]` never gets
+created for that turn's entire duration. The widget itself was correct; it just never
+mounted. This is not new behavior introduced by the earlier `_reasoning_only` fix —
+the same "zero chunks -> streamBuffer never created" gap existed before it too
+(structured mode disabled streaming outright); the fix just didn't happen to close
+it, because the actual condition for showing SOME feedback was never "at least one
+chunk arrived," it should always have been "a turn is in progress."
+
+Fix: `AgentThread` now derives `isJobRunning = useStore((s) => s.jobs[jobId]?.state
+=== "running")` and computes `liveBuffer = streamBuffer ?? (isJobRunning ? { stage:
+"", content: "", reasoning: "" } : undefined)` — the live bubble now shows for the
+job's entire `running` duration regardless of whether any chunk ever streamed, not
+just from the first chunk onward. `job.state` is already live-updated via WS for
+every other job-state-driven render in this codebase (e.g. `JobDetail.tsx` only
+mounts this `AgentThread` instance while `job.state === "running"` in the first
+place), so no new plumbing was needed — just reading the same store slice one level
+deeper. `LiveBubble`'s own reasoning-card-vs-placeholder logic from the previous entry
+is unchanged; it now just reliably gets mounted. `streamBuffer` (real chunks, once any
+arrive) always takes precedence over the synthesized empty fallback.
+
+Added 2 tests: the zero-chunks-but-running case (REASONING card with "Thinking…"
+placeholder shows with no `streamBuffers` entry at all, only `jobs[jobId].state ===
+"running"`), and the not-running-and-nothing-streamed case (no live bubble at all —
+confirms this isn't just "always show a bubble"). Added a `makeJob` helper to
+`AgentThread.test.tsx` (mirrors the same-shaped helper duplicated across every other
+component test file in this codebase, e.g. `JobDetail.test.tsx`).
+
+Verification: verified — full frontend suite (307/307, up from 305) and `npm run
+build` (`tsc` + `vite build`, rebuilt `jsa/static`) both pass. Not independently
+re-verified: live browser appearance (same no-local-DB limitation as every other
+manual-verification gap in this plan) — the user should confirm the placeholder now
+appears on their next live run regardless of whether their configured model streams
+any reasoning at all.
+
 ## Decisions Log
 
 _Reserved for the user. Not to be written by the agent._
