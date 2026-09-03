@@ -15,6 +15,7 @@ Two concerns:
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -156,3 +157,85 @@ class TestForResume:
             "BASE PROMPT", language="fr", structured_model=None, for_resume=True
         )
         assert result == "BASE PROMPT"
+
+
+class TestCurrentDateDirective:
+    """The date models see is trained-cutoff data, not live data — without this
+    directive, models judge a CV's own (correct) recent/current dates as errors.
+    now=None (the default) must stay a strict no-op: the golden-fixture parity gate
+    above calls assemble_system_prompt with no `now` at all and must keep passing."""
+
+    _NOW = datetime(2026, 9, 3, 14, 30, 0)
+
+    def test_now_none_is_a_strict_no_op_sentinel_fresh(self):
+        result = assemble_system_prompt("BASE PROMPT", language="en", structured_model=None)
+        assert result == "BASE PROMPT"
+
+    def test_now_none_is_a_strict_no_op_structured_fresh(self):
+        schema = json_schema_for(Stage.cv_adjust)
+        with_date = assemble_system_prompt(
+            "BASE PROMPT", language="en", structured_model=schema, now=self._NOW
+        )
+        without_date = assemble_system_prompt("BASE PROMPT", language="en", structured_model=schema)
+        assert "## Current date" not in without_date
+        assert "## Current date" in with_date
+
+    def test_sentinel_fresh_gets_date_directive_with_day_granularity_only(self):
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="en", structured_model=None, now=self._NOW
+        )
+        assert "## Current date" in result
+        assert "2026-09-03" in result
+        assert "14:30" not in result  # day granularity only, never clock time
+
+    def test_sentinel_fresh_non_english_still_gets_date_directive(self):
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="fr", structured_model=None, now=self._NOW
+        )
+        assert "## Output language" in result
+        assert "## Current date" in result
+        # Appended last, after the language directive.
+        assert result.index("## Output language") < result.index("## Current date")
+
+    def test_structured_fresh_gets_date_directive_after_contract_and_language(self):
+        schema = json_schema_for(Stage.cover_letter)
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="fr", structured_model=schema, now=self._NOW
+        )
+        assert "## Current date" in result
+        assert result.index("## Structured output contract") < result.index("## Current date")
+        assert result.index("## Output language") < result.index("## Current date")
+
+    def test_structured_resume_gets_date_directive(self):
+        # Wire-stateless backends resend the system prompt every call, so a job
+        # parked overnight in awaiting_input must resume with today's date, not the
+        # one at job launch.
+        schema = json_schema_for(Stage.cv_adjust)
+        result = assemble_system_prompt(
+            "BASE PROMPT",
+            language="en",
+            structured_model=schema,
+            for_resume=True,
+            now=self._NOW,
+        )
+        assert "## Current date" in result
+        assert "2026-09-03" in result
+
+    def test_sentinel_resume_never_gets_date_directive(self):
+        # Real CLI session already carries the date from its fresh start; nothing
+        # needs to change on resume, same as the language directive.
+        result = assemble_system_prompt(
+            "BASE PROMPT",
+            language="en",
+            structured_model=None,
+            for_resume=True,
+            now=self._NOW,
+        )
+        assert result == "BASE PROMPT"
+
+    def test_instructs_model_not_to_flag_future_relative_dates_as_errors(self):
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="en", structured_model=None, now=self._NOW
+        )
+        assert "not an error" in result
+        assert "training" in result
