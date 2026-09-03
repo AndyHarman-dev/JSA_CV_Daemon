@@ -1109,6 +1109,39 @@ visual comparison against the actual mockup in a browser (same no-local-DB limit
 as every prior entry) — the user should confirm the card now reads as a proper
 chamfered panel with the glow/spinner treatment rather than a plain box.
 
+2026-09-03 (visual, follow-up): The previous entry deliberately removed the collapse
+chevron, reasoning the design mock forces the "not done" reasoning card open and never
+lets it collapse until a turn is finished. The user pushed back: "Make that card
+expandable so it's not always spamming reasoning into the chat" — correctly pointing
+out a real gap in that reasoning: the mock's body only ever holds a handful of short,
+discrete step lines (fabricated `mockThinkingSteps` demo data), never open-ended raw
+text, so "forced open" costs nothing there. This app streams genuine, continuously
+growing reasoning text with no length ceiling — forcing that open for the entire
+in-flight duration of every turn is a real usability problem the mock's data shape
+never had to contend with, not a faithful application of the spec.
+
+Reinstated a collapse toggle on `LiveBubble`'s reasoning card (`useState<boolean>`
+`expanded`, default `false`) — but only once there is real text to hide: the header
+row becomes a `role="button"` (click + Enter/Space) with a chevron once `hasReasoning`
+is true, and the body (the growing reasoning text) only renders when `hasReasoning &&
+expanded`. Before any reasoning has arrived, the header stays non-interactive (no
+chevron) — there's nothing to collapse yet, and the "Thinking…" placeholder itself
+already IS the whole card. The spinner + "REASONING" label stay visible regardless of
+collapsed state, so the live-in-progress affordance from the very first bugfix entry
+in this plan is never lost — only the raw growing text is hidden until asked for.
+
+Updated the one test that had asserted the reasoning text was immediately visible
+(`test_streamed reasoning text ... once it arrives` renamed to
+`collapses the real streamed reasoning text by default, expanding it on click`) — now
+asserts the text is absent by default, then present after a click on the header.
+
+Verification: verified — `tsc --noEmit` clean, full frontend suite (307/307, same
+count — one test rewritten in place, no new ones needed) and `npm run build` (rebuilt
+`jsa/static`) all pass. Not independently re-verified: live visual/interaction check
+(same no-local-DB limitation as every prior entry) — the user should confirm clicking
+the card actually expands/collapses the reasoning text as expected on their next live
+run.
+
 ## Decisions Log
 
 _Reserved for the user. Not to be written by the agent._

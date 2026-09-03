@@ -236,7 +236,7 @@ describe("AgentThread", () => {
     expect(screen.getByText("Thinking…")).toBeInTheDocument();
   });
 
-  it("shows the real streamed reasoning text in the REASONING card once it arrives", async () => {
+  it("collapses the real streamed reasoning text by default, expanding it on click", async () => {
     (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     useStore.setState({
       streamBuffers: {
@@ -247,9 +247,15 @@ describe("AgentThread", () => {
     render(<AgentThread jobId="job1" mode="none" />);
 
     await waitFor(() => {
-      expect(screen.getByText("weighing the JD against the CV...")).toBeInTheDocument();
+      expect(screen.getByText("REASONING")).toBeInTheDocument();
     });
     expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+    expect(screen.queryByText("weighing the JD against the CV...")).not.toBeInTheDocument();
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: /REASONING/ }));
+
+    expect(screen.getByText("weighing the JD against the CV...")).toBeInTheDocument();
   });
 
   it("hides the REASONING card once content has started arriving with no reasoning captured", async () => {

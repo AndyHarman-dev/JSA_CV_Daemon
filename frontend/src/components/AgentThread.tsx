@@ -208,8 +208,17 @@ function NoticeLine({ turn }: { turn: TranscriptTurn }) {
 // affordance, never a silent gap. Once content starts arriving, the card only shows
 // if real reasoning was actually captured (no stale "Thinking…" once the model has
 // visibly moved on to answering).
+//
+// The reasoning body is collapsed by default once real text starts streaming in —
+// a raw, continuously growing wall of reasoning text inline in the thread reads as
+// spam, not signal. Collapsed still shows the live spinner + label (so the "a turn
+// is in flight" affordance from the comment above never disappears), just not the
+// growing text itself; a click expands it to peek at the actual stream. There's
+// nothing to toggle before any reasoning has arrived (the "Thinking…" placeholder
+// has no body to hide), so the chevron only appears once hasReasoning is true.
 function LiveBubble({ content, reasoning }: { content: string; reasoning: string }) {
   const t = useT();
+  const [expanded, setExpanded] = useState(false);
   const hasReasoning = reasoning.trim().length > 0;
   const hasContent = content.trim().length > 0;
   const showReasoningCard = hasReasoning || !hasContent;
@@ -220,9 +229,11 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
         {showReasoningCard && (
           // Design handoff's thinkCard, "not done" state — always the case here, since
           // this card only exists while the turn is still in flight: chamfered panel
-          // with an accent2-tinted border and glow, forced open (no collapse chevron —
-          // that's only for the persisted/finished-turn state, which this isn't), and a
-          // ring spinner instead of the settled "bolt" icon.
+          // with an accent2-tinted border and glow, and a ring spinner instead of the
+          // settled "bolt" icon. Unlike the mock (which forces this state open, since it
+          // never lets the body grow past a few discrete step lines), this app streams
+          // raw, open-ended reasoning text — collapsible by the user once there's
+          // something to collapse, see the function comment above.
           <div
             style={{
               ...panelBase(T, { border: `color-mix(in srgb, ${T.accent2} 45%, ${T.bd})`, chamfer: 10 }),
@@ -230,7 +241,28 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
               overflow: "hidden",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 12px" }}>
+            <div
+              role={hasReasoning ? "button" : undefined}
+              tabIndex={hasReasoning ? 0 : undefined}
+              onClick={hasReasoning ? () => setExpanded((v) => !v) : undefined}
+              onKeyDown={
+                hasReasoning
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpanded((v) => !v);
+                      }
+                    }
+                  : undefined
+              }
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                padding: "9px 12px",
+                cursor: hasReasoning ? "pointer" : "default",
+              }}
+            >
               <Spinner color={T.accent2} size={8} />
               <span
                 style={{
@@ -245,8 +277,21 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
               {!hasReasoning && (
                 <span style={{ font: `400 11px ${T.mono}`, color: T.ink3 }}>{t("agentThread.thinking")}</span>
               )}
+              {hasReasoning && (
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    display: "flex",
+                    color: T.ink3,
+                    transform: expanded ? "rotate(90deg)" : "none",
+                    transition: "transform .12s ease",
+                  }}
+                >
+                  <Icon name="chevron" size={11} />
+                </span>
+              )}
             </div>
-            {hasReasoning && (
+            {hasReasoning && expanded && (
               <div
                 style={{
                   borderTop: `1px solid ${T.bd}`,
