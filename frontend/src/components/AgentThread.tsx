@@ -37,7 +37,7 @@ function findOpenFollowUpId(turns: TranscriptTurn[]): number | null {
 function shouldSendImmediately(suggestion: string): boolean {
   const trimmed = suggestion.trim();
   if (trimmed.length === 0 || trimmed.length > 40) return false;
-  if (/(\.\.\.|…|[:;,\-–—]$)/.test(trimmed)) return false;
+  if (/(\.\.\.|…|[:;,\-–—])$/.test(trimmed)) return false;
   return true;
 }
 

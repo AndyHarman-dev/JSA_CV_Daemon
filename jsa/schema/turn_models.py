@@ -340,7 +340,13 @@ def wrap_canonical_for_sentinel(canonical_text: str) -> str:
         return canonical_text
     kind = data.get("kind")
     if kind == "question" and isinstance(data.get("question"), str):
-        return f"<<<NEED_INPUT>>>\n{data['question']}\n<<<END>>>"
+        suggested_replies = data.get("suggested_replies")
+        suggestions_block = ""
+        if isinstance(suggested_replies, list) and all(
+            isinstance(item, str) for item in suggested_replies
+        ) and suggested_replies:
+            suggestions_block = "\n<<<SUGGESTIONS>>>\n" + "\n".join(suggested_replies)
+        return f"<<<NEED_INPUT>>>\n{data['question']}{suggestions_block}\n<<<END>>>"
     if kind == "final" and isinstance(data.get("payload"), dict):
         return f"<<<FINAL>>>\n{json.dumps(data['payload'])}\n<<<END>>>"
     return canonical_text

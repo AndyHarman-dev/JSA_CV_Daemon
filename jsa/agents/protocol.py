@@ -19,7 +19,11 @@ _OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL)>>>")
 
 # Optional suggestions block inside a NEED_INPUT body: everything from the marker to
 # the end of the (already-extracted) content is the suggestion list, one per line.
-_SUGGESTIONS_RE = re.compile(r"<<<SUGGESTIONS>>>(.*)", re.DOTALL)
+# The marker must start its own line (start-of-string or immediately after a newline)
+# — otherwise a question that legitimately quotes the literal substring
+# "<<<SUGGESTIONS>>>" (e.g. pasted JD text) would have everything after it silently
+# truncated and misread as a suggestion list.
+_SUGGESTIONS_RE = re.compile(r"(?:^|\n)<<<SUGGESTIONS>>>(.*)", re.DOTALL)
 
 # Defense-in-depth: strip Change Log content if a model places it inside a FINAL block.
 # Matches <change_log>...</change_log> (XML-wrapped, case-insensitive).

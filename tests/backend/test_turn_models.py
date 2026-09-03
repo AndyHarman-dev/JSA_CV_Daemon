@@ -95,7 +95,7 @@ class TestCvTurnIffValidator:
 
     def test_final_without_payload_rejected(self):
         with pytest.raises(ValidationError):
-            CvTurn(kind="final", question=None, payload=None)
+            CvTurn(kind="final", question=None, payload=None, suggested_replies=None)
 
     def test_question_with_question_ok(self):
         CvTurn(
@@ -107,11 +107,17 @@ class TestCvTurnIffValidator:
 
     def test_question_without_question_rejected(self):
         with pytest.raises(ValidationError):
-            CvTurn(kind="question", question=None, payload=None)
+            CvTurn(kind="question", question=None, payload=None, suggested_replies=None)
 
     def test_extra_field_rejected(self):
         with pytest.raises(ValidationError):
-            CvTurn(kind="final", question=None, payload=_cv_dict(), extra_field="nope")
+            CvTurn(
+                kind="final",
+                question=None,
+                payload=_cv_dict(),
+                suggested_replies=None,
+                extra_field="nope",
+            )
 
     def test_final_with_suggested_replies_rejected(self):
         with pytest.raises(ValidationError):
@@ -129,11 +135,11 @@ class TestClTurnIffValidator:
 
     def test_final_without_payload_rejected(self):
         with pytest.raises(ValidationError):
-            ClTurn(kind="final", question=None, payload=None)
+            ClTurn(kind="final", question=None, payload=None, suggested_replies=None)
 
     def test_question_without_question_rejected(self):
         with pytest.raises(ValidationError):
-            ClTurn(kind="question", question=None, payload=None)
+            ClTurn(kind="question", question=None, payload=None, suggested_replies=None)
 
 
 class TestFitVerdictRequiredReason:

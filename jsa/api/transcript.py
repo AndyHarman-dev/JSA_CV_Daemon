@@ -225,23 +225,15 @@ def build_transcript(
         content_stripped = msg.content.strip()
 
         if msg.role == "user":
-            # Rule (a): the user's own answer, re-sent verbatim (or wrapped in a
-            # structured-mode wire-retry correction) at session resume — fold into
-            # the answer turn already emitted above; do not render twice.
-            #
-            # Containment (not equality) is required because
-            # `_STRUCTURED_WIRE_CORRECTION.format(original=...)` wraps the original
-            # text in a preamble on a wire retry — but a short/common answer (e.g.
-            # "yes", "None") can then spuriously match unrelated content. Guard
-            # against that: below _MIN_CONTAINMENT_LEN, require exact equality
-            # instead of substring containment.
-            if any(_matches_resent_text(ans, content_stripped) for ans in answered_answers_stripped):
-                continue
-
-            # Rule (b): a RevisionRequest instruction, possibly wire-retry-wrapped —
-            # this IS a real user turn, classify as "answer" (never "plumbing"), or
-            # the user's own revision request hides behind the plumbing toggle.
-            # Same short-string guard as rule (a) above.
+            # Rule (b) is checked BEFORE rule (a): a RevisionRequest instruction,
+            # possibly wire-retry-wrapped — this IS a real user turn, classify as
+            # "answer" (never "plumbing" and never silently dropped), or the user's
+            # own revision request hides behind the plumbing toggle. Checking this
+            # first matters — an instruction that happens to contain a previously
+            # answered FollowUp's answer text as a substring (e.g. the user reuses
+            # the same phrasing in both) would otherwise match rule (a) below and be
+            # dropped entirely before ever reaching this check. Same short-string
+            # guard as rule (a).
             matched_instruction = next(
                 (
                     instr
@@ -261,6 +253,19 @@ def build_transcript(
                         source_id=msg.id,
                     )
                 )
+                continue
+
+            # Rule (a): the user's own answer, re-sent verbatim (or wrapped in a
+            # structured-mode wire-retry correction) at session resume — fold into
+            # the answer turn already emitted above; do not render twice.
+            #
+            # Containment (not equality) is required because
+            # `_STRUCTURED_WIRE_CORRECTION.format(original=...)` wraps the original
+            # text in a preamble on a wire retry — but a short/common answer (e.g.
+            # "yes", "None") can then spuriously match unrelated content. Guard
+            # against that: below _MIN_CONTAINMENT_LEN, require exact equality
+            # instead of substring containment.
+            if any(_matches_resent_text(ans, content_stripped) for ans in answered_answers_stripped):
                 continue
 
         # Neither fold applies (or role == assistant) — machine plumbing.

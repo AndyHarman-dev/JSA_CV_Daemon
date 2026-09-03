@@ -211,7 +211,7 @@ async def get_transcript(request: Request, job_id: str):
         follow_ups = sorted(job.follow_ups, key=lambda fu: (fu.asked_at, fu.id))
         documents = list(job.documents)
 
-    return build_transcript(job, messages, follow_ups, documents, revision_requests)
+        return build_transcript(job, messages, follow_ups, documents, revision_requests)
 
 
 @router.post("/api/jobs/{job_id}/answer")
