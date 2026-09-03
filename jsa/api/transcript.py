@@ -121,12 +121,14 @@ def build_transcript(
     suggested_replies, reasoning}`` where ``kind`` is one of ``question``,
     ``answer``, ``delivery``, ``verdict``, ``plumbing``.
 
-    Sort order is total: ``(stage_index, timestamp, kind_rank, source_id)`` for every
-    kind except ``delivery``, which sorts ``(timestamp, kind_rank, stage_index,
-    source_id)`` instead — a revision's Document is stored under its *anchor* stage
-    (``revising_cv -> cv_adjust``, see ``stages.py::_handle_final``), so a stage-first
-    key would park a revised-CV delivery before the cover-letter conversation that
-    actually preceded it in real time.
+    Sort order is total, with ``timestamp`` always the primary key: every kind except
+    ``delivery`` sorts ``(timestamp, stage_index, kind_rank, source_id)``; ``delivery``
+    sorts ``(timestamp, kind_rank, stage_index, source_id)`` instead — a revision's
+    Document is stored under its *anchor* stage (``revising_cv -> cv_adjust``, see
+    ``stages.py::_handle_final``), so a stage-first tiebreak would park a revised-CV
+    delivery before the cover-letter conversation that actually preceded it in real
+    time. ``stage_index``/``kind_rank`` only ever tiebreak near-identical timestamps
+    within the same checkpoint — see ``_sort_key``.
     """
     turns: list[dict[str, Any]] = []
 
