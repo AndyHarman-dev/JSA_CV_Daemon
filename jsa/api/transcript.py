@@ -47,6 +47,17 @@ _DOC_LABEL = {
     Stage.cover_letter: "Cover Letter",
 }
 
+# Below this length, a resent-text containment check falls back to exact equality
+# — a short/common answer (e.g. "yes", "None") is otherwise likely to appear as a
+# spurious substring of unrelated plumbing content.
+_MIN_CONTAINMENT_LEN = 12
+
+
+def _matches_resent_text(original_stripped: str, content_stripped: str) -> bool:
+    if len(original_stripped) < _MIN_CONTAINMENT_LEN:
+        return original_stripped == content_stripped
+    return original_stripped in content_stripped
+
 
 def _stage_index(stage: Stage | None) -> int:
     if stage is None:
@@ -212,17 +223,25 @@ def build_transcript(
             # Rule (a): the user's own answer, re-sent verbatim (or wrapped in a
             # structured-mode wire-retry correction) at session resume — fold into
             # the answer turn already emitted above; do not render twice.
-            if any(ans in content_stripped for ans in answered_answers_stripped):
+            #
+            # Containment (not equality) is required because
+            # `_STRUCTURED_WIRE_CORRECTION.format(original=...)` wraps the original
+            # text in a preamble on a wire retry — but a short/common answer (e.g.
+            # "yes", "None") can then spuriously match unrelated content. Guard
+            # against that: below _MIN_CONTAINMENT_LEN, require exact equality
+            # instead of substring containment.
+            if any(_matches_resent_text(ans, content_stripped) for ans in answered_answers_stripped):
                 continue
 
             # Rule (b): a RevisionRequest instruction, possibly wire-retry-wrapped —
             # this IS a real user turn, classify as "answer" (never "plumbing"), or
             # the user's own revision request hides behind the plumbing toggle.
+            # Same short-string guard as rule (a) above.
             matched_instruction = next(
                 (
                     instr
                     for instr in revision_instructions_stripped
-                    if instr in content_stripped
+                    if _matches_resent_text(instr, content_stripped)
                 ),
                 None,
             )

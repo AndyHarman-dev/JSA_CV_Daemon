@@ -266,9 +266,21 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
       </div>
 
       {mode === "answer" && openFollowUpId != null && (
-        <ChatBox kind="answer" jobId={jobId} followUpId={openFollowUpId} />
+        <ChatBox
+          kind="answer"
+          jobId={jobId}
+          followUpId={openFollowUpId}
+          onSubmitted={() => fetchTranscript(jobId)}
+        />
       )}
-      {mode === "revise" && <ChatBox kind="revise" jobId={jobId} fixedTarget={fixedTarget} />}
+      {mode === "revise" && (
+        <ChatBox
+          kind="revise"
+          jobId={jobId}
+          fixedTarget={fixedTarget}
+          onSubmitted={() => fetchTranscript(jobId)}
+        />
+      )}
     </div>
   );
 }
