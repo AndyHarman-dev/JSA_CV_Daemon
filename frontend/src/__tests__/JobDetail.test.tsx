@@ -29,6 +29,7 @@ vi.mock("../api", () => ({
     revise: vi.fn().mockResolvedValue({}),
     config: vi.fn().mockResolvedValue({ backend: "anthropic" }),
     getJobs: vi.fn().mockResolvedValue([]),
+    getTranscript: vi.fn().mockReturnValue(new Promise(() => {})),
     reset: vi.fn().mockResolvedValue({}),
     dismiss: vi.fn().mockResolvedValue({}),
     deleteJob: vi.fn().mockResolvedValue({ ok: true }),
@@ -68,6 +69,7 @@ beforeEach(() => {
     jobs: {},
     selectedId: undefined,
     wsStatus: "connecting",
+    transcripts: {},
   });
 });
 
@@ -163,8 +165,8 @@ describe("JobDetail", () => {
     // Phase 10 placeholder is gone; FollowUpPane mounts (shows loading state initially)
     expect(screen.queryByText(/Follow-up pane coming in Phase 10/)).toBeNull();
     expect(screen.queryByText(/coming in Phase 10/)).toBeNull();
-    // FollowUpPane renders its loading state
-    expect(screen.getByText("Loading follow-up…")).toBeInTheDocument();
+    // FollowUpPane -> AgentThread renders its loading state
+    expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
   });
 
   it("keeps FollowUpPane visible for awaiting_input even when viewedStage is 'cv' — the agent's question must never be hidden by the CV jump-back", () => {
@@ -173,7 +175,7 @@ describe("JobDetail", () => {
 
     render(<JobDetail />);
 
-    expect(screen.getByText("Loading follow-up…")).toBeInTheDocument();
+    expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
   });
 
   it("shows the read-only CV pane when running the cover-letter lane and viewedStage is 'cv'", () => {

@@ -4,6 +4,7 @@ import { api } from "../api";
 import { StatusBadge } from "./StatusBadge";
 import { StageTimeline } from "./StageTimeline";
 import { FollowUpPane } from "./FollowUpPane";
+import { AgentThread } from "./AgentThread";
 import { ReviewPane } from "./ReviewPane";
 import { UnfitModal } from "./UnfitModal";
 import { useT } from "../i18n/useT";
@@ -204,7 +205,7 @@ export function JobDetail() {
   const showRetry = job.state === "failed";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 26px 80px", position: "relative", zIndex: 1 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 26px", position: "relative", zIndex: 1 }}>
       {/* Mobile back button */}
       <button
         type="button"
@@ -438,11 +439,18 @@ export function JobDetail() {
           never be suppressed while the job is actually waiting on the user. Clicking
           COVER_LETTER (or anything resetting viewedStage away from "cv") returns to the
           normal running-lane UI below. */}
-      {job.state === "running" && viewedStage === "cv" ? (
-        <ReviewPane jobId={job.id} mode="cv-gate" />
-      ) : (
-        job.state === "awaiting_input" && <FollowUpPane jobId={job.id} />
+      {job.state === "running" && viewedStage === "cv" && (
+        // Both answer different questions ("what does the draft look like" vs "what
+        // has the agent been asking") — render both rather than picking one.
+        <>
+          <ReviewPane jobId={job.id} mode="cv-gate" />
+          <AgentThread jobId={job.id} mode="none" />
+        </>
       )}
+      {job.state === "running" && viewedStage !== "cv" && (
+        <AgentThread jobId={job.id} mode="none" />
+      )}
+      {job.state === "awaiting_input" && <FollowUpPane jobId={job.id} />}
       {job.state === "cv_review" && <ReviewPane jobId={job.id} mode="cv-gate" />}
       {(job.state === "review" || job.state === "approved") && (
         <ReviewPane jobId={job.id} />

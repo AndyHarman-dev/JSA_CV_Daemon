@@ -1,0 +1,274 @@
+import { useEffect, useRef, useState } from "react";
+import { useStore } from "../store";
+import type { TranscriptTurn } from "../types";
+import { ChatBox } from "./ChatBox";
+import { MarkdownPreview } from "./MarkdownPreview";
+import { useT } from "../i18n/useT";
+import { SHELL_THEME } from "../theme/tokens";
+import { Icon } from "../theme/Icon";
+
+const T = SHELL_THEME;
+
+export type AgentThreadMode = "answer" | "none" | "revise";
+
+interface Props {
+  jobId: string;
+  mode: AgentThreadMode;
+  // Only meaningful for mode="revise" — forwarded to ChatBox's fixedTarget so a
+  // cv_review-scoped thread never offers a cover-letter revision target.
+  fixedTarget?: "cv";
+}
+
+// The open FollowUp for `answer` mode is derived from the transcript itself — a
+// "question" turn whose follow_up_id has no matching "answer" turn yet. Mirrors the
+// old FollowUpPane's `follow_ups.find(f => f.answered_at === null)`, just projected
+// through the transcript instead of the full job.
+function findOpenFollowUpId(turns: TranscriptTurn[]): number | null {
+  const answered = new Set(
+    turns.filter((turn) => turn.kind === "answer" && turn.follow_up_id != null).map((turn) => turn.follow_up_id)
+  );
+  const questions = turns.filter((turn) => turn.kind === "question" && turn.follow_up_id != null);
+  const open = questions.find((turn) => !answered.has(turn.follow_up_id));
+  return open?.follow_up_id ?? null;
+}
+
+function avatarFor(role: TranscriptTurn["role"], t: (key: string) => string) {
+  const isAgent = role === "assistant";
+  return (
+    <span
+      title={isAgent ? t("agentThread.agentLabel") : t("agentThread.youLabel")}
+      style={{
+        flex: "none",
+        width: 24,
+        height: 24,
+        borderRadius: 24,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        font: `700 11px ${T.mono}`,
+        background: isAgent ? T.aSoft : T.sunk,
+        border: `1px solid ${isAgent ? T.aBorder : T.bd2}`,
+        color: isAgent ? T.a : T.ink2,
+      }}
+    >
+      {isAgent ? "A" : "Y"}
+    </span>
+  );
+}
+
+function TurnBubble({ turn }: { turn: TranscriptTurn }) {
+  const t = useT();
+  const isUser = turn.role === "user";
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: isUser ? "row-reverse" : "row",
+        alignItems: "flex-start",
+        gap: 8,
+        width: "100%",
+      }}
+    >
+      {avatarFor(turn.role, t)}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: "82%" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            justifyContent: isUser ? "flex-end" : "flex-start",
+            font: `600 10px ${T.mono}`,
+            letterSpacing: ".08em",
+            color: T.ink3,
+            textTransform: "uppercase",
+          }}
+        >
+          <span>{isUser ? t("agentThread.youLabel") : t("agentThread.agentLabel")}</span>
+          {turn.created_at && <span>{new Date(turn.created_at).toLocaleTimeString()}</span>}
+        </div>
+        <div
+          style={{
+            background: isUser ? T.sunk : T.aSoft,
+            border: `1px solid ${isUser ? T.bd2 : T.aBorder}`,
+            borderRadius: T.radius,
+            padding: "10px 13px",
+            font: `400 13px/1.55 ${T.ui}`,
+            color: T.ink,
+          }}
+        >
+          <MarkdownPreview markdown={turn.text} style={{ color: T.ink }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NoticeLine({ turn }: { turn: TranscriptTurn }) {
+  const t = useT();
+  const badge = turn.kind === "verdict" ? t("agentThread.verdictBadge") : t("agentThread.deliveryBadge");
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        justifyContent: "center",
+        font: `400 11.5px ${T.ui}`,
+        color: T.ink3,
+        fontStyle: "italic",
+      }}
+    >
+      <span
+        style={{
+          font: `600 9px ${T.mono}`,
+          letterSpacing: ".1em",
+          color: T.ink3,
+          textTransform: "uppercase",
+        }}
+      >
+        {badge}
+      </span>
+      <span>{turn.text}</span>
+    </div>
+  );
+}
+
+function PlumbingLine({ turn }: { turn: TranscriptTurn }) {
+  const t = useT();
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        padding: "8px 10px",
+        background: T.sunk,
+        border: `1px dashed ${T.bd2}`,
+        borderRadius: T.radius,
+      }}
+    >
+      <span
+        style={{
+          font: `600 9px ${T.mono}`,
+          letterSpacing: ".1em",
+          color: T.ink3,
+          textTransform: "uppercase",
+        }}
+      >
+        {t("agentThread.plumbingBadge")} · {turn.role}
+      </span>
+      <span style={{ font: `400 11.5px/1.5 ${T.mono}`, color: T.ink3, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        {turn.text}
+      </span>
+    </div>
+  );
+}
+
+export function AgentThread({ jobId, mode, fixedTarget }: Props) {
+  const t = useT();
+  const transcript = useStore((s) => s.transcripts[jobId]);
+  const fetchTranscript = useStore((s) => s.fetchTranscript);
+  const [loading, setLoading] = useState(transcript === undefined);
+  const [error, setError] = useState<string | null>(null);
+  const [showInternals, setShowInternals] = useState(false);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(useStore.getState().transcripts[jobId] === undefined);
+    setError(null);
+    fetchTranscript(jobId)
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, fetchTranscript]);
+
+  const turns = transcript ?? [];
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [turns.length]);
+
+  const openFollowUpId = mode === "answer" ? findOpenFollowUpId(turns) : null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          font: `600 10px ${T.mono}`,
+          letterSpacing: ".14em",
+          color: T.a,
+          textTransform: "uppercase",
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Icon name="inbox" size={12} />
+          AGENT_THREAD
+        </span>
+        <button
+          type="button"
+          onClick={() => setShowInternals((v) => !v)}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: T.ink3,
+            font: `500 10px ${T.mono}`,
+            letterSpacing: ".04em",
+            cursor: "pointer",
+            textTransform: "none",
+          }}
+        >
+          {showInternals ? t("agentThread.hideInternals") : t("agentThread.showInternals")}
+        </button>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          overflowY: "auto",
+          maxHeight: 420,
+          padding: "2px 2px 4px",
+        }}
+      >
+        {loading && (
+          <div style={{ font: `400 13px ${T.ui}`, color: T.ink3 }}>{t("agentThread.loading")}</div>
+        )}
+        {!loading && error && (
+          <div style={{ font: `400 13px ${T.ui}`, color: T.danger }}>{error || t("agentThread.error")}</div>
+        )}
+        {!loading && !error && turns.length === 0 && (
+          <div style={{ font: `400 13px ${T.ui}`, color: T.ink3, fontStyle: "italic" }}>
+            {t("agentThread.empty")}
+          </div>
+        )}
+        {!loading &&
+          !error &&
+          turns.map((turn) => {
+            if (turn.kind === "plumbing") {
+              return showInternals ? <PlumbingLine key={turn.seq} turn={turn} /> : null;
+            }
+            if (turn.kind === "verdict" || turn.kind === "delivery") {
+              return <NoticeLine key={turn.seq} turn={turn} />;
+            }
+            return <TurnBubble key={turn.seq} turn={turn} />;
+          })}
+        <div ref={bottomRef} />
+      </div>
+
+      {mode === "answer" && openFollowUpId != null && (
+        <ChatBox kind="answer" jobId={jobId} followUpId={openFollowUpId} />
+      )}
+      {mode === "revise" && <ChatBox kind="revise" jobId={jobId} fixedTarget={fixedTarget} />}
+    </div>
+  );
+}

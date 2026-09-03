@@ -58,6 +58,8 @@ export type WSEvent =
   | { type: "approved"; job_id: string; cv_pdf_path: string; cl_pdf_path: string }
   | { type: "job_removed"; job_id: string }
   | { type: "backend_switched"; job_id: string; from_backend: string; to_backend: string }
+  // Invalidation hint only — no content. Mirrors jsa/events/schema.py::TranscriptChangedEvent.
+  | { type: "transcript_changed"; job_id: string }
   // Model-first fallback ladder (Phase 4): a job hopped to the next model rung on the
   // SAME backend. Mirrors jsa/events/schema.py::ModelSwitchedEvent exactly.
   | { type: "model_switched"; job_id: string; backend: string; from_model: string; to_model: string }
@@ -136,4 +138,18 @@ export interface EditorCV {
 export interface FullJobDTO extends JobDTO {
   follow_ups: FollowUpDTO[];
   documents: DocumentDTO[];
+}
+
+// Mirrors jsa/api/transcript.py::build_transcript's per-turn dict shape exactly.
+// One ordered, display-ready turn from GET /api/jobs/{id}/transcript.
+export interface TranscriptTurn {
+  seq: number;
+  kind: "question" | "answer" | "delivery" | "verdict" | "plumbing";
+  role: "user" | "assistant";
+  stage: Stage | null;
+  text: string;
+  created_at: string | null;
+  follow_up_id: number | null;
+  suggested_replies: string[] | null;
+  reasoning: string | null;
 }
