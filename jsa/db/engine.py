@@ -73,6 +73,12 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE jobs ADD COLUMN model_hops INTEGER NOT NULL DEFAULT 0"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # suggested_replies: JSON-encoded list of model-generated quick-reply strings,
+        # populated only on a structured-mode question turn (agent chat upgrade Phase 4).
+        try:
+            await conn.execute(text("ALTER TABLE follow_ups ADD COLUMN suggested_replies TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

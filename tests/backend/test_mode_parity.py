@@ -101,15 +101,30 @@ def _structured_final(payload: dict) -> AgentReply:
     return AgentReply(raw=raw, content=json.dumps(payload), kind="final")
 
 
-def _sentinel_question(question: str) -> AgentReply:
+def _sentinel_question(question: str, suggested_replies: list[str] | None = None) -> AgentReply:
+    body = question
+    if suggested_replies:
+        body += "\n<<<SUGGESTIONS>>>\n" + "\n".join(suggested_replies)
     return AgentReply(
-        raw=f"<<<NEED_INPUT>>>\n{question}\n<<<END>>>", content=question, kind="needs_input", question=question
+        raw=f"<<<NEED_INPUT>>>\n{body}\n<<<END>>>",
+        content=question,
+        kind="needs_input",
+        question=question,
+        suggested_replies=suggested_replies,
     )
 
 
-def _structured_question(question: str) -> AgentReply:
-    raw = json.dumps({"kind": "question", "question": question, "payload": None})
-    return AgentReply(raw=raw, content=question, kind="needs_input", question=question)
+def _structured_question(question: str, suggested_replies: list[str] | None = None) -> AgentReply:
+    raw = json.dumps(
+        {"kind": "question", "question": question, "payload": None, "suggested_replies": suggested_replies}
+    )
+    return AgentReply(
+        raw=raw,
+        content=question,
+        kind="needs_input",
+        question=question,
+        suggested_replies=suggested_replies,
+    )
 
 
 def _sentinel_fit(verdict: str, reason: str) -> AgentReply:
@@ -158,8 +173,11 @@ class TestCvAdjustParity:
         await structured_session.commit()
 
         question = "Which dates should I use for the last role?"
-        sentinel_backend = FakeAgentBackend([_sentinel_question(question)])
-        structured_backend = FakeAgentBackend([_structured_question(question)], supports_structured_output=True)
+        suggestions = ["Use 2019-present", "Use 2019-2023"]
+        sentinel_backend = FakeAgentBackend([_sentinel_question(question, suggestions)])
+        structured_backend = FakeAgentBackend(
+            [_structured_question(question, suggestions)], supports_structured_output=True
+        )
 
         from jsa.pipeline.stages import PausedForInput
 
@@ -176,6 +194,11 @@ class TestCvAdjustParity:
         )).scalar_one()
 
         assert sentinel_fu.question == structured_fu.question == question
+        sentinel_suggested = json.loads(sentinel_fu.suggested_replies) if sentinel_fu.suggested_replies else None
+        structured_suggested = (
+            json.loads(structured_fu.suggested_replies) if structured_fu.suggested_replies else None
+        )
+        assert sentinel_suggested == structured_suggested == suggestions
 
 
 class TestCoverLetterParity:

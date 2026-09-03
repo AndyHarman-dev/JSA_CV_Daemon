@@ -36,6 +36,7 @@ class AgentReply:
     content: str                                # text inside the sentinel block
     kind: Literal["final", "needs_input"]
     question: str | None = None                 # populated iff kind == "needs_input"
+    suggested_replies: list[str] | None = None   # optional, only iff kind == "needs_input"
 
 
 @dataclass

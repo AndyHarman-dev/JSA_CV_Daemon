@@ -167,6 +167,10 @@ def build_transcript(
     # --- question / answer (from FollowUp rows, not Message rows) ------
     answered_answers_stripped: set[str] = set()
     for fu in sorted(follow_ups, key=lambda f: (f.asked_at, f.id)):
+        try:
+            suggested_replies = json.loads(fu.suggested_replies) if fu.suggested_replies else None
+        except (json.JSONDecodeError, TypeError):
+            suggested_replies = None
         turns.append(
             _make_turn(
                 kind="question",
@@ -176,6 +180,7 @@ def build_transcript(
                 created_at=fu.asked_at,
                 source_id=fu.id,
                 follow_up_id=fu.id,
+                suggested_replies=suggested_replies,
             )
         )
         if fu.answered_at is not None and fu.answer is not None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -69,6 +70,7 @@ def _follow_up_to_dict(fu: FollowUp) -> dict:
         "stage": fu.stage.value if fu.stage is not None else None,
         "question": fu.question,
         "answer": fu.answer,
+        "suggested_replies": json.loads(fu.suggested_replies) if fu.suggested_replies else None,
         "asked_at": fu.asked_at.isoformat() if fu.asked_at else None,
         "answered_at": fu.answered_at.isoformat() if fu.answered_at else None,
     }

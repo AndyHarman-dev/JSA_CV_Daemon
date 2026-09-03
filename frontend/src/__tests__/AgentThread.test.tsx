@@ -109,4 +109,93 @@ describe("AgentThread", () => {
       expect(screen.getByText("No conversation yet.")).toBeInTheDocument();
     });
   });
+
+  it("renders suggested-reply chips for an open FollowUp with suggestions", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([
+      turn({
+        seq: 0,
+        kind: "question",
+        follow_up_id: 1,
+        text: "Which dates should I use?",
+        suggested_replies: ["Use 2019-present", "Let me check and get back to you"],
+      }),
+    ]);
+
+    render(<AgentThread jobId="job1" mode="answer" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("SUGGESTED REPLIES")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Use 2019-present")).toBeInTheDocument();
+    expect(screen.getByText("Let me check and get back to you")).toBeInTheDocument();
+  });
+
+  it("renders no chips when suggested_replies is null or empty", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([
+      turn({ seq: 0, kind: "question", follow_up_id: 1, text: "Open question", suggested_replies: null }),
+    ]);
+
+    render(<AgentThread jobId="job1" mode="answer" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Open question")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("SUGGESTED REPLIES")).toBeNull();
+  });
+
+  it("clicking a short, decisive chip sends immediately without populating the textarea", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([
+      turn({
+        seq: 0,
+        kind: "question",
+        follow_up_id: 1,
+        text: "Which dates should I use?",
+        suggested_replies: ["Use 2019-present"],
+      }),
+    ]);
+
+    render(<AgentThread jobId="job1" mode="answer" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Use 2019-present")).toBeInTheDocument();
+    });
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByText("Use 2019-present"));
+
+    await waitFor(() => {
+      expect(api.answerFollowUp).toHaveBeenCalledWith("job1", 1, "Use 2019-present");
+    });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(textarea.value).toBe("");
+  });
+
+  it("clicking a long chip populates the textarea without sending", async () => {
+    const longSuggestion =
+      "Let me double-check my offer letter and get back to you with the exact dates tomorrow";
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([
+      turn({
+        seq: 0,
+        kind: "question",
+        follow_up_id: 1,
+        text: "Which dates should I use?",
+        suggested_replies: [longSuggestion],
+      }),
+    ]);
+
+    render(<AgentThread jobId="job1" mode="answer" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(longSuggestion)).toBeInTheDocument();
+    });
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByText(longSuggestion));
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(textarea.value).toBe(longSuggestion);
+    });
+    expect(api.answerFollowUp).not.toHaveBeenCalled();
+  });
 });

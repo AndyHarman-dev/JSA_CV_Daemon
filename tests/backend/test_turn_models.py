@@ -91,14 +91,19 @@ class TestStrictSchemaShape:
 
 class TestCvTurnIffValidator:
     def test_final_with_payload_ok(self):
-        CvTurn(kind="final", question=None, payload=_cv_dict())
+        CvTurn(kind="final", question=None, payload=_cv_dict(), suggested_replies=None)
 
     def test_final_without_payload_rejected(self):
         with pytest.raises(ValidationError):
             CvTurn(kind="final", question=None, payload=None)
 
     def test_question_with_question_ok(self):
-        CvTurn(kind="question", question="Which dates for the last role?", payload=None)
+        CvTurn(
+            kind="question",
+            question="Which dates for the last role?",
+            payload=None,
+            suggested_replies=None,
+        )
 
     def test_question_without_question_rejected(self):
         with pytest.raises(ValidationError):
@@ -108,10 +113,19 @@ class TestCvTurnIffValidator:
         with pytest.raises(ValidationError):
             CvTurn(kind="final", question=None, payload=_cv_dict(), extra_field="nope")
 
+    def test_final_with_suggested_replies_rejected(self):
+        with pytest.raises(ValidationError):
+            CvTurn(
+                kind="final",
+                question=None,
+                payload=_cv_dict(),
+                suggested_replies=["a", "b"],
+            )
+
 
 class TestClTurnIffValidator:
     def test_final_with_payload_ok(self):
-        ClTurn(kind="final", question=None, payload=_cl_dict())
+        ClTurn(kind="final", question=None, payload=_cl_dict(), suggested_replies=None)
 
     def test_final_without_payload_rejected(self):
         with pytest.raises(ValidationError):

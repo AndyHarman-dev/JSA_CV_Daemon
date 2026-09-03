@@ -35,6 +35,7 @@ export interface FollowUpDTO {
   stage: Stage;
   question: string;
   answer: string | null;
+  suggested_replies: string[] | null;
   asked_at: string;
   answered_at: string | null;
 }

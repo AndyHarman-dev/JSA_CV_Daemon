@@ -321,3 +321,51 @@ class TestNeedInputQuestionField:
         assert reply.question is not None
         assert "Line 1?" in reply.question
         assert "Line 2?" in reply.question
+
+
+# ---------------------------------------------------------------------------
+# Optional <<<SUGGESTIONS>>> block inside a NEED_INPUT body (agent chat upgrade
+# Phase 4) — pure superset addition, absent by default.
+# ---------------------------------------------------------------------------
+
+class TestSuggestionsBlock:
+    def test_absent_suggestions_is_none(self):
+        raw = "<<<NEED_INPUT>>>\nWhat is your target role?\n<<<END>>>"
+        reply = parse_reply(raw)
+        assert reply.suggested_replies is None
+        assert reply.question == "What is your target role?"
+
+    def test_present_suggestions_parsed_and_stripped_from_question(self):
+        raw = (
+            "<<<NEED_INPUT>>>\n"
+            "Which dates should I use for the last role?\n"
+            "<<<SUGGESTIONS>>>\n"
+            "Use 2019-present\n"
+            "Use 2019-2023\n"
+            "Let me check and get back to you\n"
+            "<<<END>>>"
+        )
+        reply = parse_reply(raw)
+        assert reply.question == "Which dates should I use for the last role?"
+        assert reply.content == reply.question
+        assert reply.suggested_replies == [
+            "Use 2019-present",
+            "Use 2019-2023",
+            "Let me check and get back to you",
+        ]
+
+    def test_final_block_never_gets_suggestions(self):
+        raw = "<<<FINAL>>>\nFinal result here.\n<<<END>>>"
+        reply = parse_reply(raw)
+        assert reply.suggested_replies is None
+
+    def test_empty_suggestions_block_yields_none(self):
+        raw = (
+            "<<<NEED_INPUT>>>\n"
+            "What is your target role?\n"
+            "<<<SUGGESTIONS>>>\n"
+            "\n"
+            "<<<END>>>"
+        )
+        reply = parse_reply(raw)
+        assert reply.suggested_replies is None

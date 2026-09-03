@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import type { TranscriptTurn } from "../types";
-import { ChatBox } from "./ChatBox";
+import { ChatBox, type ChatBoxHandle } from "./ChatBox";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
@@ -30,6 +30,72 @@ function findOpenFollowUpId(turns: TranscriptTurn[]): number | null {
   const questions = turns.filter((turn) => turn.kind === "question" && turn.follow_up_id != null);
   const open = questions.find((turn) => !answered.has(turn.follow_up_id));
   return open?.follow_up_id ?? null;
+}
+
+// A short, decisive suggestion (no trailing separator/ellipsis, roughly under ~40
+// chars) sends immediately; a longer one populates the textarea for editing instead.
+function shouldSendImmediately(suggestion: string): boolean {
+  const trimmed = suggestion.trim();
+  if (trimmed.length === 0 || trimmed.length > 40) return false;
+  if (/(\.\.\.|…|[:;,\-–—]$)/.test(trimmed)) return false;
+  return true;
+}
+
+function SuggestedReplyChips({
+  suggestions,
+  onSend,
+  onPopulate,
+}: {
+  suggestions: string[];
+  onSend: (text: string) => void;
+  onPopulate: (text: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          font: `600 10px ${T.mono}`,
+          letterSpacing: ".1em",
+          color: T.ink3,
+          textTransform: "uppercase",
+        }}
+      >
+        <Icon name="bolt" size={12} />
+        {t("agentThread.suggestedReplies")}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {suggestions.map((suggestion, i) => (
+          <button
+            key={`${i}-${suggestion}`}
+            type="button"
+            onClick={() => {
+              if (shouldSendImmediately(suggestion)) {
+                onSend(suggestion);
+              } else {
+                onPopulate(suggestion);
+              }
+            }}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 999,
+              border: `1px solid ${T.bd2}`,
+              background: T.sunk,
+              color: T.ink,
+              font: `400 12px ${T.ui}`,
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+          >
+            {suggestion}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function avatarFor(role: TranscriptTurn["role"], t: (key: string) => string) {
@@ -171,6 +237,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showInternals, setShowInternals] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const chatBoxRef = useRef<ChatBoxHandle | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,6 +262,14 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
   }, [turns.length]);
 
   const openFollowUpId = mode === "answer" ? findOpenFollowUpId(turns) : null;
+  const openFollowUpTurn =
+    openFollowUpId != null
+      ? turns.find((turn) => turn.kind === "question" && turn.follow_up_id === openFollowUpId)
+      : undefined;
+  const openFollowUpSuggestions =
+    openFollowUpTurn?.suggested_replies && openFollowUpTurn.suggested_replies.length > 0
+      ? openFollowUpTurn.suggested_replies
+      : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}>
@@ -266,12 +341,26 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
       </div>
 
       {mode === "answer" && openFollowUpId != null && (
-        <ChatBox
-          kind="answer"
-          jobId={jobId}
-          followUpId={openFollowUpId}
-          onSubmitted={() => fetchTranscript(jobId)}
-        />
+        <>
+          {openFollowUpSuggestions && (
+            <SuggestedReplyChips
+              suggestions={openFollowUpSuggestions}
+              onSend={(text) => {
+                chatBoxRef.current?.sendText(text).catch((err: unknown) => {
+                  console.error("Suggested reply send error:", err);
+                });
+              }}
+              onPopulate={(text) => chatBoxRef.current?.populateText(text)}
+            />
+          )}
+          <ChatBox
+            ref={chatBoxRef}
+            kind="answer"
+            jobId={jobId}
+            followUpId={openFollowUpId}
+            onSubmitted={() => fetchTranscript(jobId)}
+          />
+        </>
       )}
       {mode === "revise" && (
         <ChatBox

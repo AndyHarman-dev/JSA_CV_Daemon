@@ -115,6 +115,7 @@ class FollowUp(Base):
     stage: Mapped[Stage] = mapped_column(SAEnum(Stage))
     question: Mapped[str] = mapped_column(Text)
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suggested_replies: Mapped[str | None] = mapped_column(Text, nullable=True)
     asked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     job: Mapped[Job] = relationship(back_populates="follow_ups")

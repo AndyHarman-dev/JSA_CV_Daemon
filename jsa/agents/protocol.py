@@ -17,6 +17,10 @@ _BLOCK_RE = re.compile(
 # Matches any open sentinel marker (to detect unterminated blocks)
 _OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL)>>>")
 
+# Optional suggestions block inside a NEED_INPUT body: everything from the marker to
+# the end of the (already-extracted) content is the suggestion list, one per line.
+_SUGGESTIONS_RE = re.compile(r"<<<SUGGESTIONS>>>(.*)", re.DOTALL)
+
 # Defense-in-depth: strip Change Log content if a model places it inside a FINAL block.
 # Matches <change_log>...</change_log> (XML-wrapped, case-insensitive).
 # Consumes at most one newline on each side to preserve surrounding paragraph structure.
@@ -83,4 +87,22 @@ def parse_reply(raw: str) -> AgentReply:
         content = _strip_change_log(content)
         return AgentReply(raw=raw, content=content, kind="final", question=None)
     else:  # NEED_INPUT
-        return AgentReply(raw=raw, content=content, kind="needs_input", question=content)
+        suggested_replies: list[str] | None = None
+        suggestions_match = _SUGGESTIONS_RE.search(content)
+        if suggestions_match:
+            question_text = content[: suggestions_match.start()].strip()
+            lines = [
+                line.strip()
+                for line in suggestions_match.group(1).splitlines()
+                if line.strip()
+            ]
+            if lines:
+                suggested_replies = lines
+            content = question_text
+        return AgentReply(
+            raw=raw,
+            content=content,
+            kind="needs_input",
+            question=content,
+            suggested_replies=suggested_replies,
+        )

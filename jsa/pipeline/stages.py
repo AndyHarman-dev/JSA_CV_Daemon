@@ -990,6 +990,7 @@ async def _handle_needs_input(
     follow_up_data = {
         "stage": stage,
         "question": display_question,
+        "suggested_replies": reply.suggested_replies,
     }
     await checkpoint(
         session,

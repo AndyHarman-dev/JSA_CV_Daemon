@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { api } from "../api";
 import { useStore } from "../store";
@@ -37,7 +37,16 @@ interface MentionState {
 
 const CLOSED_MENTION: MentionState = { open: false, pos: { x: 0, y: 0 }, at: null, end: null };
 
-export function ChatBox(props: ChatBoxProps) {
+// Imperative surface for driving ChatBox from outside — used by the suggested-reply
+// chips (AgentThread) to either send a short/decisive suggestion immediately or
+// populate the textarea with a longer one for editing, without duplicating the
+// submit logic here.
+export interface ChatBoxHandle {
+  sendText: (text: string) => Promise<void>;
+  populateText: (text: string) => void;
+}
+
+export const ChatBox = forwardRef<ChatBoxHandle, ChatBoxProps>(function ChatBox(props, ref) {
   const [text, setText] = useState("");
   const [targetState, setTargetState] = useState<"cv" | "cl">("cv");
   const fixedTarget = props.kind === "revise" ? props.fixedTarget : undefined;
@@ -101,26 +110,53 @@ export function ChatBox(props: ChatBoxProps) {
     }, 0);
   }
 
-  async function handleSubmit() {
-    if (!text.trim() || submitting) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      if (props.kind === "answer") {
-        await api.answerFollowUp(props.jobId, props.followUpId, text);
-      } else {
-        await api.revise(props.jobId, target, text);
+  const submitWithText = useCallback(
+    async (value: string) => {
+      if (!value.trim() || submitting) return;
+      setSubmitting(true);
+      setError(null);
+      try {
+        if (props.kind === "answer") {
+          await api.answerFollowUp(props.jobId, props.followUpId, value);
+        } else {
+          await api.revise(props.jobId, target, value);
+        }
+        await useStore.getState().refetchAll();
+        setText("");
+        setMention((prev) => ({ ...CLOSED_MENTION, pos: prev.pos }));
+        props.onSubmitted?.();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSubmitting(false);
       }
-      await useStore.getState().refetchAll();
-      setText("");
-      setMention((prev) => ({ ...CLOSED_MENTION, pos: prev.pos }));
-      props.onSubmitted?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [submitting, props, target]
+  );
+
+  async function handleSubmit() {
+    await submitWithText(text);
   }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      sendText: (value: string) => submitWithText(value),
+      populateText: (value: string) => {
+        setText(value);
+        setMention((prev) => ({ ...CLOSED_MENTION, pos: prev.pos }));
+        setTimeout(() => {
+          const ta = textareaRef.current;
+          if (ta) {
+            ta.focus();
+            ta.setSelectionRange(value.length, value.length);
+          }
+        }, 0);
+      },
+    }),
+    [submitWithText]
+  );
 
   const hasText = text.trim().length > 0;
 
@@ -212,7 +248,7 @@ export function ChatBox(props: ChatBoxProps) {
       </div>
     </div>
   );
-}
+});
 
 // @-mention dropdown: read-only list of Scratch Buffer notes, anchored at the mouse position
 // captured when the mention became active (not the text caret). Position is clamped to stay

@@ -111,6 +111,7 @@
   "agentThread.plumbingBadge": "INTERNAL",
   "agentThread.verdictBadge": "FIT VERDICT",
   "agentThread.deliveryBadge": "DELIVERED",
+  "agentThread.suggestedReplies": "SUGGESTED REPLIES",
   "chatBox.answerPlaceholder": "Type your answer…",
   "chatBox.revisePlaceholder": "Describe the revision you want…",
   "chatBox.cvOption": "CV / Resume",
