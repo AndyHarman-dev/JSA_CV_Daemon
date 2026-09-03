@@ -354,7 +354,27 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
 
   const turns = transcript ?? [];
 
+  // Auto-scroll only while the user is already parked at the bottom. This effect fires
+  // on EVERY streamed reasoning token, and the REASONING card is expanded by default
+  // while a turn is live (see ReasoningCard) — so an unconditional scrollIntoView yanks
+  // the viewport back down every few milliseconds and makes it impossible to read back
+  // up the thread mid-turn. The sentinel below the thread is the probe: if it was in
+  // view before this update, the user was at the bottom and wants to follow along.
+  // Defaults to the previous always-scroll behaviour where IntersectionObserver is
+  // unavailable (jsdom).
+  const atBottomRef = useRef(true);
   useEffect(() => {
+    const sentinel = bottomRef.current;
+    if (!sentinel || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      atBottomRef.current = entries[entries.length - 1].isIntersecting;
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!atBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [turns.length, liveBuffer?.content.length, liveBuffer?.reasoning.length]);
 

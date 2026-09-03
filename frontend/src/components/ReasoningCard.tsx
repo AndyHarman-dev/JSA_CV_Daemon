@@ -123,7 +123,10 @@ export function ReasoningCard({ reasoning, running }: { reasoning: string; runni
   const steps = import.meta.env.DEV && mockTools ? interleaveMockTools(textSteps) : textSteps;
   const hasSteps = steps.length > 0;
   // Only the trailing step is still being written, and only while the turn is in flight.
-  const activeIndex = running && open ? steps.length - 1 : -1;
+  // Identity, not `length - 1`: with the DEV tool preview on, an interleaved tool row
+  // can be the trailing entry, and the spinner/cursor belongs on the text step that is
+  // actually still being written.
+  const activeIndex = running && open ? steps.lastIndexOf(open) : -1;
 
   const windowed = running && !showAll && steps.length > LIVE_STEP_WINDOW;
   const visible = windowed ? steps.slice(steps.length - LIVE_STEP_WINDOW) : steps;
