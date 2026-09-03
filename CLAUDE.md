@@ -936,6 +936,90 @@ applicable here.
 
 ---
 
+## Reasoning / thinking stream (streaming backends)
+
+The chat UI's REASONING card is fed by `AgentChunk(kind="reasoning", ...)`. Whether a
+backend produces any is a **three-part** question — capability, opt-in, and field
+convention — and all three have to line up. Getting one wrong looks identical from the
+UI (a "Thinking…" placeholder that never fills in), so diagnose by naming which part
+is missing, not by assuming "the model doesn't think".
+
+**Streaming happens in BOTH modes.** `response_format`/`responseSchema` + `stream:
+true` is a normal, supported combination on every wire shape here. In structured mode
+`_openai_compat.py::_reasoning_only` (and its verbatim twin in `opencode_zen.py`)
+wraps `on_chunk` so only `reasoning` chunks pass through — the `content` delta is raw
+partial JSON and a stray `{` is not useful to render. **Do not "simplify" this back to
+gating streaming on `structured_schema is None`.** That gate is exactly the bug this
+section documents: `_structured_schema_for` returns a schema unconditionally for every
+structured-capable backend, so such a gate is not a narrow special case — it disables
+streaming outright, permanently, for every real pipeline call. It was fixed in
+`_openai_compat.py`/`opencode_zen.py` first and survived undetected in
+`gemini_api.py::_call_api_once` (which overrides the whole method and carried its own
+copy) until the three affected backends were audited.
+
+**Three field conventions on the `/chat/completions` shape**, all handled in the
+shared `_openai_compat.py::_reasoning_delta_text` / `_split_content_delta`:
+
+| Convention | Who | Shape |
+|---|---|---|
+| `delta.reasoning_content` | `opencode-go`'s routed models, `opencode-zen` | plain string |
+| `delta.reasoning` / `delta.reasoning_details` | `openrouter` | legacy string / array of objects — OpenRouter sends **both for the same tokens**, so the first non-empty wins; concatenating doubles the text |
+| list-shaped `delta.content` | `mistral` | `[{"type": "thinking", "thinking": [...]}, {"type": "text", ...}]` — reasoning is inside `content` itself, there is no separate field |
+
+Mistral's list shape is a **type guard, not just a feature**: before `_split_content_delta`
+existed, a list `content` was appended straight into the content accumulator and the
+closing `"".join` raised `TypeError`. The same split is applied on the non-streaming
+path (`choices[0].message.content` can be a list too). `gemini` is off this table
+entirely — its parts carry `"thought": true` and are split in `_consume_gemini_sse`,
+which deliberately keeps thought text OUT of the returned body so it can never corrupt
+a structured parse.
+
+**Reasoning is an opt-in, per backend, via the `_reasoning_payload()` hook**
+(`OpenAICompatBackend`, default `{}` — a backend that doesn't override it sends a
+byte-identical payload to its pre-reasoning shape and can never trip the degrade
+below):
+
+| Backend | Opt-in |
+|---|---|
+| `openrouter` | top-level `{"reasoning": {"enabled": True}}` |
+| `mistral` | top-level `{"reasoning_effort": "high"}` — the parameter is two-valued (`high`/`none`), there is no middle setting, so asking for reasoning at all means `high` |
+| `gemini` | `generationConfig.thinkingConfig = {"includeThoughts": True}` — merged in `_call_api_once`, not a top-level key; without it the API never sets `"thought": true` on any part, so streaming alone yields nothing |
+| `opencode-zen`, `opencode-go`, `anthropic`, `claude-cli` | none — these emit reasoning without being asked |
+
+An override MUST return `{}` when `self._reasoning` is False, or the degrade can't
+degrade.
+
+**`_ReasoningRejected` degrade — the same shape as `_CacheRejected`, for the same
+reason.** Reasoning is an optional enrichment, so a provider that rejects the field
+(a model that doesn't support thinking; on OpenRouter, a `provider.require_parameters`
+guard that filters out every eligible upstream *because* of it) must cost this backend
+its thinking stream, never its BF-19 slot. `_call_api_once` raises `_ReasoningRejected`
+instead of `AgentBackendUnavailable` at every permanent-4xx site when
+`_reasoning_payload()` was non-empty; `_call_api` catches it **outside**
+`retry_transient`'s budget (a reshaped retry never shares a budget with retries of the
+identical request), flips `self._reasoning` off for the rest of that backend
+*instance's* life — never persisted — and retries once clean.
+
+**Degrade precedence is reasoning → caching → fail**, one field shed per attempt, in
+`_call_api`'s bounded loop. Gemini layers its pre-existing `_SchemaRejected` downgrade
+underneath: a 4xx sheds `thinkingConfig` first (keeping structured mode), and only if
+the clean retry also 4xxs does the schema downgrade fire. The cost is at most two extra
+HTTP attempts on a genuinely-broken config, which is the deliberate trade for never
+losing a BF-19 slot to an optional field.
+
+**A silent REASONING card is usually the model, not the wiring.** The shipped catalog
+defaults (`gemini-3.1-flash-lite`, `mistral-small-2603`,
+`nvidia/nemotron-3-nano-30b-a3b`) are non-reasoning models and will show nothing even
+with every switch above on. Check `effective_model` on the job row before suspecting
+code. Regression coverage:
+`tests/backend/test_streaming_openai_compat.py::TestReasoningFieldConventions`
+(all four conventions, including the no-double-count rule and the `TypeError` guard),
+`::TestMistralReasoningOptIn`, `test_openrouter.py::TestReasoningOptIn`, and
+`test_gemini_api.py::TestGeminiStreaming` / `::TestGeminiThinkingConfig` (the
+structured-mode streaming regression itself).
+
+---
+
 ## How to test a phase
 
 After each phase is implemented, verify it with the following steps in order.

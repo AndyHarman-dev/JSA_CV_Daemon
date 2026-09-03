@@ -38,6 +38,23 @@ class OpenRouterBackend(OpenAICompatBackend):
         (openrouter_provider.py). Do not remove this as a simplification."""
         return {"provider": {"require_parameters": True}}
 
+    def _reasoning_payload(self) -> dict[str, Any]:
+        """Ask OpenRouter to emit reasoning tokens. Without this the aggregator does
+        not surface a thinking stream at all, so the chat UI's REASONING card never
+        gets anything to show (a non-reasoning routed model still sends nothing —
+        that is a model capability, not a wiring gap).
+
+        This is the one field in this payload that interacts badly with the
+        ``require_parameters`` guard above: an upstream that cannot honor
+        ``reasoning`` gets filtered out, and if that empties the eligible-provider
+        set OpenRouter answers 4xx. That is a reasoning-only rejection, not a dead
+        backend — the shared base's ``_ReasoningRejected`` degrade catches it,
+        drops this field for the rest of the instance's life, and retries once
+        clean. See ``_openai_compat.py``'s ``_reasoning_payload`` hook."""
+        if not self._reasoning:
+            return {}
+        return {"reasoning": {"enabled": True}}
+
     def _system_content(self, system_prompt: str) -> str | list[dict]:
         """An explicit ``cache_control: {"type": "ephemeral"}`` breakpoint on the
         system text block — required for OpenRouter's Anthropic/Qwen/Gemini

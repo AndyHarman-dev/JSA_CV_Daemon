@@ -292,3 +292,119 @@ class TestOnRetryHook:
         assert reply.kind == "final"
         assert retry_calls["n"] == 1
         assert attempts["n"] == 2
+
+
+class TestReasoningFieldConventions:
+    """The `/chat/completions` wire shape carries reasoning under three different
+    field names depending on the provider. `opencode-go`'s routed models emit
+    `reasoning_content` (the one that already worked); OpenRouter emits `reasoning`
+    (legacy string) and `reasoning_details` (array); Mistral emits neither and
+    instead makes `content` itself a chunk list. All four are exercised here
+    through MistralBackend, since the extraction lives in the shared base."""
+
+    @staticmethod
+    async def _collect(lines: list[str]) -> list[AgentChunk]:
+        mock_client = _make_mock_stream_client(lines)
+        received: list[AgentChunk] = []
+
+        async def on_chunk(chunk: AgentChunk) -> None:
+            received.append(chunk)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            await backend.start_session("sys", "hi", on_chunk=on_chunk)
+        return received
+
+    async def test_openrouter_legacy_reasoning_string_forwarded(self):
+        received = await self._collect(_sse_lines([
+            {"choices": [{"delta": {"reasoning": "weighing options"}}]},
+            {"choices": [{"delta": {"content": "<<<FINAL>>>\nx\n<<<END>>>"}}]},
+        ]))
+        assert any(c.kind == "reasoning" and c.text == "weighing options" for c in received)
+
+    async def test_openrouter_reasoning_details_array_forwarded(self):
+        received = await self._collect(_sse_lines([
+            {"choices": [{"delta": {"reasoning_details": [
+                {"type": "reasoning.text", "text": "step one. "},
+                {"type": "reasoning.text", "text": "step two."},
+            ]}}]},
+            {"choices": [{"delta": {"content": "<<<FINAL>>>\nx\n<<<END>>>"}}]},
+        ]))
+        assert any(c.kind == "reasoning" and c.text == "step one. step two." for c in received)
+
+    async def test_reasoning_and_reasoning_details_are_not_double_counted(self):
+        """OpenRouter sends both fields for the same tokens — take one, not both."""
+        received = await self._collect(_sse_lines([
+            {"choices": [{"delta": {
+                "reasoning": "hmm",
+                "reasoning_details": [{"type": "reasoning.text", "text": "hmm"}],
+            }}]},
+            {"choices": [{"delta": {"content": "<<<FINAL>>>\nx\n<<<END>>>"}}]},
+        ]))
+        reasoning = [c for c in received if c.kind == "reasoning"]
+        assert [c.text for c in reasoning] == ["hmm"]
+
+    async def test_mistral_list_shaped_content_splits_thinking_from_answer(self):
+        """With reasoning_effort set, Mistral's `delta.content` is a chunk LIST.
+        Without the split this list would be appended into the content accumulator
+        and the closing `"".join` would raise TypeError — so this is a type guard
+        as much as a feature."""
+        received = await self._collect(_sse_lines([
+            {"choices": [{"delta": {"content": [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "let me think"}]}
+            ]}}]},
+            {"choices": [{"delta": {"content": [
+                {"type": "text", "text": "<<<FINAL>>>\n"}
+            ]}}]},
+            {"choices": [{"delta": {"content": "x\n<<<END>>>"}}]},
+        ]))
+        assert [c.text for c in received if c.kind == "reasoning"] == ["let me think"]
+        assert "".join(c.text for c in received if c.kind == "content") == "<<<FINAL>>>\nx\n<<<END>>>"
+
+    async def test_mistral_list_shaped_content_on_the_non_streaming_path(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json = MagicMock(return_value={"choices": [{"message": {"content": [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "hidden"}]},
+            {"type": "text", "text": "<<<FINAL>>>\nvisible\n<<<END>>>"},
+        ]}}]})
+        mock_response.text = "{}"
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            _, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"
+        assert "visible" in reply.content
+        assert "hidden" not in reply.raw
+
+
+class TestMistralReasoningOptIn:
+    async def test_reasoning_effort_sent_by_default(self):
+        mock_client = _make_mock_stream_client(
+            _sse_lines([{"choices": [{"delta": {"content": "<<<FINAL>>>\nx\n<<<END>>>"}}]}])
+        )
+
+        async def on_chunk(_chunk: AgentChunk) -> None:
+            return None
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            await backend.start_session("sys", "hi", on_chunk=on_chunk)
+        payload = mock_client.stream.call_args.kwargs["json"]
+        assert payload["reasoning_effort"] == "high"
+
+    async def test_reasoning_effort_omitted_once_degraded(self):
+        mock_client = _make_mock_stream_client(
+            _sse_lines([{"choices": [{"delta": {"content": "<<<FINAL>>>\nx\n<<<END>>>"}}]}])
+        )
+
+        async def on_chunk(_chunk: AgentChunk) -> None:
+            return None
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            backend._reasoning = False
+            await backend.start_session("sys", "hi", on_chunk=on_chunk)
+        assert "reasoning_effort" not in mock_client.stream.call_args.kwargs["json"]

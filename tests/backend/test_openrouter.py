@@ -88,6 +88,24 @@ def _error_body(message: str = "no eligible provider") -> dict:
     return {"error": {"message": message, "type": "invalid_request_error"}}
 
 
+class TestReasoningOptIn:
+    async def test_reasoning_enabled_sent_on_every_request(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenRouterBackend()
+            await backend.start_session("sys", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["reasoning"] == {"enabled": True}
+
+    async def test_reasoning_omitted_once_degraded(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenRouterBackend()
+            backend._reasoning = False
+            await backend.start_session("sys", "hi")
+        assert "reasoning" not in mock_client.post.call_args.kwargs["json"]
+
+
 class TestPromptCacheControl:
     """Phase 4 of the prompt-caching plan: an explicit cache_control breakpoint on
     the system message, with a degrade-on-4xx path since sending it could plausibly
@@ -117,6 +135,38 @@ class TestPromptCacheControl:
             payloads[caching] = mock_client.post.call_args.kwargs["json"]
         assert payloads[False]["messages"][0] == {"role": "system", "content": "sys"}
         assert payloads[True] != payloads[False]
+        # The reasoning opt-in is a separate switch with its own degrade path and
+        # is unaffected by the prompt-caching kill switch either way.
+        assert payloads[False]["reasoning"] == {"enabled": True}
+
+    async def test_permanent_4xx_degrades_reasoning_first_then_caching(self):
+        """Both optional enrichments are present by default, so a permanent 4xx is
+        shed one field at a time: reasoning first, prompt caching second. Each
+        degrade costs exactly one extra attempt and is retried clean."""
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=400, json=MagicMock(return_value=_error_body()), text="x"),
+                MagicMock(status_code=400, json=MagicMock(return_value=_error_body()), text="x2"),
+                MagicMock(status_code=200, json=MagicMock(return_value=_completion_body(FINAL_RAW)), text="y"),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenRouterBackend()
+            handle, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"
+        assert backend._reasoning is False
+        assert backend._prompt_caching is False
+        assert mock_client.post.call_count == 3
+        # Attempt 2 dropped `reasoning` but kept the cache_control breakpoint.
+        second_payload = mock_client.post.call_args_list[1].kwargs["json"]
+        assert "reasoning" not in second_payload
+        assert isinstance(second_payload["messages"][0]["content"], list)
+        # Attempt 3 dropped both.
+        retried_payload = mock_client.post.call_args.kwargs["json"]
+        assert "reasoning" not in retried_payload
+        assert retried_payload["messages"][0] == {"role": "system", "content": "sys"}
 
     async def test_permanent_4xx_with_cache_fields_degrades_and_retries_clean(self):
         mock_client = MagicMock()
@@ -129,6 +179,7 @@ class TestPromptCacheControl:
         mock_client.aclose = AsyncMock()
         with patch("httpx.AsyncClient", return_value=mock_client):
             backend = OpenRouterBackend()
+            backend._reasoning = False  # isolate the caching degrade from the reasoning one
             handle, reply = await backend.start_session("sys", "hi")
         assert reply.kind == "final"
         assert backend._prompt_caching is False
@@ -147,12 +198,13 @@ class TestPromptCacheControl:
         mock_client.aclose = AsyncMock()
         with patch("httpx.AsyncClient", return_value=mock_client):
             backend = OpenRouterBackend()
+            backend._reasoning = False
             with pytest.raises(AgentBackendUnavailable) as exc_info:
                 await backend.start_session("sys", "hi")
         assert type(exc_info.value) is AgentBackendUnavailable
         assert backend._prompt_caching is False
 
-    async def test_permanent_4xx_without_prompt_caching_does_not_retry(self):
+    async def test_permanent_4xx_with_no_optional_fields_does_not_retry(self):
         mock_client = MagicMock()
         mock_client.post = AsyncMock(
             return_value=MagicMock(status_code=400, json=MagicMock(return_value=_error_body("bad model")), text="x")
@@ -160,6 +212,7 @@ class TestPromptCacheControl:
         mock_client.aclose = AsyncMock()
         with patch("httpx.AsyncClient", return_value=mock_client):
             backend = OpenRouterBackend(prompt_caching=False)
+            backend._reasoning = False
             with pytest.raises(AgentBackendUnavailable):
                 await backend.start_session("sys", "hi")
         assert mock_client.post.call_count == 1

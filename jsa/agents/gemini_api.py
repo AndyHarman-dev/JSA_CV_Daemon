@@ -69,7 +69,12 @@ from typing import Any
 
 import httpx
 
-from jsa.agents._openai_compat import OpenAICompatBackend, OpenAICompatSessionHandle, TransientBackendError
+from jsa.agents._openai_compat import (
+    OpenAICompatBackend,
+    OpenAICompatSessionHandle,
+    TransientBackendError,
+    _ReasoningRejected,
+)
 from jsa.agents.base import (
     AgentBackendUnavailable,
     AgentChunk,
@@ -131,6 +136,24 @@ class GeminiBackend(OpenAICompatBackend):
     # summaries when the configured model surfaces them. Never attempted in
     # structured mode (a partial JSON candidate is not useful to stream).
     supports_streaming = True
+
+    def _reasoning_payload(self) -> dict[str, Any]:
+        """``generationConfig.thinkingConfig`` — the only way to get Gemini to emit
+        thought-summary parts. Without ``includeThoughts`` the API never sets
+        ``"thought": true`` on any part, so ``_consume_gemini_sse``'s
+        ``part.get("thought")`` split is never true and the reasoning channel stays
+        empty even with streaming on.
+
+        Returned as a ``generationConfig`` fragment, not a top-level payload key —
+        this backend overrides ``_call_api_once`` and merges it there; the shared
+        base only ever calls this hook to decide whether reasoning fields were
+        present. Not every Gemini model supports thinking (the catalog's own
+        ``gemini-3.1-flash-lite`` default is one), and a model that doesn't answers
+        4xx — hence the ``_ReasoningRejected`` degrade in ``_permanent_4xx`` below,
+        which costs the thinking stream rather than the BF-19 slot."""
+        if not self._reasoning:
+            return {}
+        return {"thinkingConfig": {"includeThoughts": True}}
 
     async def start_session(
         self,
@@ -247,16 +270,26 @@ class GeminiBackend(OpenAICompatBackend):
         """
         api_key = self._api_key()
         generation_config: dict[str, Any] = {"maxOutputTokens": _MAX_OUTPUT_TOKENS}
+        generation_config.update(self._reasoning_payload())
         if structured_schema is not None:
             generation_config["responseMimeType"] = "application/json"
             generation_config["responseSchema"] = inline_defs(structured_schema)
+        reasoning_fields_present = "thinkingConfig" in generation_config
         payload: dict[str, Any] = {
             "contents": _to_gemini_contents(messages),
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "generationConfig": generation_config,
         }
 
-        use_stream = on_chunk is not None and structured_schema is None
+        # Streamed in BOTH modes. The `and structured_schema is None` that used to
+        # be here made this dead code in practice: `_structured_schema_for` returns
+        # a schema unconditionally for this backend, so every real pipeline call
+        # fell to the buffered `generateContent` endpoint and nothing ever streamed.
+        # The inherited `_call_api` already filters `on_chunk` down to reasoning
+        # chunks only while structured (see `_openai_compat._reasoning_only`), and
+        # `_consume_gemini_sse` excludes thought parts from the returned body — so
+        # a partial-JSON content delta is never shown and never corrupts the parse.
+        use_stream = on_chunk is not None
         if use_stream:
             url = f"{_API_BASE}/{self._model}:streamGenerateContent"
             params = {"alt": "sse"}
@@ -286,6 +319,15 @@ class GeminiBackend(OpenAICompatBackend):
             await client.aclose()
 
         def _permanent_4xx(detail: str) -> Exception:
+            # Reasoning degrade takes precedence over the schema downgrade: asking
+            # for thought summaries is an optional enrichment, so a model that
+            # rejects `thinkingConfig` must lose its thinking stream, not its
+            # structured mode. The inherited `_call_api` catches this, clears
+            # `self._reasoning`, and retries clean — a genuine schema rejection then
+            # raises `_SchemaRejected` on that second attempt and downgrades as
+            # before.
+            if reasoning_fields_present:
+                return _ReasoningRejected(detail)
             return _SchemaRejected(detail) if structured_schema is not None else AgentBackendUnavailable(detail)
 
         if response.status_code == 429:
