@@ -871,3 +871,37 @@ class TestRecoverySweep:
             job = await repo.get_job(session, "aabbccdd00112233")
             assert job.state == JobState.awaiting_input
             assert job.current_stage == Stage.cv_adjust
+
+
+class TestFollowUpToDictSuggestedReplies:
+    """FollowUp -> dict serialization of suggested_replies (agent chat upgrade Phase 4)."""
+
+    def test_legacy_null_column_serializes_as_none(self):
+        from jsa.api.routes_jobs import _follow_up_to_dict
+
+        fu = FollowUp(
+            id=1,
+            job_id="j1",
+            stage=Stage.cv_adjust,
+            question="q?",
+            answer=None,
+            suggested_replies=None,
+        )
+        d = _follow_up_to_dict(fu)
+        assert d["suggested_replies"] is None
+
+    def test_json_encoded_column_round_trips(self):
+        import json
+
+        from jsa.api.routes_jobs import _follow_up_to_dict
+
+        fu = FollowUp(
+            id=1,
+            job_id="j1",
+            stage=Stage.cv_adjust,
+            question="q?",
+            answer=None,
+            suggested_replies=json.dumps(["Option A", "Option B"]),
+        )
+        d = _follow_up_to_dict(fu)
+        assert d["suggested_replies"] == ["Option A", "Option B"]

@@ -82,16 +82,21 @@ class FitVerdict(BaseModel):
 
 
 def _check_payload_iff_final(
-    kind: Literal["question", "final"], question: str | None, payload: Any
+    kind: Literal["question", "final"],
+    question: str | None,
+    payload: Any,
+    suggested_replies: list[str] | None,
 ) -> None:
     """Shared iff-rule for ``CvTurn``/``ClTurn``: payload present iff final, question
-    present iff question. Raising ``ValueError`` inside a ``model_validator`` is how
-    Pydantic surfaces a validation failure, so this is called from each model's own
-    ``mode="after"`` validator rather than shared as a validator itself (pydantic
-    validators are bound per-model)."""
+    present iff question, suggested_replies null unless question. Raising ``ValueError``
+    inside a ``model_validator`` is how Pydantic surfaces a validation failure, so this
+    is called from each model's own ``mode="after"`` validator rather than shared as a
+    validator itself (pydantic validators are bound per-model)."""
     if kind == "final":
         if payload is None:
             raise ValueError("kind='final' requires a non-null `payload`")
+        if suggested_replies is not None:
+            raise ValueError("kind='final' requires a null `suggested_replies`")
     else:  # kind == "question"
         if question is None:
             raise ValueError("kind='question' requires a non-null `question`")
@@ -111,10 +116,11 @@ class CvTurn(BaseModel):
     kind: Literal["question", "final"]
     question: str | None
     payload: CVDocument | None
+    suggested_replies: list[str] | None
 
     @model_validator(mode="after")
     def _payload_iff_final(self) -> "CvTurn":
-        _check_payload_iff_final(self.kind, self.question, self.payload)
+        _check_payload_iff_final(self.kind, self.question, self.payload, self.suggested_replies)
         return self
 
 
@@ -126,10 +132,11 @@ class ClTurn(BaseModel):
     kind: Literal["question", "final"]
     question: str | None
     payload: CoverLetter | None
+    suggested_replies: list[str] | None
 
     @model_validator(mode="after")
     def _payload_iff_final(self) -> "ClTurn":
-        _check_payload_iff_final(self.kind, self.question, self.payload)
+        _check_payload_iff_final(self.kind, self.question, self.payload, self.suggested_replies)
         return self
 
 
@@ -230,7 +237,19 @@ def _route_structured_data(raw: str, data: Any, *, is_fit: bool) -> AgentReply:
         question = data.get("question")
         if not isinstance(question, str) or not question.strip():
             raise ProtocolError("structured reply unparseable: missing or invalid 'question'")
-        return AgentReply(raw=raw, content=question, kind="needs_input", question=question)
+        suggested_replies = data.get("suggested_replies")
+        if suggested_replies is not None and not (
+            isinstance(suggested_replies, list)
+            and all(isinstance(item, str) for item in suggested_replies)
+        ):
+            suggested_replies = None
+        return AgentReply(
+            raw=raw,
+            content=question,
+            kind="needs_input",
+            question=question,
+            suggested_replies=suggested_replies,
+        )
     if kind == "final":
         payload = data.get("payload")
         if not isinstance(payload, dict):
@@ -321,7 +340,13 @@ def wrap_canonical_for_sentinel(canonical_text: str) -> str:
         return canonical_text
     kind = data.get("kind")
     if kind == "question" and isinstance(data.get("question"), str):
-        return f"<<<NEED_INPUT>>>\n{data['question']}\n<<<END>>>"
+        suggested_replies = data.get("suggested_replies")
+        suggestions_block = ""
+        if isinstance(suggested_replies, list) and all(
+            isinstance(item, str) for item in suggested_replies
+        ) and suggested_replies:
+            suggestions_block = "\n<<<SUGGESTIONS>>>\n" + "\n".join(suggested_replies)
+        return f"<<<NEED_INPUT>>>\n{data['question']}{suggestions_block}\n<<<END>>>"
     if kind == "final" and isinstance(data.get("payload"), dict):
         return f"<<<FINAL>>>\n{json.dumps(data['payload'])}\n<<<END>>>"
     return canonical_text
@@ -344,7 +369,14 @@ def unwrap_sentinel_to_canonical(sentinel_text: str) -> str:
     except ProtocolError:
         return sentinel_text
     if reply.kind == "needs_input":
-        return json.dumps({"kind": "question", "question": reply.question, "payload": None})
+        data: dict[str, Any] = {
+            "kind": "question",
+            "question": reply.question,
+            "payload": None,
+        }
+        if reply.suggested_replies:
+            data["suggested_replies"] = reply.suggested_replies
+        return json.dumps(data)
     try:
         payload = json.loads(reply.content)
     except json.JSONDecodeError:

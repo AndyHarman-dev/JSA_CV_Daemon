@@ -129,7 +129,14 @@ def _structured_contract(schema: dict[str, Any], *, fit_verdict: bool) -> str:
             "before asking for confirmation, that full write-up must be included as text "
             "inside `question` itself, followed by your actual question. A short "
             "confirmation prompt with none of that content included is incomplete and "
-            "leaves the user with nothing to evaluate."
+            "leaves the user with nothing to evaluate.\n"
+            "On a `\"question\"` turn, also populate `suggested_replies` with 2 to 4 "
+            "short, distinct, directly-sendable answers the user could click to reply "
+            "immediately instead of typing — vary their length (include at least one "
+            "short, decisive option and at least one longer option that clarifies or "
+            "pushes back), and do not pad the list to a fixed count if fewer genuinely "
+            "distinct answers make sense. On a `\"final\"` turn, `suggested_replies` "
+            "must be left null."
         )
     return (
         "\n\n## Structured output contract\n"

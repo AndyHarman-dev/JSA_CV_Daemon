@@ -16,7 +16,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentTimeout, HistoryTurn
+from jsa.agents.base import (
+    AgentBackendUnavailable,
+    AgentChunk,
+    AgentLimitReached,
+    AgentTimeout,
+    HistoryTurn,
+)
 from jsa.agents.opencode_zen import OpenCodeZenBackend, OpenCodeZenSessionHandle
 from jsa.agents.protocol import ProtocolError
 from jsa.db.models import Stage
@@ -939,3 +945,99 @@ class TestRetryDowngradeIndependence:
             await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
         for call in mock_client.post.call_args_list:
             assert "response_format" in call.kwargs["json"]
+
+
+# ---------------------------------------------------------------------------
+# Streaming — this backend keeps its own independent copy of the SSE-consuming
+# machinery (see the module docstring), so it needs its own coverage rather
+# than relying on test_streaming_openai_compat.py's MistralBackend-based tests.
+# ---------------------------------------------------------------------------
+
+def _sse_lines(events: list[dict]) -> list[str]:
+    return [f"data: {json.dumps(e)}" for e in events] + ["data: [DONE]"]
+
+
+def _make_mock_stream_client(lines: list[str]) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+
+    async def _aiter_lines():
+        for line in lines:
+            yield line
+
+    mock_response.aiter_lines = _aiter_lines
+    mock_response.aread = AsyncMock(return_value=b"")
+
+    class _StreamCtx:
+        async def __aenter__(self):
+            return mock_response
+
+        async def __aexit__(self, *a):
+            return False
+
+    mock_client = MagicMock()
+    mock_client.stream = MagicMock(return_value=_StreamCtx())
+    mock_client.aclose = AsyncMock()
+    return mock_client
+
+
+class TestStreamingBehavior:
+    async def test_sentinel_mode_streams_content_and_reasoning_unfiltered(self):
+        lines = _sse_lines(
+            [
+                {"choices": [{"delta": {"reasoning_content": "weighing options..."}}]},
+                {"choices": [{"delta": {"content": FINAL_RAW}}]},
+            ]
+        )
+        mock_client = _make_mock_stream_client(lines)
+        received: list[AgentChunk] = []
+
+        async def on_chunk(chunk: AgentChunk) -> None:
+            received.append(chunk)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            raw = await backend._call_api("sys", [{"role": "user", "content": "hi"}], None, on_chunk)
+
+        assert raw == FINAL_RAW
+        assert received == [
+            AgentChunk(kind="reasoning", text="weighing options..."),
+            AgentChunk(kind="content", text=FINAL_RAW),
+        ]
+
+    async def test_structured_mode_streams_reasoning_but_suppresses_content(self):
+        """Structured mode DOES attempt SSE when on_chunk is supplied — some routed
+        models expose a genuine reasoning_content delta even under a forced JSON
+        schema — but the content delta is raw partial JSON there, so on_chunk must
+        only ever receive reasoning chunks. The full JSON is still returned as the
+        raw reply regardless of what's forwarded to on_chunk."""
+        raw_json = json.dumps({"kind": "final", "question": None, "payload": _cv_payload()})
+        lines = _sse_lines(
+            [
+                {"choices": [{"delta": {"reasoning_content": "checking the JD..."}}]},
+                {"choices": [{"delta": {"content": raw_json}}]},
+            ]
+        )
+        mock_client = _make_mock_stream_client(lines)
+        received: list[AgentChunk] = []
+
+        async def on_chunk(chunk: AgentChunk) -> None:
+            received.append(chunk)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            raw = await backend._call_api(
+                "sys", [{"role": "user", "content": "hi"}], CV_SCHEMA, on_chunk
+            )
+
+        assert raw == raw_json
+        assert received == [AgentChunk(kind="reasoning", text="checking the JD...")]
+        mock_client.stream.assert_called_once()
+
+    async def test_structured_mode_no_on_chunk_stays_non_streaming(self):
+        mock_client = _make_mock_client(_structured_final_body(_cv_payload()))
+        mock_client.stream = MagicMock(side_effect=AssertionError("must not stream"))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            await backend._call_api("sys", [{"role": "user", "content": "hi"}], CV_SCHEMA, None)
+        mock_client.post.assert_awaited_once()

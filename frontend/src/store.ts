@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { JobDTO, WSEvent } from "./types";
+import type { JobDTO, TranscriptTurn, WSEvent } from "./types";
 import { api } from "./api";
 import { useEditorStore } from "./editorStore";
 
@@ -57,6 +57,16 @@ interface Store {
   // means "follow the pipeline" (today's default behaviour). Reset to null on every job
   // switch (selectJob) so a stale view never carries over to a different job.
   viewedStage: "cv" | "cl" | null;
+  // Per-job display-ready transcript turns (GET /api/jobs/{id}/transcript). Undefined
+  // until first fetched. Never capped — see CLAUDE.md-adjacent plan note: the toast
+  // `.slice(-5)` pattern bounds ephemeral notifications, not conversation history.
+  transcripts: Record<string, TranscriptTurn[]>;
+  // Phase 8 — per-job in-progress streamed content, keyed by job_id. Cleared on
+  // agent_turn_end (discarded outright when superseded=true, since that means a
+  // retry/nudge/self-heal path replayed the whole turn and this buffer is stale).
+  // Not persisted anywhere — a page reload loses an in-flight stream, same as today's
+  // "loading" state until the next transcript fetch lands.
+  streamBuffers: Record<string, { stage: string; content: string; reasoning: string }>;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setViewedStage(stage: Store["viewedStage"]): void;
@@ -67,6 +77,7 @@ interface Store {
   jobLabelFor(id: string): string;
   applyEvent(e: WSEvent): void;
   refetchAll(): Promise<void>;
+  fetchTranscript(jobId: string): Promise<void>;
   removeJob(id: string): void;
   hydrateLanguage(): Promise<void>;
   setLanguage(code: string): Promise<boolean>;
@@ -92,6 +103,8 @@ export const useStore = create<Store>((set, get) => ({
   configReady: false,
   cvStructureExists: null,
   viewedStage: null,
+  transcripts: {},
+  streamBuffers: {},
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -142,11 +155,30 @@ export const useStore = create<Store>((set, get) => ({
     const store = get();
     switch (e.type) {
       case "status_changed":
+        // Also invalidate this job's transcript specifically — soft/nuclear resets and
+        // the session-expired auto-reset delete Message rows and only emit
+        // status_changed, not transcript_changed, at some call sites (see CLAUDE.md /
+        // the transcript-projection plan's Phase 2 note). refetchAll alone would leave
+        // the thread showing rows that no longer exist.
+        store.fetchTranscript(e.job_id).catch((err: unknown) => {
+          console.error("fetchTranscript failed:", err);
+        });
+        store.refetchAll().catch((err: unknown) => {
+          console.error("refetchAll failed:", err);
+        });
+        break;
       case "stage_complete":
       case "approved":
       case "follow_up_needed":
         store.refetchAll().catch((err: unknown) => {
           console.error("refetchAll failed:", err);
+        });
+        break;
+      case "transcript_changed":
+        // Id-only invalidation hint — refetch just this job's transcript, never
+        // refetchAll (which hits GET /api/jobs, a shape with no transcript at all).
+        store.fetchTranscript(e.job_id).catch((err: unknown) => {
+          console.error("fetchTranscript failed:", err);
         });
         break;
       case "backend_switched":
@@ -174,6 +206,11 @@ export const useStore = create<Store>((set, get) => ({
             },
           ].slice(-5),
         });
+        // A backend switch resets the job's stage (backend_switch_reset), which deletes
+        // its Messages — refetch this job's transcript specifically, not just the job row.
+        store.fetchTranscript(e.job_id).catch((err: unknown) => {
+          console.error("fetchTranscript failed:", err);
+        });
         store.refetchAll().catch((err: unknown) => {
           console.error("refetchAll failed:", err);
         });
@@ -200,6 +237,11 @@ export const useStore = create<Store>((set, get) => ({
             },
           ].slice(-5),
         });
+        // A model hop is also a backend_switch_reset under the hood — same Message
+        // deletion, same need to refetch this job's transcript specifically.
+        store.fetchTranscript(e.job_id).catch((err: unknown) => {
+          console.error("fetchTranscript failed:", err);
+        });
         store.refetchAll().catch((err: unknown) => {
           console.error("refetchAll failed:", err);
         });
@@ -214,6 +256,31 @@ export const useStore = create<Store>((set, get) => ({
       case "infer_progress":
         // Job-less editor event — drive the inferring checklist in the editor store.
         useEditorStore.getState().onInferProgress(e);
+        break;
+      case "agent_chunk":
+        set((state) => {
+          const existing = state.streamBuffers[e.job_id];
+          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "" };
+          return {
+            streamBuffers: {
+              ...state.streamBuffers,
+              [e.job_id]: {
+                stage: e.stage,
+                content: e.kind === "content" ? base.content + e.text : base.content,
+                reasoning: e.kind === "reasoning" ? base.reasoning + e.text : base.reasoning,
+              },
+            },
+          };
+        });
+        break;
+      case "agent_turn_end":
+        // Either the turn completed (checkpoint already landed — transcript_changed will
+        // follow and render the real turn) or it was superseded (discard outright). Either
+        // way the live buffer's job is done.
+        set((state) => {
+          const { [e.job_id]: _, ...rest } = state.streamBuffers;
+          return { streamBuffers: rest };
+        });
         break;
     }
   },
@@ -231,6 +298,11 @@ export const useStore = create<Store>((set, get) => ({
     } catch (err) {
       console.error("refetchAll error:", err);
     }
+  },
+
+  async fetchTranscript(jobId: string) {
+    const turns = await api.getTranscript(jobId);
+    set((state) => ({ transcripts: { ...state.transcripts, [jobId]: turns } }));
   },
 
   async hydrateLanguage() {

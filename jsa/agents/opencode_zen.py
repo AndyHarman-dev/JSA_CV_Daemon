@@ -13,6 +13,7 @@ picks up `ANTHROPIC_API_KEY` implicitly.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -24,10 +25,13 @@ import httpx
 from jsa.agents.base import (
     AgentBackend,
     AgentBackendUnavailable,
+    AgentChunk,
     AgentLimitReached,
     AgentReply,
     AgentTimeout,
     HistoryTurn,
+    OnChunk,
+    OnRetry,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -103,6 +107,23 @@ class OpenCodeZenSessionHandle(SessionHandle):
     structured_enabled: bool = False
 
 
+def _reasoning_only(on_chunk: OnChunk | None) -> OnChunk | None:
+    """Wrap ``on_chunk`` so only ``kind="reasoning"`` chunks pass through — used
+    for structured-schema calls, where the ``content`` delta is raw partial JSON
+    (not useful to render as chat text) but a ``reasoning_content`` delta, when a
+    routed model exposes one, still is. ``None`` in, ``None`` out. Identical to
+    ``_openai_compat.py``'s copy — see this module's docstring for why this file
+    keeps its own independent implementation rather than sharing that base."""
+    if on_chunk is None:
+        return None
+
+    async def _filtered(chunk: AgentChunk, _cb: OnChunk = on_chunk) -> None:
+        if chunk.kind == "reasoning":
+            await _cb(chunk)
+
+    return _filtered
+
+
 def _active_schema(
     handle: OpenCodeZenSessionHandle, explicit: dict[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -121,6 +142,10 @@ class OpenCodeZenBackend(AgentBackend):
 
     name = "opencode-zen"
     supports_structured_output = True
+    # SSE stream via `stream: true`, same approach as _openai_compat.py — but this
+    # module deliberately keeps its own copy rather than sharing that base (see the
+    # module docstring). Never attempted in structured mode.
+    supports_streaming = True
 
     def __init__(self, model: str = "nemotron-3-ultra-free", timeout: float = 180.0) -> None:
         self._model = model
@@ -131,12 +156,14 @@ class OpenCodeZenBackend(AgentBackend):
         system_prompt: str,
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[OpenCodeZenSessionHandle, AgentReply]:
         """Open a fresh session: send the initial user message and return the handle + first reply."""
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_api(system_prompt, messages, structured_schema)
+        raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk, on_retry)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
-            system_prompt, messages, raw, structured_schema
+            system_prompt, messages, raw, structured_schema, on_chunk, on_retry
         )
         messages.append({"role": "assistant", "content": reply.raw})
         handle = OpenCodeZenSessionHandle(
@@ -179,6 +206,8 @@ class OpenCodeZenBackend(AgentBackend):
         handle: SessionHandle,
         text: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Append a user turn, call the API, parse and store the assistant reply.
 
@@ -193,9 +222,9 @@ class OpenCodeZenBackend(AgentBackend):
             )
         schema = _active_schema(handle, structured_schema)
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_api(handle.system_prompt, pending_messages, schema)
+        raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk, on_retry)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
-            handle.system_prompt, pending_messages, raw, schema
+            handle.system_prompt, pending_messages, raw, schema, on_chunk, on_retry
         )
         # Mutate only after success so handle stays consistent on error
         handle.structured_enabled = structured_enabled
@@ -209,6 +238,8 @@ class OpenCodeZenBackend(AgentBackend):
         messages: list[dict],
         raw: str,
         schema: dict[str, Any] | None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[AgentReply, bool]:
         """Parse ``raw`` per the session's current mode; downgrade to sentinel mode
         on an unparseable/missing-``kind`` structured reply.
@@ -252,7 +283,7 @@ class OpenCodeZenBackend(AgentBackend):
         tests/backend/test_opencode_zen.py, pinned for Phase 5's attention.
         """
         if schema is None:
-            return await self._parse_with_nudge(system_prompt, messages, raw), False
+            return await self._parse_with_nudge(system_prompt, messages, raw, on_chunk=on_chunk, on_retry=on_retry), False
         try:
             return parse_structured_reply_for_schema(raw, schema), True
         except ProtocolError as exc:
@@ -262,7 +293,8 @@ class OpenCodeZenBackend(AgentBackend):
                 exc,
             )
             reply = await self._parse_with_nudge(
-                system_prompt, messages, raw, nudge_text=_DOWNGRADE_NUDGE_TEXT
+                system_prompt, messages, raw, nudge_text=_DOWNGRADE_NUDGE_TEXT,
+                on_chunk=on_chunk, on_retry=on_retry,
             )
             return reply, False
 
@@ -272,6 +304,8 @@ class OpenCodeZenBackend(AgentBackend):
         messages: list[dict],
         raw: str,
         nudge_text: str = _NUDGE_TEXT,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once.
 
@@ -301,11 +335,13 @@ class OpenCodeZenBackend(AgentBackend):
         except ProtocolError as exc:
             if "no sentinel block" not in str(exc):
                 raise
+            if on_retry is not None:
+                await on_retry()
             nudge_messages = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": nudge_text},
             ]
-            raw2 = await self._call_api(system_prompt, nudge_messages)
+            raw2 = await self._call_api(system_prompt, nudge_messages, None, on_chunk, on_retry)
             return parse_reply(raw2)  # Propagate on second failure
 
     async def end_session(self, handle: SessionHandle) -> None:
@@ -321,6 +357,8 @@ class OpenCodeZenBackend(AgentBackend):
         system_prompt: str,
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> str:
         """POST to the OpenCode Zen endpoint, retrying transient overload/gateway
         failures on THIS backend up to _MAX_ATTEMPTS before giving up.
@@ -339,10 +377,21 @@ class OpenCodeZenBackend(AgentBackend):
         burns retry budget here and a transient HTTP failure never touches the
         downgrade flag.
         """
+        # response_format + stream:true is a normal combination on this wire shape
+        # (see _call_api_once) and some routed models expose a genuine
+        # reasoning_content delta even under a forced JSON schema — so streaming
+        # is attempted in BOTH modes. The content delta is raw partial JSON while
+        # structured though (a stray "{" is not useful to show), so on_chunk is
+        # wrapped to forward reasoning chunks only in that case; sentinel mode
+        # passes it through unwrapped. on_retry is forwarded unconditionally too,
+        # so a retried structured call still discards any reasoning streamed by
+        # the abandoned attempt.
+        stream_cb = _reasoning_only(on_chunk) if structured_schema is not None else on_chunk
+        retry_cb = on_retry
         last_exc: _TransientOpenCodeError | None = None
         for attempt in range(_MAX_ATTEMPTS):
             try:
-                return await self._call_api_once(system_prompt, messages, structured_schema)
+                return await self._call_api_once(system_prompt, messages, structured_schema, stream_cb)
             except _TransientOpenCodeError as exc:
                 last_exc = exc
                 if attempt < _MAX_ATTEMPTS - 1:
@@ -350,17 +399,56 @@ class OpenCodeZenBackend(AgentBackend):
                         "OpenCode Zen API transient failure (attempt %d/%d), retrying: %s",
                         attempt + 1, _MAX_ATTEMPTS, exc,
                     )
+                    if retry_cb is not None:
+                        await retry_cb()
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS[attempt])
                     continue
         raise AgentBackendUnavailable(
             f"OpenCode Zen API still failing after {_MAX_ATTEMPTS} attempts: {last_exc}"
         ) from None
 
+    async def _consume_sse(self, response: httpx.Response, on_chunk: OnChunk) -> tuple[str, str]:
+        """Drain a chat/completions SSE stream (identical wire shape to
+        _openai_compat.py's copy — see the module docstring for why this file
+        keeps its own independent copy rather than sharing that base).
+
+        Returns ``(joined_content_text, raw_body_text)`` — ``raw_body_text`` is
+        every line received, joined back together, so the caller can recover and
+        classify a genuine HTTP-200 JSON error envelope (this backend's own
+        documented failure mode) when the "stream" wasn't SSE-shaped at all."""
+        content_parts: list[str] = []
+        raw_lines: list[str] = []
+        async for line in response.aiter_lines():
+            if line:
+                raw_lines.append(line)
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            choices = event.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                content_parts.append(piece)
+                await on_chunk(AgentChunk(kind="content", text=piece))
+            reasoning_piece = delta.get("reasoning_content")
+            if reasoning_piece:
+                await on_chunk(AgentChunk(kind="reasoning", text=reasoning_piece))
+        return "".join(content_parts), "".join(raw_lines)
+
     async def _call_api_once(
         self,
         system_prompt: str,
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> str:
         """Single POST to the OpenCode Zen chat-completions endpoint; classifies
         and raises on any failure. Never retries itself — see _call_api.
@@ -406,16 +494,27 @@ class OpenCodeZenBackend(AgentBackend):
                     "schema": structured_schema,
                 },
             }
+        use_stream = on_chunk is not None
+        if use_stream:
+            payload["stream"] = True
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        streamed_content: str | None = None
+        streamed_raw: str = ""
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
-            response = await client.post(
-                _ENDPOINT,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
+            if use_stream:
+                async with client.stream(
+                    "POST", _ENDPOINT, headers=headers, json=payload
+                ) as response:
+                    if response.status_code == 200:
+                        streamed_content, streamed_raw = await self._consume_sse(response, on_chunk)
+                    else:
+                        await response.aread()
+            else:
+                response = await client.post(_ENDPOINT, headers=headers, json=payload)
         except httpx.TimeoutException:
             # A timeout is its own BF-19 category (Orchestrator._handle_backend_timeout)
             # — not folded into the transient-retry loop above, since a request that
@@ -440,17 +539,42 @@ class OpenCodeZenBackend(AgentBackend):
         if response.status_code == 429:
             raise AgentLimitReached(f"OpenCode Zen API rate limit reached: {response.text[:500]}")
 
-        # A gateway-level failure (e.g. a 502/503 from the proxy in front of the API,
-        # as opposed to the API's own JSON error envelope) can return non-JSON — HTML,
-        # plain text. Check that *before* touching status_code>=400 below, since that
-        # branch depends on `body` and must never be reached via a JSONDecodeError.
-        try:
-            body = response.json()
-        except ValueError:
-            detail = f"OpenCode Zen API error {response.status_code}: {response.text[:500]}"
-            if response.status_code >= 500:
-                raise _TransientOpenCodeError(detail) from None
-            raise AgentBackendUnavailable(detail) from None
+        if streamed_content:
+            return streamed_content
+
+        if streamed_content == "":
+            # HTTP 200, streamed, but no delta content was extracted. Before
+            # assuming a generic transient/empty-stream failure, try to recover
+            # the raw stream body as a JSON error envelope -- this backend is
+            # documented to sometimes return a 200-status response whose body is
+            # a single JSON error object (e.g. a transient upstream 502 surfaced
+            # as {"error": {"type": "server_error"}} at HTTP 200) rather than a
+            # real SSE stream, which _consume_sse's "data:"-only parsing would
+            # otherwise silently drop.
+            try:
+                body = json.loads(streamed_raw) if streamed_raw else None
+            except ValueError:
+                body = None
+            if not isinstance(body, dict) or "error" not in body:
+                raise _TransientOpenCodeError(
+                    "OpenCode Zen API stream produced no content (model may have "
+                    "produced only reasoning tokens before hitting max_tokens)"
+                )
+            # Fall through to the shared "error" in body classification below,
+            # using the body recovered from the stream instead of response.json().
+        else:
+            # A gateway-level failure (e.g. a 502/503 from the proxy in front of the
+            # API, as opposed to the API's own JSON error envelope) can return
+            # non-JSON — HTML, plain text. Check that *before* touching
+            # status_code>=400 below, since that branch depends on `body` and must
+            # never be reached via a JSONDecodeError.
+            try:
+                body = response.json()
+            except ValueError:
+                detail = f"OpenCode Zen API error {response.status_code}: {response.text[:500]}"
+                if response.status_code >= 500:
+                    raise _TransientOpenCodeError(detail) from None
+                raise AgentBackendUnavailable(detail) from None
 
         if "error" in body:
             err = body["error"]

@@ -395,6 +395,7 @@ class TestSchemaRejectionDowngrade:
         mock_client.aclose = AsyncMock()
         with patch("httpx.AsyncClient", return_value=mock_client):
             backend = GeminiBackend()
+            backend._reasoning = False  # isolate the schema downgrade from the reasoning degrade
             handle, reply = await backend.start_session("sys", "hi", structured_schema=schema)
         assert reply.kind == "final"
         assert handle.structured_enabled is False
@@ -403,6 +404,39 @@ class TestSchemaRejectionDowngrade:
         retried_payload = mock_client.post.call_args.kwargs["json"]
         assert "responseSchema" not in retried_payload["generationConfig"]
 
+    async def test_permanent_4xx_sheds_thinking_config_before_downgrading_the_schema(self):
+        """thinkingConfig is an optional enrichment and not every Gemini model
+        supports it, so a permanent 4xx drops it FIRST — losing the thinking stream
+        rather than structured mode. Only if the clean retry also 4xxs does the
+        schema downgrade fire."""
+        schema = json_schema_for(Stage.cv_adjust)
+        rejection = MagicMock(
+            status_code=400,
+            json=MagicMock(return_value={
+                "error": {"code": 400, "message": "Invalid argument", "status": "INVALID_ARGUMENT"}
+            }),
+            text="bad request",
+        )
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                rejection,
+                MagicMock(status_code=200, json=MagicMock(return_value=_structured_final_body(_cv_payload())), text="ok"),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle, reply = await backend.start_session("sys", "hi", structured_schema=schema)
+        assert reply.kind == "final"
+        assert backend._reasoning is False
+        # Structured mode survived — only the thinking opt-in was shed.
+        assert handle.structured_enabled is True
+        assert mock_client.post.await_count == 2
+        retried_payload = mock_client.post.call_args.kwargs["json"]
+        assert "thinkingConfig" not in retried_payload["generationConfig"]
+        assert "responseSchema" in retried_payload["generationConfig"]
+
     async def test_permanent_4xx_in_sentinel_mode_raises_backend_unavailable_no_retry(self):
         mock_client = _make_mock_client(
             {"error": {"code": 400, "message": "bad request", "status": "INVALID_ARGUMENT"}},
@@ -410,6 +444,7 @@ class TestSchemaRejectionDowngrade:
         )
         with patch("httpx.AsyncClient", return_value=mock_client):
             backend = GeminiBackend()
+            backend._reasoning = False
             with pytest.raises(AgentBackendUnavailable):
                 await backend.start_session("sys", "hi")
         assert mock_client.post.await_count == 1
@@ -505,3 +540,141 @@ class TestCachedTokenObservability:
             backend = GeminiBackend()
             handle, reply = await backend.start_session("sys", "hi")
         assert reply.kind == "final"
+
+
+def _gemini_sse_lines(events: list[dict]) -> list[str]:
+    return [f"data: {json.dumps(e)}" for e in events]
+
+
+def _gemini_stream_event(parts: list[dict], finish_reason: str | None = None) -> dict:
+    candidate: dict = {"content": {"parts": parts}}
+    if finish_reason:
+        candidate["finishReason"] = finish_reason
+    return {"candidates": [candidate]}
+
+
+def _make_mock_stream_client(lines: list[str], status_code: int = 200) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+
+    async def _aiter_lines():
+        for line in lines:
+            yield line
+
+    mock_response.aiter_lines = _aiter_lines
+    mock_response.aread = AsyncMock(return_value=b"")
+
+    class _StreamCtx:
+        async def __aenter__(self):
+            return mock_response
+
+        async def __aexit__(self, *a):
+            return False
+
+    mock_client = MagicMock()
+    mock_client.stream = MagicMock(return_value=_StreamCtx())
+    mock_client.post = AsyncMock()
+    mock_client.aclose = AsyncMock()
+    return mock_client
+
+
+class TestGeminiStreaming:
+    """The regression this class exists for: `_call_api_once` used to gate streaming
+    on `structured_schema is None`. Since `_structured_schema_for` hands this backend
+    a schema unconditionally, that made every real pipeline call fall to the buffered
+    `generateContent` endpoint and nothing ever streamed — no thinking, ever."""
+
+    async def test_structured_mode_still_streams(self):
+        payload_json = json.dumps({"kind": "final", "question": None, "payload": _cv_payload()})
+        lines = _gemini_sse_lines([
+            _gemini_stream_event([{"text": "mapping the JD onto the CV", "thought": True}]),
+            _gemini_stream_event([{"text": payload_json}], finish_reason="STOP"),
+        ])
+        mock_client = _make_mock_stream_client(lines)
+        received: list = []
+
+        async def on_chunk(chunk) -> None:
+            received.append(chunk)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle, reply = await backend.start_session(
+                "sys", "hi", structured_schema=json_schema_for(Stage.cv_adjust), on_chunk=on_chunk
+            )
+
+        assert mock_client.stream.called
+        mock_client.post.assert_not_awaited()
+        assert reply.kind == "final"
+        assert handle.structured_enabled is True
+        url = mock_client.stream.call_args.args[1]
+        assert url.endswith(":streamGenerateContent")
+
+    async def test_structured_mode_forwards_thought_parts_but_suppresses_partial_json(self):
+        """`_call_api` wraps on_chunk with `_reasoning_only` while structured, so the
+        raw partial JSON never leaks into the chat UI — only the thought summary."""
+        payload_json = json.dumps({"kind": "final", "question": None, "payload": _cv_payload()})
+        lines = _gemini_sse_lines([
+            _gemini_stream_event([{"text": "weighing options", "thought": True}]),
+            _gemini_stream_event([{"text": payload_json}], finish_reason="STOP"),
+        ])
+        mock_client = _make_mock_stream_client(lines)
+        received: list = []
+
+        async def on_chunk(chunk) -> None:
+            received.append(chunk)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            await backend.start_session(
+                "sys", "hi", structured_schema=json_schema_for(Stage.cv_adjust), on_chunk=on_chunk
+            )
+
+        assert [(c.kind, c.text) for c in received] == [("reasoning", "weighing options")]
+
+    async def test_sentinel_mode_streams_both_kinds_unfiltered(self):
+        lines = _gemini_sse_lines([
+            _gemini_stream_event([{"text": "thinking out loud", "thought": True}]),
+            _gemini_stream_event([{"text": FINAL_RAW}], finish_reason="STOP"),
+        ])
+        mock_client = _make_mock_stream_client(lines)
+        received: list = []
+
+        async def on_chunk(chunk) -> None:
+            received.append(chunk)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            _, reply = await backend.start_session("sys", "hi", on_chunk=on_chunk)
+
+        assert reply.kind == "final"
+        assert [(c.kind, c.text) for c in received] == [
+            ("reasoning", "thinking out loud"),
+            ("content", FINAL_RAW),
+        ]
+
+    async def test_no_on_chunk_still_uses_the_buffered_endpoint(self):
+        mock_client = _make_mock_client(_gemini_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            await backend.start_session("sys", "hi")
+        assert mock_client.post.await_count == 1
+        assert mock_client.post.call_args.args[0].endswith(":generateContent")
+
+
+class TestGeminiThinkingConfig:
+    async def test_thinking_config_sent_by_default(self):
+        mock_client = _make_mock_client(_gemini_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            await backend.start_session("sys", "hi")
+        config = mock_client.post.call_args.kwargs["json"]["generationConfig"]
+        assert config["thinkingConfig"] == {"includeThoughts": True}
+
+    async def test_thinking_config_omitted_once_degraded(self):
+        mock_client = _make_mock_client(_gemini_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            backend._reasoning = False
+            await backend.start_session("sys", "hi")
+        config = mock_client.post.call_args.kwargs["json"]["generationConfig"]
+        assert "thinkingConfig" not in config

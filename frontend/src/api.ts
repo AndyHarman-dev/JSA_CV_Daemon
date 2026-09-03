@@ -1,4 +1,4 @@
-import type { JobDTO, FullJobDTO, Stage, CVDocument } from "./types";
+import type { JobDTO, FullJobDTO, Stage, CVDocument, TranscriptTurn } from "./types";
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -17,6 +17,10 @@ export const api = {
 
   getJob(id: string): Promise<FullJobDTO> {
     return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}`);
+  },
+
+  getTranscript(id: string): Promise<TranscriptTurn[]> {
+    return apiFetch<TranscriptTurn[]>(`/api/jobs/${encodeURIComponent(id)}/transcript`);
   },
 
   answerFollowUp(id: string, follow_up_id: number, text: string): Promise<JobDTO> {

@@ -63,13 +63,28 @@ chose, not whatever Gemini's un-set default happens to be.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import httpx
 
-from jsa.agents._openai_compat import OpenAICompatBackend, OpenAICompatSessionHandle, TransientBackendError
-from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentReply, AgentTimeout, SessionHandle
+from jsa.agents._openai_compat import (
+    OpenAICompatBackend,
+    OpenAICompatSessionHandle,
+    TransientBackendError,
+    _ReasoningRejected,
+)
+from jsa.agents.base import (
+    AgentBackendUnavailable,
+    AgentChunk,
+    AgentLimitReached,
+    AgentReply,
+    AgentTimeout,
+    OnChunk,
+    OnRetry,
+    SessionHandle,
+)
 from jsa.agents.protocol import ProtocolError
 from jsa.schema.turn_models import inline_defs
 
@@ -117,15 +132,41 @@ class GeminiBackend(OpenAICompatBackend):
     # Assesser's CHEAP tier (providers/tiers.py, verified Aug 2026) and confirmed
     # present + generateContent-capable in the live Phase-0 /models probe.
     default_model = "gemini-3.1-flash-lite"
+    # :streamGenerateContent?alt=sse — content always; thinkingConfig thought
+    # summaries when the configured model surfaces them. Never attempted in
+    # structured mode (a partial JSON candidate is not useful to stream).
+    supports_streaming = True
+
+    def _reasoning_payload(self) -> dict[str, Any]:
+        """``generationConfig.thinkingConfig`` — the only way to get Gemini to emit
+        thought-summary parts. Without ``includeThoughts`` the API never sets
+        ``"thought": true`` on any part, so ``_consume_gemini_sse``'s
+        ``part.get("thought")`` split is never true and the reasoning channel stays
+        empty even with streaming on.
+
+        Returned as a ``generationConfig`` fragment, not a top-level payload key —
+        this backend overrides ``_call_api_once`` and merges it there; the shared
+        base only ever calls this hook to decide whether reasoning fields were
+        present. Not every Gemini model supports thinking (the catalog's own
+        ``gemini-3.1-flash-lite`` default is one), and a model that doesn't answers
+        4xx — hence the ``_ReasoningRejected`` degrade in ``_permanent_4xx`` below,
+        which costs the thinking stream rather than the BF-19 slot."""
+        if not self._reasoning:
+            return {}
+        return {"thinkingConfig": {"includeThoughts": True}}
 
     async def start_session(
         self,
         system_prompt: str,
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         try:
-            return await super().start_session(system_prompt, initial_user_msg, structured_schema)
+            return await super().start_session(
+                system_prompt, initial_user_msg, structured_schema, on_chunk, on_retry
+            )
         except _SchemaRejected as exc:
             if structured_schema is None:
                 raise  # pragma: no cover — cannot occur, see _call_api_once
@@ -134,16 +175,18 @@ class GeminiBackend(OpenAICompatBackend):
                 "downgrading to sentinel mode and retrying once",
                 self.name, exc,
             )
-            return await super().start_session(system_prompt, initial_user_msg, None)
+            return await super().start_session(system_prompt, initial_user_msg, None, on_chunk, on_retry)
 
     async def send_message(
         self,
         handle: SessionHandle,
         text: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         try:
-            return await super().send_message(handle, text, structured_schema)
+            return await super().send_message(handle, text, structured_schema, on_chunk, on_retry)
         except _SchemaRejected as exc:
             logger.warning(
                 "%s rejected the structured-output schema (%s) mid-session — "
@@ -152,13 +195,69 @@ class GeminiBackend(OpenAICompatBackend):
             )
             if isinstance(handle, OpenAICompatSessionHandle):
                 handle.structured_enabled = False
-            return await super().send_message(handle, text, None)
+            return await super().send_message(handle, text, None, on_chunk, on_retry)
+
+    async def _consume_gemini_sse(self, response: httpx.Response, on_chunk: OnChunk) -> tuple[str, str]:
+        """Drain a ``streamGenerateContent?alt=sse`` stream, forwarding text parts
+        (and thought-summary parts, when a model actually emits them) through
+        ``on_chunk`` as they arrive.
+
+        Also tracks each event's ``finishReason`` (the last one seen wins, same
+        as the non-streaming path reading it off the final response body) and
+        raises the identical ``ProtocolError`` on ``MAX_TOKENS`` that the
+        non-streaming branch raises below — a streamed reply that gets cut off
+        must fail loudly the same way a buffered one does, not silently return
+        the truncated partial text as if it were a complete reply.
+
+        Returns ``(joined_content_text, raw_body_text)`` — ``raw_body_text`` is
+        every line received, joined back together, so the caller can recover and
+        classify a genuine HTTP-200 JSON error envelope when the "stream" wasn't
+        SSE-shaped at all (mirrors _openai_compat.py's identical fallback)."""
+        content_parts: list[str] = []
+        raw_lines: list[str] = []
+        finish_reason: str | None = None
+        async for line in response.aiter_lines():
+            if line:
+                raw_lines.append(line)
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data:
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            candidates = event.get("candidates") or []
+            if not candidates:
+                continue
+            candidate = candidates[0]
+            if candidate.get("finishReason"):
+                finish_reason = candidate["finishReason"]
+            parts = (candidate.get("content") or {}).get("parts") or []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if not text:
+                    continue
+                kind = "reasoning" if part.get("thought") else "content"
+                if kind == "content":
+                    content_parts.append(text)
+                await on_chunk(AgentChunk(kind=kind, text=text))
+        if finish_reason == "MAX_TOKENS":
+            raise ProtocolError(
+                "structured reply truncated: finishReason == 'MAX_TOKENS' "
+                "(output cut off before the reply completed)"
+            )
+        return "".join(content_parts), "".join(raw_lines)
 
     async def _call_api_once(
         self,
         system_prompt: str,
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> str:
         """Single POST to ``{model}:generateContent``; classifies and raises on any
         failure. Never retries itself — the inherited ``_call_api`` wraps this in
@@ -171,23 +270,47 @@ class GeminiBackend(OpenAICompatBackend):
         """
         api_key = self._api_key()
         generation_config: dict[str, Any] = {"maxOutputTokens": _MAX_OUTPUT_TOKENS}
+        generation_config.update(self._reasoning_payload())
         if structured_schema is not None:
             generation_config["responseMimeType"] = "application/json"
             generation_config["responseSchema"] = inline_defs(structured_schema)
+        reasoning_fields_present = "thinkingConfig" in generation_config
         payload: dict[str, Any] = {
             "contents": _to_gemini_contents(messages),
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "generationConfig": generation_config,
         }
 
-        url = f"{_API_BASE}/{self._model}:generateContent"
+        # Streamed in BOTH modes. The `and structured_schema is None` that used to
+        # be here made this dead code in practice: `_structured_schema_for` returns
+        # a schema unconditionally for this backend, so every real pipeline call
+        # fell to the buffered `generateContent` endpoint and nothing ever streamed.
+        # The inherited `_call_api` already filters `on_chunk` down to reasoning
+        # chunks only while structured (see `_openai_compat._reasoning_only`), and
+        # `_consume_gemini_sse` excludes thought parts from the returned body — so
+        # a partial-JSON content delta is never shown and never corrupts the parse.
+        use_stream = on_chunk is not None
+        if use_stream:
+            url = f"{_API_BASE}/{self._model}:streamGenerateContent"
+            params = {"alt": "sse"}
+        else:
+            url = f"{_API_BASE}/{self._model}:generateContent"
+            params = None
+        headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+        streamed_content: str | None = None
+        streamed_raw: str = ""
         client = httpx.AsyncClient(timeout=self._timeout)
         try:
-            response = await client.post(
-                url,
-                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                json=payload,
-            )
+            if use_stream:
+                async with client.stream(
+                    "POST", url, headers=headers, json=payload, params=params
+                ) as response:
+                    if response.status_code == 200:
+                        streamed_content, streamed_raw = await self._consume_gemini_sse(response, on_chunk)
+                    else:
+                        await response.aread()
+            else:
+                response = await client.post(url, headers=headers, json=payload)
         except httpx.TimeoutException:
             raise AgentTimeout(f"{self.name} API timed out after {self._timeout}s") from None
         except httpx.HTTPError as exc:
@@ -196,18 +319,46 @@ class GeminiBackend(OpenAICompatBackend):
             await client.aclose()
 
         def _permanent_4xx(detail: str) -> Exception:
+            # Reasoning degrade takes precedence over the schema downgrade: asking
+            # for thought summaries is an optional enrichment, so a model that
+            # rejects `thinkingConfig` must lose its thinking stream, not its
+            # structured mode. The inherited `_call_api` catches this, clears
+            # `self._reasoning`, and retries clean — a genuine schema rejection then
+            # raises `_SchemaRejected` on that second attempt and downgrades as
+            # before.
+            if reasoning_fields_present:
+                return _ReasoningRejected(detail)
             return _SchemaRejected(detail) if structured_schema is not None else AgentBackendUnavailable(detail)
 
         if response.status_code == 429:
             raise AgentLimitReached(f"{self.name} API rate limit reached: {response.text[:500]}")
 
-        try:
-            body = response.json()
-        except ValueError:
-            detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
-            if response.status_code >= 500:
-                raise TransientBackendError(detail) from None
-            raise _permanent_4xx(detail) from None
+        if streamed_content:
+            return streamed_content
+
+        if streamed_content == "":
+            # HTTP 200, streamed, but no text content was extracted. Try to
+            # recover the raw stream body as a JSON error envelope before
+            # assuming a generic transient/empty-stream failure -- mirrors
+            # _openai_compat.py's identical fallback for the same failure mode.
+            try:
+                body = json.loads(streamed_raw) if streamed_raw else None
+            except ValueError:
+                body = None
+            if not (isinstance(body, dict) and "error" in body):
+                raise TransientBackendError(
+                    f"{self.name} API stream returned no text content"
+                )
+            # Fall through to the "error" in body classification below, using
+            # the body recovered from the stream instead of response.json().
+        else:
+            try:
+                body = response.json()
+            except ValueError:
+                detail = f"{self.name} API error {response.status_code}: {response.text[:500]}"
+                if response.status_code >= 500:
+                    raise TransientBackendError(detail) from None
+                raise _permanent_4xx(detail) from None
 
         if isinstance(body, dict) and "error" in body:
             err = body["error"] if isinstance(body["error"], dict) else {}

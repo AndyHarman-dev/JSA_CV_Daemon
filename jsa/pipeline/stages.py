@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, OnChunk, OnRetry, SessionHandle
 from jsa.agents.protocol import ProtocolError
 from jsa.render.registry import renderer_for
 from jsa.render.serialize import cover_letter_to_markdown, cv_to_markdown
@@ -39,10 +39,12 @@ from jsa.events.schema import (
     LogEvent,
     StageCompleteEvent,
     StatusChangedEvent,
+    TranscriptChangedEvent,
     event_to_dict,
 )
 from jsa.pipeline.checkpoints import checkpoint
 from jsa.pipeline.prompt_assembly import assemble_system_prompt
+from jsa.pipeline.streaming import ChunkAccumulator
 from jsa.prompts import loader
 from jsa.schema.turn_models import adapt_history, json_schema_for
 from jsa.store import cv_structure as cv_structure_store
@@ -285,6 +287,44 @@ def _schema_kwargs(schema: dict | None) -> dict:
     return {"structured_schema": schema} if schema is not None else {}
 
 
+def _streaming_kwargs(
+    backend: AgentBackend, on_chunk: OnChunk | None, on_retry: OnRetry | None = None
+) -> dict:
+    """The ``on_chunk=``/``on_retry=`` kwarg dict for a start_session/send_message
+    call.
+
+    Empty unless the backend declares ``supports_streaming`` AND a callback is
+    actually in hand — mirrors ``_schema_kwargs``'s conditional-kwarg idiom, so a
+    non-streaming backend (e.g. google-cli) is never handed a kwarg it doesn't
+    declare. ``on_retry`` rides along with ``on_chunk`` unconditionally (never
+    omitted on its own) — every backend that accepts ``on_chunk`` must also
+    accept ``on_retry`` per the ``supports_streaming`` contract (see
+    ``jsa/agents/base.py``'s ``OnRetry`` docstring), even if it never calls it.
+    """
+    if on_chunk is None or not getattr(backend, "supports_streaming", False):
+        return {}
+    return {"on_chunk": on_chunk, "on_retry": on_retry}
+
+
+def _on_retry_for(accumulator: ChunkAccumulator | None) -> OnRetry | None:
+    """Build the ``on_retry`` callback a backend calls right before replaying a
+    whole turn on the SAME logical request (a sentinel-nudge retry, or an
+    in-backend transient-HTTP retry) — see ``jsa/agents/base.py``'s ``OnRetry``
+    docstring. Bound to ``ChunkAccumulator.end_turn(superseded=True)``, which
+    force-flushes (so any already-streamed partial reaches the frontend) AND
+    marks it discardable AND clears the buffer for the next attempt — a single
+    call satisfies both halves of the plan's "reset hook" and "superseded
+    signal" requirements at once.
+    """
+    if accumulator is None:
+        return None
+
+    async def _supersede() -> None:
+        await accumulator.end_turn(superseded=True)
+
+    return _supersede
+
+
 def _structured_schema_for(backend: AgentBackend, stage: Stage) -> dict | None:
     """The JSON schema to enforce for ``stage`` on ``backend``, or ``None``.
 
@@ -324,6 +364,13 @@ async def _log_session_mode(
             LogEvent(job_id=job.id, level="info", text=f"Stage {stage.value}: session mode = {mode}")
         )
     )
+
+
+async def _publish_transcript_changed(job: Job) -> None:
+    """Invalidation-only hint: Messages/FollowUps/Documents/RevisionRequests changed
+    for this job. Emit after every checkpoint() call that writes any of those rows
+    (see CLAUDE.md / the transcript-projection plan for the full call-site list)."""
+    await bus.publish(event_to_dict(TranscriptChangedEvent(job_id=job.id)))
 
 
 # How many times to re-prompt the same session when a FINAL block fails content
@@ -412,6 +459,8 @@ async def _self_heal_final(
     accumulated_messages: list[dict],
     language: str = "en",
     structured: bool = False,
+    on_chunk: OnChunk | None = None,
+    accumulator: ChunkAccumulator | None = None,
 ) -> tuple[AgentReply, list[dict]]:
     """Re-prompt the open session when a FINAL block fails content validation.
 
@@ -460,9 +509,18 @@ async def _self_heal_final(
                 )
             )
         )
-        reply = await backend.send_message(handle, message)
+        if accumulator is not None:
+            # The previous attempt's streamed buffer (if any) is being replaced by
+            # this correction turn -- tell the frontend to discard it.
+            await accumulator.end_turn(superseded=True)
+        reply = await backend.send_message(
+            handle, message, **_streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
+        )
+        assistant_msg = {"role": "assistant", "content": reply.raw}
+        if accumulator is not None:
+            assistant_msg["reasoning"] = accumulator.take_reasoning()
         accumulated_messages.append({"role": "user", "content": message})
-        accumulated_messages.append({"role": "assistant", "content": reply.raw})
+        accumulated_messages.append(assistant_msg)
 
     summary_nudge = _CV_SUMMARY_NUDGE_STRUCTURED if structured else _CV_SUMMARY_NUDGE
 
@@ -499,6 +557,8 @@ async def _start_session_with_retry(
     schema: dict | None,
     stage: Stage,
     job: Job,
+    on_chunk: OnChunk | None = None,
+    accumulator: ChunkAccumulator | None = None,
 ) -> tuple[SessionHandle, AgentReply]:
     """Start a fresh session, retrying a structured-mode wire-level ProtocolError.
 
@@ -515,7 +575,7 @@ async def _start_session_with_retry(
     internal nudge already covers a malformed reply, so re-raising immediately
     preserves the pre-existing hard-fail behavior byte-for-byte.
     """
-    kwargs = _schema_kwargs(schema)
+    kwargs = _schema_kwargs(schema) | _streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
     attempts = 0
     while True:
         try:
@@ -524,6 +584,8 @@ async def _start_session_with_retry(
             if schema is None or attempts >= MAX_FINAL_CORRECTIONS:
                 raise
             attempts += 1
+            if accumulator is not None:
+                await accumulator.end_turn(superseded=True)
             await bus.publish(
                 event_to_dict(
                     LogEvent(
@@ -545,6 +607,8 @@ async def _send_message_with_wire_retry(
     schema: dict | None,
     stage: Stage,
     job: Job,
+    on_chunk: OnChunk | None = None,
+    accumulator: ChunkAccumulator | None = None,
 ) -> tuple[AgentReply, list[dict]]:
     """Send ``text``, retrying a structured-mode wire-level ProtocolError with a
     corrective re-send.
@@ -565,17 +629,23 @@ async def _send_message_with_wire_retry(
     """
     sent_text = text
     attempts = 0
+    kwargs = _streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
     while True:
         try:
-            reply = await backend.send_message(handle, sent_text)
+            reply = await backend.send_message(handle, sent_text, **kwargs)
+            assistant_msg = {"role": "assistant", "content": reply.raw}
+            if accumulator is not None:
+                assistant_msg["reasoning"] = accumulator.take_reasoning()
             return reply, [
                 {"role": "user", "content": sent_text},
-                {"role": "assistant", "content": reply.raw},
+                assistant_msg,
             ]
         except ProtocolError:
             if schema is None or attempts >= MAX_FINAL_CORRECTIONS:
                 raise
             attempts += 1
+            if accumulator is not None:
+                await accumulator.end_turn(superseded=True)
             await bus.publish(
                 event_to_dict(
                     LogEvent(
@@ -685,6 +755,13 @@ async def run_stage(
     schema = _structured_schema_for(general_purpose_backend, stage)
     structured = schema is not None
 
+    # One accumulator per stage invocation; None when the backend can't stream, so
+    # every downstream _streaming_kwargs() call degrades to "no on_chunk kwarg"
+    # cleanly (same conditional-kwarg pattern as structured_schema).
+    streaming_enabled = getattr(general_purpose_backend, "supports_streaming", False)
+    accumulator = ChunkAccumulator(job.id, stage.value) if streaming_enabled else None
+    on_chunk = accumulator.add_chunk if accumulator is not None else None
+
     # Every restore_session call below must use THIS, not the bare `system_prompt` —
     # see assemble_system_prompt's docstring: structured-capable backends are
     # wire-stateless and resend the system prompt on every call, so the structured
@@ -748,7 +825,8 @@ async def run_stage(
                 resume_system_prompt, combined_history, revision_session_id, **restore_kwargs
             )
             reply, accumulated_messages = await _send_message_with_wire_retry(
-                general_purpose_backend, handle, answer_text, schema, stage, job
+                general_purpose_backend, handle, answer_text, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
         else:
             # Fresh revision: restore the original stage's session and send the
@@ -761,7 +839,8 @@ async def run_stage(
                 resume_system_prompt, history, revision_session_id, **restore_kwargs
             )
             reply, accumulated_messages = await _send_message_with_wire_retry(
-                general_purpose_backend, handle, instruction, schema, stage, job
+                general_purpose_backend, handle, instruction, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
     elif stage in (Stage.cv_adjust, Stage.cover_letter):
         # Determine fresh vs resume by checking whether Message rows exist for
@@ -778,7 +857,8 @@ async def run_stage(
             )
             # Only the new turns are new; prior messages already persisted.
             reply, accumulated_messages = await _send_message_with_wire_retry(
-                general_purpose_backend, handle, answer_text, schema, stage, job
+                general_purpose_backend, handle, answer_text, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
         else:
             # Fresh session. cover_letter gets a company-research brief and the approved
@@ -810,13 +890,17 @@ async def run_stage(
                 system_prompt, language=language_code, structured_model=schema
             )
             handle, reply = await _start_session_with_retry(
-                general_purpose_backend, fresh_system_prompt, initial_user_msg, schema, stage, job
+                general_purpose_backend, fresh_system_prompt, initial_user_msg, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
             # Accumulate all messages for this session (system, user, assistant reply)
+            fresh_assistant_msg = {"role": "assistant", "content": reply.raw}
+            if accumulator is not None:
+                fresh_assistant_msg["reasoning"] = accumulator.take_reasoning()
             accumulated_messages = [
                 {"role": "system", "content": fresh_system_prompt},
                 {"role": "user", "content": initial_user_msg},
-                {"role": "assistant", "content": reply.raw},
+                fresh_assistant_msg,
             ]
     else:
         raise ValueError(f"Unexpected stage: {stage}")
@@ -848,6 +932,8 @@ async def run_stage(
         accumulated_messages=accumulated_messages,
         language=language_code,
         structured=structured,
+        on_chunk=on_chunk,
+        accumulator=accumulator,
     )
 
     # Guard against a stale result: the agent turn above may have run for a long
@@ -857,9 +943,19 @@ async def run_stage(
     # re-check a stale NEED_INPUT/FINAL would silently overwrite the real DB
     # state (e.g. resurrect a dismissed job — see StaleJobResult docstring).
     # Read via a fresh session: this session may hold a stale snapshot.
+    #
+    # accumulator.end_turn(superseded=False) -- telling the frontend the streamed
+    # turn is final -- deliberately runs AFTER this guard, not before: firing it
+    # first would tell a connected client "turn complete, keep the streamed
+    # content" even when the job turns out to be stale and no Message/Document
+    # ever gets persisted for this turn, leaving the client's view permanently
+    # out of sync with the DB until reload.
     current_state = await repo.get_state_fresh(session, job.id)
     if current_state != JobState.running:
         raise StaleJobResult(job.id, current_state)
+
+    if accumulator is not None:
+        await accumulator.end_turn(superseded=False)
 
     # Handle the reply
     if reply.kind == "needs_input":
@@ -982,6 +1078,7 @@ async def _handle_needs_input(
     follow_up_data = {
         "stage": stage,
         "question": display_question,
+        "suggested_replies": reply.suggested_replies,
     }
     await checkpoint(
         session,
@@ -991,6 +1088,7 @@ async def _handle_needs_input(
         messages=accumulated_messages,
         follow_up=follow_up_data,
     )
+    await _publish_transcript_changed(job)
 
 
 # ---------------------------------------------------------------------------
@@ -1086,7 +1184,15 @@ async def _run_fit_assessment(
         system_prompt, language=language_code, structured_model=schema, fit_verdict=True
     )
 
-    start_kwargs = _schema_kwargs(schema)
+    # Same conditional-kwarg pattern run_stage uses (see _streaming_kwargs) — this
+    # stage was missed when Phase 6-8 wired streaming into run_stage, so a
+    # streaming-capable backend (e.g. claude-cli) never streamed its fit-assessment
+    # turn even though it's the very first stage every job runs.
+    streaming_enabled = getattr(backend, "supports_streaming", False)
+    accumulator = ChunkAccumulator(job.id, Stage.fit_assessment.value) if streaming_enabled else None
+    on_chunk = accumulator.add_chunk if accumulator is not None else None
+
+    start_kwargs = _schema_kwargs(schema) | _streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
     try:
         handle, reply = await backend.start_session(system_prompt, initial_user_msg, **start_kwargs)
     except ProtocolError as exc:
@@ -1113,8 +1219,13 @@ async def _run_fit_assessment(
         current_state = await repo.get_state_fresh(session, job.id)
         if current_state != JobState.running:
             raise StaleJobResult(job.id, current_state)
+        # No clean turn to show — discard whatever streamed before the parse failed
+        # so the frontend's live bubble doesn't linger past the unfit modal.
+        if accumulator is not None:
+            await accumulator.end_turn(superseded=True)
         job.fit_reason = _FIT_FALLBACK_REASON
         await checkpoint(session, job, JobState.unfit, None)
+        await _publish_transcript_changed(job)
         await _publish_fit_outcome(job, is_fit=False)
         return
 
@@ -1123,12 +1234,22 @@ async def _run_fit_assessment(
     if current_state != JobState.running:
         raise StaleJobResult(job.id, current_state)
 
+    # Deliberately after the stale-job guard, before checkpoint — mirrors run_stage's
+    # ordering (see its comment): telling the frontend "turn complete, keep the
+    # streamed content" before confirming the job is still live would let a stale
+    # result announce completion with nothing actually persisted.
+    if accumulator is not None:
+        await accumulator.end_turn(superseded=False)
+
     await _log_session_mode(job, Stage.fit_assessment, schema, handle)
 
+    assistant_msg = {"role": "assistant", "content": reply.raw}
+    if accumulator is not None:
+        assistant_msg["reasoning"] = accumulator.take_reasoning()
     accumulated_messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": initial_user_msg},
-        {"role": "assistant", "content": reply.raw},
+        assistant_msg,
     ]
     job.session_external_id = handle.external_id
 
@@ -1143,6 +1264,7 @@ async def _run_fit_assessment(
         None,
         messages=accumulated_messages,
     )
+    await _publish_transcript_changed(job)
     await backend.end_session(handle)
     await _publish_fit_outcome(job, is_fit=is_fit)
 
@@ -1247,6 +1369,7 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        await _publish_transcript_changed(job)
         if output_dir is not None:
             await _render_cv(session, job, output_dir)
     elif stage == Stage.cover_letter:
@@ -1262,6 +1385,7 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        await _publish_transcript_changed(job)
         if output_dir is not None:
             await _render_for_review(session, job, output_dir)
     elif stage in (Stage.revising_cv, Stage.revising_cl):
@@ -1292,6 +1416,7 @@ async def _handle_final(
             messages=accumulated_messages,
             document=document_data,
         )
+        await _publish_transcript_changed(job)
         if output_dir is not None:
             if dest_state == JobState.cv_review:
                 await _render_cv(session, job, output_dir)

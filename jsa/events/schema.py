@@ -79,6 +79,15 @@ class ModelSwitchedEvent:
 
 
 @dataclass
+class TranscriptChangedEvent:
+    """Invalidation hint only — no content. Emitted whenever a job's Message,
+    FollowUp, Document, or RevisionRequest rows change (including reset paths that
+    delete them), so clients know to refetch GET /api/jobs/{id}/transcript."""
+    type: Literal["transcript_changed"] = "transcript_changed"
+    job_id: str = ""
+
+
+@dataclass
 class InferProgressEvent:
     """Progress for a standalone CV-structure inference task (no job).
 
@@ -92,6 +101,29 @@ class InferProgressEvent:
     label: str = ""
     status: Literal["active", "done", "error"] = "active"
     message: str = ""
+
+
+@dataclass
+class AgentChunkEvent:
+    """A batched slice of streamed model output. Never the raw per-token
+    stream — jsa/pipeline/stages.py's accumulator coalesces before publishing."""
+    type: Literal["agent_chunk"] = "agent_chunk"
+    job_id: str = ""
+    stage: str = ""
+    kind: Literal["content", "reasoning"] = "content"
+    text: str = ""
+
+
+@dataclass
+class AgentTurnEndEvent:
+    """Marks the end of one streamed turn's chunk sequence. superseded=True
+    tells clients to discard the streamed buffer entirely — emitted by any of
+    the retry/nudge/self-heal paths that replay a whole turn and produce a
+    second assistant turn."""
+    type: Literal["agent_turn_end"] = "agent_turn_end"
+    job_id: str = ""
+    stage: str = ""
+    superseded: bool = False
 
 
 def event_to_dict(event) -> dict:

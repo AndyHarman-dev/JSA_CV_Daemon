@@ -379,7 +379,12 @@ class TestPromptCacheKey:
         with patch("httpx.AsyncClient", return_value=mock_client):
             backend = MistralBackend(prompt_caching=False)
             await backend.start_session("shared system prompt", "hi")
-        payload = mock_client.post.call_args.kwargs["json"]
+        payload = dict(mock_client.post.call_args.kwargs["json"])
+        # The prompt-caching kill switch's parity invariant is scoped to the
+        # caching fields. `reasoning_effort` is a separate opt-in with its own
+        # degrade path (see MistralBackend._reasoning_payload), so it is popped
+        # here rather than being allowed to weaken this assertion.
+        payload.pop("reasoning_effort", None)
         assert payload == {
             "model": backend._model,
             "messages": [

@@ -1,5 +1,6 @@
 """Repository functions: get_job, list_jobs, upsert_job, checkpoint, etc."""
 
+import json
 from datetime import datetime
 from sqlalchemy import select, or_, exists, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -478,6 +479,7 @@ async def checkpoint(
             stage=message_stage,
             role=msg["role"],
             content=msg["content"],
+            reasoning=msg.get("reasoning"),
         )
         session.add(m)
 
@@ -516,10 +518,14 @@ async def checkpoint(
                 )
             )
             # Insert new FollowUp
+            suggested_replies = follow_up.get("suggested_replies")
             fu = FollowUp(
                 job_id=job.id,
                 stage=follow_up["stage"],
                 question=follow_up["question"],
+                suggested_replies=(
+                    json.dumps(suggested_replies) if suggested_replies is not None else None
+                ),
             )
             session.add(fu)
 

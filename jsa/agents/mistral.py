@@ -40,3 +40,21 @@ class MistralBackend(OpenAICompatBackend):
             return {}
         digest = hashlib.sha1(system_prompt.encode("utf-8")).hexdigest()[:16]
         return {"prompt_cache_key": f"jsa-{digest}"}
+
+    def _reasoning_payload(self) -> dict[str, Any]:
+        """Mistral only produces a thinking trace when ``reasoning_effort`` is set,
+        and the parameter is two-valued — ``"high"`` (full thinking chunk before the
+        answer) or ``"none"`` (omitted entirely). There is no middle setting, so
+        asking for reasoning at all means ``"high"``.
+
+        The trace does NOT arrive as ``reasoning_content``: with this set,
+        ``content`` becomes a chunk LIST mixing ``{"type": "thinking"}`` and
+        ``{"type": "text"}`` entries. ``_openai_compat.py``'s ``_split_content_delta``
+        is what handles that shape (and is a required type guard, not just a
+        feature — a list appended into the content accumulator would ``TypeError``
+        on join). A model that doesn't support the parameter rejects it with a 4xx,
+        which the shared ``_ReasoningRejected`` degrade turns into "no thinking on
+        this instance" rather than a lost BF-19 slot."""
+        if not self._reasoning:
+            return {}
+        return {"reasoning_effort": "high"}

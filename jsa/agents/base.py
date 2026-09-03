@@ -1,6 +1,7 @@
 """AgentBackend ABC, SessionHandle, AgentReply, and HistoryTurn dataclasses."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import ClassVar, Literal
 
@@ -36,6 +37,7 @@ class AgentReply:
     content: str                                # text inside the sentinel block
     kind: Literal["final", "needs_input"]
     question: str | None = None                 # populated iff kind == "needs_input"
+    suggested_replies: list[str] | None = None   # optional, only iff kind == "needs_input"
 
 
 @dataclass
@@ -51,6 +53,30 @@ class SessionHandle:
 class HistoryTurn:
     role: Literal["user", "assistant"]
     content: str
+
+
+@dataclass(frozen=True)
+class AgentChunk:
+    """One streamed delta, already classified. ``content`` is visible model
+    output; ``reasoning`` is a genuine separate channel (e.g. claude-cli's
+    thinking_delta) — never synthesized when no such channel exists."""
+    kind: Literal["content", "reasoning"]
+    text: str
+
+
+OnChunk = Callable[[AgentChunk], Awaitable[None]]
+
+# Called by a backend right before it replays a whole turn on the SAME logical
+# request (a sentinel-nudge retry, or an in-backend transient-HTTP retry) —
+# never at true turn completion, which is exclusively stages.py's
+# ChunkAccumulator.end_turn() call. A backend that declares supports_streaming
+# MUST accept an optional ``on_retry: OnRetry | None = None`` keyword on
+# start_session/send_message alongside on_chunk, even if (like
+# AnthropicAPIBackend, which has no in-flight replay-and-retry shape of its
+# own) it never actually calls it — see jsa/pipeline/streaming.py's
+# ChunkAccumulator.end_turn for what the bound callback actually does
+# (force-flush + publish AgentTurnEndEvent(superseded=True)).
+OnRetry = Callable[[], Awaitable[None]]
 
 
 class AgentBackend(ABC):
@@ -78,6 +104,19 @@ class AgentBackend(ABC):
     # it — do not add an unused accept-and-ignore parameter to a backend that stays
     # False; there is no call site that would ever supply it.
     supports_structured_output: ClassVar[bool] = False
+
+    # True only for backends with a genuine token-level channel (an SSE stream, or
+    # claude-cli's --output-format stream-json). Hard-coded per backend, never
+    # runtime-detected — mirrors supports_structured_output above. Contract: a
+    # backend that sets this True MUST accept an optional
+    # ``on_chunk: OnChunk | None = None`` keyword on ``start_session`` and
+    # ``send_message`` (restore_session never generates new assistant turns, so it
+    # never streams). jsa/pipeline/stages.py passes it ONLY when it has a callback
+    # in hand for a backend that supports it — a backend left False (e.g.
+    # google-cli, whose agy CLI has no streaming flag) is never asked to accept
+    # one. Streaming is best-effort: any failure inside a backend's on_chunk path
+    # must be swallowed and the synchronous AgentReply returned intact.
+    supports_streaming: ClassVar[bool] = False
 
     @abstractmethod
     async def start_session(
