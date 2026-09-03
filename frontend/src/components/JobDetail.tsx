@@ -205,7 +205,7 @@ export function JobDetail() {
   const showRetry = job.state === "failed";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 26px", position: "relative", zIndex: 1 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "20px 26px 80px", position: "relative", zIndex: 1 }}>
       {/* Mobile back button */}
       <button
         type="button"

@@ -167,8 +167,6 @@ export const ChatBox = forwardRef<ChatBoxHandle, ChatBoxProps>(function ChatBox(
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        paddingTop: 12,
-        borderTop: `1px solid ${T.bd}`,
       }}
     >
       <textarea

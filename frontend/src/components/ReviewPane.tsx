@@ -461,7 +461,7 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
               </>
             )}
           </button>
-          <div>
+          <div style={{ paddingTop: 12, borderTop: `1px solid ${T.bd}` }}>
             <div
               style={{
                 font: `600 10px ${T.mono}`,

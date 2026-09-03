@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useStore } from "../store";
 import type { TranscriptTurn } from "../types";
 import { ChatBox, type ChatBoxHandle } from "./ChatBox";
@@ -302,6 +303,44 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
   );
 }
 
+// Docked composer — implements the design handoff's sticky-footer mechanic
+// (.claude/designs/floating_input_box.zip, "Docked Chat Input"). `position: sticky;
+// bottom: 0` on this wrapper, as the last element inside the page's single scrolling
+// ancestor (`<main overflow-y-auto>` in App.tsx), docks it to the bottom of the visible
+// pane once content overflows — no JS scroll math. The negative margins bleed it to the
+// full width of JobDetail's padded content column and cancel the extra bottom padding
+// JobDetail reserves for this (see JobDetail.tsx's `80px` bottom padding) so it sits
+// flush at the true bottom instead of floating above empty space. Do not reintroduce a
+// maxHeight/overflow wrapper around the turns list above — that was the actual bug: a
+// second, independent scroll box that never grew to reclaim the space the composer
+// vacates when a follow-up is answered.
+function StickyComposerDock({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        position: "sticky",
+        bottom: 0,
+        zIndex: 8,
+        marginLeft: -26,
+        marginRight: -26,
+        marginBottom: -80,
+        paddingLeft: 26,
+        paddingRight: 26,
+        paddingTop: 14,
+        paddingBottom: 20,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        background: `linear-gradient(rgba(7,10,15,0), ${T.surface} 22%)`,
+        borderTop: `1px solid ${T.bd2}`,
+        boxShadow: "0 -16px 28px -12px rgba(0,0,0,.5)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function PlumbingLine({ turn }: { turn: TranscriptTurn }) {
   const t = useT();
   return (
@@ -415,8 +454,6 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
           display: "flex",
           flexDirection: "column",
           gap: 12,
-          overflowY: "auto",
-          maxHeight: 420,
           padding: "2px 2px 4px",
         }}
       >
@@ -447,7 +484,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
       </div>
 
       {mode === "answer" && openFollowUpId != null && (
-        <>
+        <StickyComposerDock>
           {openFollowUpSuggestions && (
             <SuggestedReplyChips
               suggestions={openFollowUpSuggestions}
@@ -466,15 +503,17 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
             followUpId={openFollowUpId}
             onSubmitted={() => fetchTranscript(jobId)}
           />
-        </>
+        </StickyComposerDock>
       )}
       {mode === "revise" && (
-        <ChatBox
-          kind="revise"
-          jobId={jobId}
-          fixedTarget={fixedTarget}
-          onSubmitted={() => fetchTranscript(jobId)}
-        />
+        <StickyComposerDock>
+          <ChatBox
+            kind="revise"
+            jobId={jobId}
+            fixedTarget={fixedTarget}
+            onSubmitted={() => fetchTranscript(jobId)}
+          />
+        </StickyComposerDock>
       )}
     </div>
   );
