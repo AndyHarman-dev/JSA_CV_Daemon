@@ -970,6 +970,50 @@ whether a REASONING card now appears; if their specific model never sends
 non-streamed, by design, in structured mode) with no reasoning card — not a bug, a
 model-capability ceiling.
 
+2026-09-03 (feature, follow-up): Given the previous entry's caveat — a given routed
+model may never send a `reasoning_content` delta, in which case there is still no
+live-feedback affordance while the agent works — the user asked for a guaranteed
+fallback: "Whenever reasoning isn't streamed... let's instead of the thinking reuse
+the same widget and just put 'Thinking' there instead of the stream. The UI feedback
+must be ANYWAY [present]." Previously `LiveBubble` (`frontend/src/components/
+AgentThread.tsx`) only rendered the REASONING card when `reasoning.trim().length > 0`
+— with a separate, differently-styled plain "Working…" line as the fallback when both
+`content` and `reasoning` were empty. That is two different widgets for the same
+"agent is working" signal, and the second one is a fake affordance in exactly the case
+the user described (reasoning genuinely never streams).
+
+Changed `LiveBubble` so the REASONING card itself is the single live-feedback widget:
+`showReasoningCard = hasReasoning || !hasContent` — i.e. the card is shown whenever
+there is no content yet, regardless of whether reasoning ever streamed. Its body shows
+the real streamed `reasoning` text when present, otherwise a static "Thinking…"
+placeholder (same spinner-icon + text row style the old fallback used, now nested
+inside the card instead of living beside it). Once `content` starts arriving, the card
+only stays visible if real reasoning was actually captured — no stale "Thinking…"
+once the model has visibly moved on to answering; this matches the existing rule (see
+the code comment) against showing a fake affordance. The old free-standing "Working…"
+line for the `!hasContent` case was removed as redundant, not left as a second
+indicator alongside the reasoning card. Added `agentThread.thinking: "Thinking…"` to
+`frontend/src/i18n/strings.en.json` and removed the now-dead `agentThread.working`
+key (grepped confirmed unused anywhere else in `frontend/src`) — note locale catalogs
+for other languages don't have `agentThread.reasoning` either yet, i.e.
+`scripts/translate-ui.sh` was never run after Phase 8 shipped; this is a pre-existing
+gap, not something this change introduced or fixed.
+
+Added 3 tests to `frontend/src/__tests__/AgentThread.test.tsx`: Thinking placeholder
+shown with empty reasoning/content, real reasoning text shown once streamed, and the
+REASONING card correctly absent once content has started with no reasoning captured.
+Also added `streamBuffers: {}` to the file's shared `beforeEach` reset, since no prior
+test in this file touched that store slice.
+
+Verification: verified — full frontend suite (305/305, up from 302 with the 3 new
+tests; the codebase's pre-existing baseline was 273 per this project's memory, so the
+route to 302 reflects tests added across other work not part of this plan) and
+`npm run build` (rebuilt `jsa/static` — required per this project's convention, since
+`jsa` serves the built bundle, not live source) both pass. Not independently
+re-verified: the live browser appearance (no local job/DB to drive `job.state ===
+"running"` in this checkout, same limitation noted throughout this plan) — the user
+should confirm the placeholder renders as expected on their next live run.
+
 ## Decisions Log
 
 _Reserved for the user. Not to be written by the agent._

@@ -199,21 +199,27 @@ function NoticeLine({ turn }: { turn: TranscriptTurn }) {
   );
 }
 
-// Phase 8 — the live, in-progress agent turn rendered from the streaming buffer. Only
-// shows the REASONING card when reasoning chunks actually arrived (claude-cli's
-// thinking_delta) — a structured-mode or google-cli session never streams reasoning, and
-// showing an empty collapsible card there would be a fake affordance. No content and no
-// reasoning yet -> the plain "working…" indicator, the honest ceiling for those sessions.
+// Phase 8 — the live, in-progress agent turn rendered from the streaming buffer.
+// The REASONING card is the ONE live-feedback widget for the pre-content phase — it
+// is never absent while the turn has no content yet, regardless of whether the
+// backend actually streamed reasoning (claude-cli's thinking_delta) or not (a
+// structured-mode/google-cli session, or a routed model with no reasoning_content
+// channel at all): with real reasoning it shows the streamed text, otherwise it
+// falls back to a static "Thinking…" placeholder — there must always be SOME live
+// affordance, never a silent gap. Once content starts arriving, the card only shows
+// if real reasoning was actually captured (no stale "Thinking…" once the model has
+// visibly moved on to answering).
 function LiveBubble({ content, reasoning }: { content: string; reasoning: string }) {
   const t = useT();
   const [reasoningOpen, setReasoningOpen] = useState(true);
   const hasReasoning = reasoning.trim().length > 0;
   const hasContent = content.trim().length > 0;
+  const showReasoningCard = hasReasoning || !hasContent;
   return (
     <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, width: "100%" }}>
       {avatarFor("assistant", t)}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: "82%", width: "100%" }}>
-        {hasReasoning && (
+        {showReasoningCard && (
           <div
             style={{
               border: `1px dashed ${T.bd2}`,
@@ -263,12 +269,21 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
                   wordBreak: "break-word",
                 }}
               >
-                {reasoning}
+                {hasReasoning ? (
+                  reasoning
+                ) : (
+                  <span style={{ display: "flex", alignItems: "center", gap: 7, fontStyle: "italic" }}>
+                    <span style={{ display: "flex", animation: "jsspin 1s linear infinite" }}>
+                      <Icon name="refresh" size={12} />
+                    </span>
+                    {t("agentThread.thinking")}
+                  </span>
+                )}
               </div>
             )}
           </div>
         )}
-        {hasContent ? (
+        {hasContent && (
           <div
             style={{
               background: T.aSoft,
@@ -280,22 +295,6 @@ function LiveBubble({ content, reasoning }: { content: string; reasoning: string
             }}
           >
             <MarkdownPreview markdown={content} style={{ color: T.ink }} />
-          </div>
-        ) : (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              font: `400 12.5px ${T.ui}`,
-              color: T.ink3,
-              fontStyle: "italic",
-            }}
-          >
-            <span style={{ display: "flex", animation: "jsspin 1s linear infinite" }}>
-              <Icon name="refresh" size={12} />
-            </span>
-            {t("agentThread.working")}
           </div>
         )}
       </div>

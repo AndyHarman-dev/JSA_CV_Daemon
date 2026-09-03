@@ -35,7 +35,7 @@ function turn(overrides: Partial<TranscriptTurn> = {}): TranscriptTurn {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting", transcripts: {} });
+  useStore.setState({ jobs: {}, selectedId: undefined, wsStatus: "connecting", transcripts: {}, streamBuffers: {} });
   (api.getJobs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
@@ -197,5 +197,50 @@ describe("AgentThread", () => {
       expect(textarea.value).toBe(longSuggestion);
     });
     expect(api.answerFollowUp).not.toHaveBeenCalled();
+  });
+
+  it("shows a Thinking placeholder in the REASONING card when no reasoning has streamed yet", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    useStore.setState({
+      streamBuffers: { job1: { stage: "cv_adjust", content: "", reasoning: "" } },
+    });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("REASONING")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Thinking…")).toBeInTheDocument();
+  });
+
+  it("shows the real streamed reasoning text in the REASONING card once it arrives", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    useStore.setState({
+      streamBuffers: {
+        job1: { stage: "cv_adjust", content: "", reasoning: "weighing the JD against the CV..." },
+      },
+    });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("weighing the JD against the CV...")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+  });
+
+  it("hides the REASONING card once content has started arriving with no reasoning captured", async () => {
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    useStore.setState({
+      streamBuffers: { job1: { stage: "cv_adjust", content: "Adjusted CV so far...", reasoning: "" } },
+    });
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Adjusted CV so far...")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("REASONING")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
   });
 });
