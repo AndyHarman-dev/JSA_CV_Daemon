@@ -249,7 +249,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "fr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -501,7 +504,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "de": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -753,7 +759,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "pt": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1005,7 +1014,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "it": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1257,7 +1269,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "nl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1509,7 +1524,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "sv": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1761,7 +1779,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "pl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2013,7 +2034,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "ru": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2265,7 +2289,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "tr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2517,7 +2544,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "ar": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2769,7 +2799,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "he": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3021,7 +3054,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "zh": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3273,7 +3309,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "ko": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3525,7 +3564,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "hi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3777,7 +3819,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "id": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4029,7 +4074,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "ja": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4281,7 +4329,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "vi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4533,7 +4584,10 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   },
   "th": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4785,6 +4839,9 @@
     "jobList.filterDone": "283e91eb85d58ffc2ad922884b644c41b54140660f6d1fda3c403d543eedd839",
     "jobList.filterFailed": "02bd349299173f7fdf2dbc983d70961b26d74e6260c3755a058e25f5ee172f98",
     "jobList.filterDismissed": "73d42901f5150b6687abc8543075bcaa1aef7cbc423f87864c0662461604bd41",
-    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e"
+    "jobList.filterClear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
+    "agentThread.reasoningStepCount": "7b859bb9f07beb60d0589d1bfa4784dacd8850e5b7f5bb5bf9908c095ba4d46e",
+    "agentThread.reasoningEarlierSteps": "d2a1aae6c68b9534e072afcb534ccae5089d8801b0687bf6bad4ad71592eead6",
+    "agentThread.toolBadge": "91b097d7d4c6a45d9fbe081e0deda6905bb714203eda4271fd81d670be0b7485"
   }
 }
