@@ -79,6 +79,12 @@ class Message(Base):
     stage: Mapped[Stage] = mapped_column(SAEnum(Stage))
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
+    # Finished, joined reasoning text for this turn (streaming's REASONING channel),
+    # persisted only once the turn completes -- never the per-token buffer. Nullable:
+    # most turns have no separate reasoning channel. _load_history projects rows to a
+    # two-field HistoryTurn(role, content), so this column is structurally invisible
+    # to replay -- no exclusion code needed.
+    reasoning: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     job: Mapped[Job] = relationship(back_populates="messages")
 

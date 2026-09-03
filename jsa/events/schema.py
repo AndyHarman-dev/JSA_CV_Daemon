@@ -103,6 +103,29 @@ class InferProgressEvent:
     message: str = ""
 
 
+@dataclass
+class AgentChunkEvent:
+    """A batched slice of streamed model output. Never the raw per-token
+    stream — jsa/pipeline/stages.py's accumulator coalesces before publishing."""
+    type: Literal["agent_chunk"] = "agent_chunk"
+    job_id: str = ""
+    stage: str = ""
+    kind: Literal["content", "reasoning"] = "content"
+    text: str = ""
+
+
+@dataclass
+class AgentTurnEndEvent:
+    """Marks the end of one streamed turn's chunk sequence. superseded=True
+    tells clients to discard the streamed buffer entirely — emitted by any of
+    the retry/nudge/self-heal paths that replay a whole turn and produce a
+    second assistant turn."""
+    type: Literal["agent_turn_end"] = "agent_turn_end"
+    job_id: str = ""
+    stage: str = ""
+    superseded: bool = False
+
+
 def event_to_dict(event) -> dict:
     """Convert any event dataclass to a JSON-serialisable dict."""
     return dataclasses.asdict(event)

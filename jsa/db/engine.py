@@ -79,6 +79,12 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE follow_ups ADD COLUMN suggested_replies TEXT"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # reasoning: finished, joined reasoning text for a streamed turn (agent chat
+        # upgrade Phase 6). Nullable — most turns have none.
+        try:
+            await conn.execute(text("ALTER TABLE messages ADD COLUMN reasoning TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------

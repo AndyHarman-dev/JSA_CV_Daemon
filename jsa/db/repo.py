@@ -479,6 +479,7 @@ async def checkpoint(
             stage=message_stage,
             role=msg["role"],
             content=msg["content"],
+            reasoning=msg.get("reasoning"),
         )
         session.add(m)
 

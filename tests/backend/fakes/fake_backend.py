@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentChunk, AgentReply, HistoryTurn, OnChunk, SessionHandle
 
 
 @dataclass
@@ -54,10 +54,20 @@ class FakeAgentBackend(AgentBackend):
         replies: list[AgentReply],
         *,
         supports_structured_output: bool = False,
+        supports_streaming: bool = False,
+        scripted_chunks: list[list[AgentChunk]] | None = None,
     ) -> None:
-        """replies: scripted sequence. Each start_session and send_message pops the next."""
+        """replies: scripted sequence. Each start_session and send_message pops the next.
+
+        ``scripted_chunks``, when given, is a parallel list of AgentChunk lists —
+        one entry per start_session/send_message call — replayed through
+        ``on_chunk`` (if the caller supplied one) before the corresponding reply
+        is returned.
+        """
         self._replies: list[AgentReply] = list(replies)
         self.supports_structured_output = supports_structured_output
+        self.supports_streaming = supports_streaming
+        self._scripted_chunks: list[list[AgentChunk]] = list(scripted_chunks or [])
         # Recorded for structured-mode tests: the parity gate asserts the schema kwarg
         # actually arrived, and a fresh-session-retry test asserts start_session was
         # re-issued the expected number of times with identical args.
@@ -69,15 +79,23 @@ class FakeAgentBackend(AgentBackend):
             raise IndexError("FakeAgentBackend: no more scripted replies")
         return self._replies.pop(0)
 
+    async def _emit_scripted_chunks(self, on_chunk: OnChunk | None) -> None:
+        if on_chunk is None or not self._scripted_chunks:
+            return
+        for chunk in self._scripted_chunks.pop(0):
+            await on_chunk(chunk)
+
     async def start_session(
         self,
         system_prompt: str,
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> tuple[FakeSessionHandle, AgentReply]:
         """Consume the first reply and return (handle, reply)."""
         self.start_session_call_count += 1
         self.received_schemas.append(structured_schema)
+        await self._emit_scripted_chunks(on_chunk)
         handle = FakeSessionHandle(
             id=str(uuid4()),
             external_id=None,
@@ -108,8 +126,10 @@ class FakeAgentBackend(AgentBackend):
         handle: SessionHandle,
         text: str,
         structured_schema: dict[str, Any] | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> AgentReply:
         """Consume and return the next scripted reply."""
+        await self._emit_scripted_chunks(on_chunk)
         return self._pop_reply()
 
     async def end_session(self, handle: SessionHandle) -> None:

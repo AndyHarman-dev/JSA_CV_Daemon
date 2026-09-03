@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, OnChunk, SessionHandle
 from jsa.agents.protocol import ProtocolError
 from jsa.render.registry import renderer_for
 from jsa.render.serialize import cover_letter_to_markdown, cv_to_markdown
@@ -44,6 +44,7 @@ from jsa.events.schema import (
 )
 from jsa.pipeline.checkpoints import checkpoint
 from jsa.pipeline.prompt_assembly import assemble_system_prompt
+from jsa.pipeline.streaming import ChunkAccumulator
 from jsa.prompts import loader
 from jsa.schema.turn_models import adapt_history, json_schema_for
 from jsa.store import cv_structure as cv_structure_store
@@ -286,6 +287,19 @@ def _schema_kwargs(schema: dict | None) -> dict:
     return {"structured_schema": schema} if schema is not None else {}
 
 
+def _streaming_kwargs(backend: AgentBackend, on_chunk: OnChunk | None) -> dict:
+    """The ``on_chunk=`` kwarg dict for a start_session/send_message call.
+
+    Empty unless the backend declares ``supports_streaming`` AND a callback is
+    actually in hand — mirrors ``_schema_kwargs``'s conditional-kwarg idiom, so a
+    non-streaming backend (e.g. google-cli) is never handed a kwarg it doesn't
+    declare.
+    """
+    if on_chunk is None or not getattr(backend, "supports_streaming", False):
+        return {}
+    return {"on_chunk": on_chunk}
+
+
 def _structured_schema_for(backend: AgentBackend, stage: Stage) -> dict | None:
     """The JSON schema to enforce for ``stage`` on ``backend``, or ``None``.
 
@@ -420,6 +434,8 @@ async def _self_heal_final(
     accumulated_messages: list[dict],
     language: str = "en",
     structured: bool = False,
+    on_chunk: OnChunk | None = None,
+    accumulator: ChunkAccumulator | None = None,
 ) -> tuple[AgentReply, list[dict]]:
     """Re-prompt the open session when a FINAL block fails content validation.
 
@@ -468,9 +484,16 @@ async def _self_heal_final(
                 )
             )
         )
-        reply = await backend.send_message(handle, message)
+        if accumulator is not None:
+            # The previous attempt's streamed buffer (if any) is being replaced by
+            # this correction turn -- tell the frontend to discard it.
+            await accumulator.end_turn(superseded=True)
+        reply = await backend.send_message(handle, message, **_streaming_kwargs(backend, on_chunk))
+        assistant_msg = {"role": "assistant", "content": reply.raw}
+        if accumulator is not None:
+            assistant_msg["reasoning"] = accumulator.take_reasoning()
         accumulated_messages.append({"role": "user", "content": message})
-        accumulated_messages.append({"role": "assistant", "content": reply.raw})
+        accumulated_messages.append(assistant_msg)
 
     summary_nudge = _CV_SUMMARY_NUDGE_STRUCTURED if structured else _CV_SUMMARY_NUDGE
 
@@ -507,6 +530,8 @@ async def _start_session_with_retry(
     schema: dict | None,
     stage: Stage,
     job: Job,
+    on_chunk: OnChunk | None = None,
+    accumulator: ChunkAccumulator | None = None,
 ) -> tuple[SessionHandle, AgentReply]:
     """Start a fresh session, retrying a structured-mode wire-level ProtocolError.
 
@@ -523,7 +548,7 @@ async def _start_session_with_retry(
     internal nudge already covers a malformed reply, so re-raising immediately
     preserves the pre-existing hard-fail behavior byte-for-byte.
     """
-    kwargs = _schema_kwargs(schema)
+    kwargs = _schema_kwargs(schema) | _streaming_kwargs(backend, on_chunk)
     attempts = 0
     while True:
         try:
@@ -532,6 +557,8 @@ async def _start_session_with_retry(
             if schema is None or attempts >= MAX_FINAL_CORRECTIONS:
                 raise
             attempts += 1
+            if accumulator is not None:
+                await accumulator.end_turn(superseded=True)
             await bus.publish(
                 event_to_dict(
                     LogEvent(
@@ -553,6 +580,8 @@ async def _send_message_with_wire_retry(
     schema: dict | None,
     stage: Stage,
     job: Job,
+    on_chunk: OnChunk | None = None,
+    accumulator: ChunkAccumulator | None = None,
 ) -> tuple[AgentReply, list[dict]]:
     """Send ``text``, retrying a structured-mode wire-level ProtocolError with a
     corrective re-send.
@@ -573,17 +602,23 @@ async def _send_message_with_wire_retry(
     """
     sent_text = text
     attempts = 0
+    kwargs = _streaming_kwargs(backend, on_chunk)
     while True:
         try:
-            reply = await backend.send_message(handle, sent_text)
+            reply = await backend.send_message(handle, sent_text, **kwargs)
+            assistant_msg = {"role": "assistant", "content": reply.raw}
+            if accumulator is not None:
+                assistant_msg["reasoning"] = accumulator.take_reasoning()
             return reply, [
                 {"role": "user", "content": sent_text},
-                {"role": "assistant", "content": reply.raw},
+                assistant_msg,
             ]
         except ProtocolError:
             if schema is None or attempts >= MAX_FINAL_CORRECTIONS:
                 raise
             attempts += 1
+            if accumulator is not None:
+                await accumulator.end_turn(superseded=True)
             await bus.publish(
                 event_to_dict(
                     LogEvent(
@@ -693,6 +728,13 @@ async def run_stage(
     schema = _structured_schema_for(general_purpose_backend, stage)
     structured = schema is not None
 
+    # One accumulator per stage invocation; None when the backend can't stream, so
+    # every downstream _streaming_kwargs() call degrades to "no on_chunk kwarg"
+    # cleanly (same conditional-kwarg pattern as structured_schema).
+    streaming_enabled = getattr(general_purpose_backend, "supports_streaming", False)
+    accumulator = ChunkAccumulator(job.id, stage.value) if streaming_enabled else None
+    on_chunk = accumulator.add_chunk if accumulator is not None else None
+
     # Every restore_session call below must use THIS, not the bare `system_prompt` —
     # see assemble_system_prompt's docstring: structured-capable backends are
     # wire-stateless and resend the system prompt on every call, so the structured
@@ -756,7 +798,8 @@ async def run_stage(
                 resume_system_prompt, combined_history, revision_session_id, **restore_kwargs
             )
             reply, accumulated_messages = await _send_message_with_wire_retry(
-                general_purpose_backend, handle, answer_text, schema, stage, job
+                general_purpose_backend, handle, answer_text, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
         else:
             # Fresh revision: restore the original stage's session and send the
@@ -769,7 +812,8 @@ async def run_stage(
                 resume_system_prompt, history, revision_session_id, **restore_kwargs
             )
             reply, accumulated_messages = await _send_message_with_wire_retry(
-                general_purpose_backend, handle, instruction, schema, stage, job
+                general_purpose_backend, handle, instruction, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
     elif stage in (Stage.cv_adjust, Stage.cover_letter):
         # Determine fresh vs resume by checking whether Message rows exist for
@@ -786,7 +830,8 @@ async def run_stage(
             )
             # Only the new turns are new; prior messages already persisted.
             reply, accumulated_messages = await _send_message_with_wire_retry(
-                general_purpose_backend, handle, answer_text, schema, stage, job
+                general_purpose_backend, handle, answer_text, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
         else:
             # Fresh session. cover_letter gets a company-research brief and the approved
@@ -818,13 +863,17 @@ async def run_stage(
                 system_prompt, language=language_code, structured_model=schema
             )
             handle, reply = await _start_session_with_retry(
-                general_purpose_backend, fresh_system_prompt, initial_user_msg, schema, stage, job
+                general_purpose_backend, fresh_system_prompt, initial_user_msg, schema, stage, job,
+                on_chunk=on_chunk, accumulator=accumulator,
             )
             # Accumulate all messages for this session (system, user, assistant reply)
+            fresh_assistant_msg = {"role": "assistant", "content": reply.raw}
+            if accumulator is not None:
+                fresh_assistant_msg["reasoning"] = accumulator.take_reasoning()
             accumulated_messages = [
                 {"role": "system", "content": fresh_system_prompt},
                 {"role": "user", "content": initial_user_msg},
-                {"role": "assistant", "content": reply.raw},
+                fresh_assistant_msg,
             ]
     else:
         raise ValueError(f"Unexpected stage: {stage}")
@@ -856,7 +905,12 @@ async def run_stage(
         accumulated_messages=accumulated_messages,
         language=language_code,
         structured=structured,
+        on_chunk=on_chunk,
+        accumulator=accumulator,
     )
+
+    if accumulator is not None:
+        await accumulator.end_turn(superseded=False)
 
     # Guard against a stale result: the agent turn above may have run for a long
     # time, during which the job could have been dismissed/cancelled/deleted on
