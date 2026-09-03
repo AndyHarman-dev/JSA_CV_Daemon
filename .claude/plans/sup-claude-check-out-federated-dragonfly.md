@@ -754,6 +754,100 @@ deselected(integration)**, full suite, no regressions. Note: the repo's system
 `python3` lacks `pytest-asyncio` — tests must run via `.venv/bin/python -m pytest`,
 not a bare `pytest`/`python3 -m pytest` on PATH.
 
+2026-09-03 (implementation): Context — implemented Phase 3 (thread UI) on the same
+branch, via a coder subagent. Actions: new `AgentThread.tsx` (turns rendered as
+letter-avatar bubbles, `answer`/`none`/`revise` modes, plumbing turns behind a
+`SHOW_INTERNALS` toggle default off); `FollowUpPane.tsx` rewritten as a thin wrapper
+delegating to `AgentThread(mode="answer")`; `store.ts` gained `transcripts` +
+`fetchTranscript`, and WS handlers for `transcript_changed`/`backend_switched`/
+`model_switched`/`status_changed` now refetch only that job's transcript instead of a
+full `refetchAll()`. Decisions — code review (medium, after this phase) found the new
+`AgentThread` dropped the old FollowUpPane's `onSubmitted` callback, relying solely on
+WS `transcript_changed` for refresh — a real correctness bug (a dropped WS connection
+could leave an answered FollowUp appearing still open); fixed by wiring
+`onSubmitted={() => fetchTranscript(jobId)}` on both `ChatBox` mounts. Also caught and
+fixed (self, not auto-fixed): a stale sort-order docstring left over from Phase 2's
+merge-key correction, and a real containment-dedupe false-positive risk (a short/common
+answer like "yes" spuriously matching unrelated plumbing text as a substring) — fixed
+with `_MIN_CONTAINMENT_LEN = 12` + exact-equality fallback below that threshold.
+Verification: full backend (1716 passed) + frontend (298 passed) suites, `npm run
+build` clean.
+
+2026-09-03 (implementation): Context — implemented Phase 4/5 (suggested replies:
+backend schema + UI chips) on the same branch. Actions: `CvTurn`/`ClTurn` gained
+`suggested_replies: list[str] | None` with no default (so it lands in JSON-Schema
+`required`); `FollowUp.suggested_replies` column (JSON-encoded, additive `ALTER TABLE`
+migration); `SuggestedReplyChips` in `AgentThread.tsx` with a `shouldSendImmediately`
+heuristic (short/decisive suggestions send immediately, longer ones populate the
+textarea); `ChatBox` converted to `forwardRef` exposing `sendText`/`populateText`.
+Decisions — code review (medium, after this phase) found 6 issues, all auto-fixed:
+dedupe-rule ordering (RevisionRequest-instruction match must run before the
+answered-answer containment fold, or a real revision instruction containing a prior
+short answer as a substring gets silently dropped), the chip immediate-send regex not
+properly anchored, test-correctness fixes, `wrap_canonical_for_sentinel` missing a
+`<<<SUGGESTIONS>>>` block (a BF-19 backend-switch fidelity gap), the `<<<SUGGESTIONS>>>`
+marker regex matching the literal substring anywhere instead of requiring it to start
+its own line, and a `build_transcript` session-detachment risk (`DetachedInstanceError`)
+from calling it after the DB session closed. These fixes were left uncommitted by the
+reviewer; committed separately as `0b00a7f` after discovery via `git status`.
+Verification: full backend + frontend suites green, `npm run build` clean.
+
+2026-09-03 (implementation): Context — implemented Phase 6+7 (streaming protocol +
+per-backend implementations) on the same branch, the plan's explicitly highest-risk
+bundle. Actions: `jsa/pipeline/streaming.py::ChunkAccumulator` (75ms/200-char batching,
+`force_flush`/`end_turn`/`reset`); `AgentChunkEvent`/`AgentTurnEndEvent`; `on_chunk`/
+`on_retry` threaded conditionally through every backend's `start_session`/
+`send_message` (mirrors the existing `structured_schema` conditional-kwarg pattern);
+real SSE added to `mistral`/`openrouter`/`opencode-go`(`/chat`)/`opencode-zen`/
+`anthropic`(SDK `messages.stream()`)/`gemini`; `claude_cli.py` gained
+`run_killable_streaming` (new sibling function in `_subprocess.py` — `run_killable`
+itself untouched, confirmed via `git diff --stat` showing zero line changes) plus a
+whitelist NDJSON parser (only `stream_event`→`content_block_delta`→`text_delta`|
+`thinking_delta` become chunks — a live capture showed the stream also carries hook
+system events, `rate_limit_event`, and `result`, which must never leak into the user
+thread). Decisions — first pass had a self-identified gap: the turn-supersession
+signal (`on_retry` → `end_turn(superseded=True)`) was only wired at 3 of 6 documented
+supersede sources; closed in a follow-up pass adding all remaining `_parse_with_nudge`
+copies and in-backend `retry_transient` loops (deliberately excluding `google_cli.py`,
+since `supports_streaming=False` there means `stages.py` never passes the kwarg).
+Code review (medium, run after both passes, first attempt failed with an HTTP 429
+session-limit error and was retried successfully) found and fixed 6 real bugs:
+`AnthropicAPIBackend` didn't accept `on_retry` despite declaring
+`supports_streaming=True` (guaranteed `TypeError` on first retry); four backends
+parsed an HTTP-200 JSON error envelope during streaming as an empty SSE stream instead
+of routing it through BF-19 classification; `gemini_api.py`'s streaming path ignored
+`finishReason == "MAX_TOKENS"`, silently returning truncated replies as complete;
+`claude_cli.py`'s streaming handler classified any error-shaped `result` event as
+`AgentLimitReached` instead of only genuine quota signals; `end_turn(superseded=True)`
+didn't clear `_full_reasoning`, contaminating a retried turn's reasoning with a
+discarded attempt's text; `end_turn(superseded=False)` fired before the stale-job
+guard/checkpoint, letting a dismissed job announce "turn complete" with nothing
+persisted. Fixes committed as `655a99a`. Verification: 1748/1748 backend tests pass
+(1 pre-existing unrelated flaky test noted, `test_dev_tunnel.py`); existing
+`test_opencode_zen.py` (935 lines) passes unchanged.
+
+2026-09-03 (implementation): Context — implemented Phase 8 (streaming UI) on the same
+branch. Actions: `store.ts` gained `streamBuffers: Record<string, {stage, content,
+reasoning}>`, populated by `agent_chunk` WS events and cleared unconditionally on
+`agent_turn_end` (both the completed and superseded cases end the buffer's life —
+completed because the checkpoint already landed and `transcript_changed` will render
+the real turn, superseded because the buffer is stale); `AgentThread.tsx` gained
+`LiveBubble`, rendering the in-progress agent turn with a collapsible REASONING card
+(bolt icon, chevron, open by default) only when reasoning chunks actually arrived,
+otherwise a plain "working…" spinner — the honest ceiling for `google-cli` and every
+structured-mode session, which never stream reasoning. `WSEvent` extended with
+`agent_chunk`/`agent_turn_end`, mirroring the backend event schema exactly; both wire
+generically through the existing `applyEvent` dispatch with no changes needed to
+`ws.ts`. Decisions — none; implementation matched the plan's Solutions section.
+Verification: `tsc --noEmit` clean, 302/302 frontend tests pass, `npm run build`
+clean (rebuilt `jsa/static`). Not run: `scripts/translate-ui.sh` (locale catalog
+sync) — this environment has no `ANTHROPIC_API_KEY` and its `--backend cli` path
+hard-codes `python` instead of `python3`, both pre-existing environment gaps
+unrelated to this change. Not verified: the plan's manual live-run check (a
+`claude-cli` job streaming reasoning+content, an `anthropic` structured job confirming
+no fake REASONING card) — no local sqlite DB/job exists in this checkout to drive
+that state, same limitation noted for Phase 1's visual check.
+
 ## Decisions Log
 
 _Reserved for the user. Not to be written by the agent._

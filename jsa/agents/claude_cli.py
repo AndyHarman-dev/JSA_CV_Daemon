@@ -20,6 +20,7 @@ from pathlib import Path
 from jsa.agents._subprocess import run_killable, run_killable_streaming
 from jsa.agents.base import (
     AgentBackend,
+    AgentBackendUnavailable,
     AgentChunk,
     AgentLimitReached,
     AgentReply,
@@ -266,8 +267,16 @@ class ClaudeCliBackend(AgentBackend):
             raise AgentLimitReached(json.dumps(limit_event)[:500])
 
         if error_result_event is not None:
+            # An error-shaped result (e.g. error_max_turns, error_during_execution)
+            # with exit code 0 is not a quota signal (handled above) and not a
+            # subprocess crash -- but it is also not something retrying the SAME
+            # backend/model is likely to fix. Route it through AgentBackendUnavailable
+            # (a RuntimeError BF-19 recognizes) rather than the plain ClaudeCliError
+            # the non-streaming path uses for a genuine non-zero exit, so this still
+            # engages the BF-19 fallback chain instead of hard-failing the job on the
+            # very first backend -- see CLAUDE.md "Backend fallback chain (BF-19)".
             ctx = f" [{context}]" if context else ""
-            raise ClaudeCliError(
+            raise AgentBackendUnavailable(
                 f"claude CLI reported an error-shaped result{ctx}: "
                 f"{json.dumps(error_result_event)[:500]}"
             )

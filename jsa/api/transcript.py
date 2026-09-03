@@ -146,11 +146,18 @@ def build_transcript(
     # --- verdict --------------------------------------------------------
     if job.fit_reason:
         # Fixed timestamp source — never job.updated_at, which drifts on every
-        # unrelated update to the job row.
-        if follow_ups:
-            verdict_ts = min(fu.asked_at for fu in follow_ups)
-        elif messages:
-            verdict_ts = min(m.created_at for m in messages)
+        # unrelated update to the job row. Scoped to the fit_assessment stage
+        # specifically (not job-wide) -- a BF-19 rewind can re-enter
+        # fit_assessment after a later stage (e.g. cv_adjust) already asked and
+        # got answered a FollowUp; a job-wide min() would then anchor the verdict
+        # at that earlier, unrelated FollowUp's timestamp and render the fit
+        # verdict before the Q&A that actually preceded it in real time.
+        fit_follow_ups = [fu for fu in follow_ups if fu.stage == Stage.fit_assessment]
+        fit_messages = [m for m in messages if m.stage == Stage.fit_assessment]
+        if fit_follow_ups:
+            verdict_ts = min(fu.asked_at for fu in fit_follow_ups)
+        elif fit_messages:
+            verdict_ts = min(m.created_at for m in fit_messages)
         else:
             verdict_ts = job.created_at
         turns.append(
@@ -277,6 +284,7 @@ def build_transcript(
                 text=_unwrap_for_display(msg.content),
                 created_at=msg.created_at,
                 source_id=msg.id,
+                reasoning=msg.reasoning,
             )
         )
 

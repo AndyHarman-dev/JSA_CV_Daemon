@@ -369,7 +369,14 @@ def unwrap_sentinel_to_canonical(sentinel_text: str) -> str:
     except ProtocolError:
         return sentinel_text
     if reply.kind == "needs_input":
-        return json.dumps({"kind": "question", "question": reply.question, "payload": None})
+        data: dict[str, Any] = {
+            "kind": "question",
+            "question": reply.question,
+            "payload": None,
+        }
+        if reply.suggested_replies:
+            data["suggested_replies"] = reply.suggested_replies
+        return json.dumps(data)
     try:
         payload = json.loads(reply.content)
     except json.JSONDecodeError:
