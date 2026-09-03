@@ -884,6 +884,92 @@ through fit_assessment and watching the REASONING card render) — same
 no-local-DB limitation noted for every other manual-verification gap in this
 plan; the user should confirm this resolves what they observed.
 
+2026-09-03 (bugfix, continued): The user ran a live `jsa` job with their actual
+configured backends — `opencode-zen` primary, `opencode-go` fallback — and confirmed
+the previous fit_assessment fix did NOT resolve it: no reasoning ever appeared, and
+even the final `content` came back as one whole blob, not token-by-token, despite
+`supports_streaming = True` on both backends. The user correctly guessed the cause
+themselves ("we have a structured output here so he'll be streaming a json... how are
+you going to distinct between a json brace `{` and the actual text"). Root cause,
+confirmed by reading the code: both `opencode-zen` and `opencode-go` are
+structured-capable (`supports_structured_output = True`), and `_structured_schema_for`
+(`jsa/pipeline/stages.py`) puts every stage on EVERY structured-capable backend into
+structured JSON mode unconditionally — there is no opt-out, so this is not a special
+case, it is these backends' only mode in normal operation. Both `_openai_compat.py`
+(the shared base `mistral`/`openrouter`/`opencode-go`'s `/chat` protocol build on) and
+`opencode_zen.py`'s independent duplicate copy (see its module docstring for why it's
+not built on the shared base) had the same line: `stream_cb = on_chunk if
+structured_schema is None else None` — i.e. ANY structured call disabled SSE
+entirely, content and reasoning alike, unconditionally. Since these backends are
+always in structured mode, streaming across this whole family was fully inert in
+practice, matching the user's report exactly (`claude-cli`, the one backend that
+showed streaming in the earlier fix's live test, is sentinel-only —
+`supports_structured_output = False` — so it never hit this gate).
+
+Investigated whether the gate was actually necessary: read `_call_api_once` in both
+files and confirmed `response_format` + `stream: true` is sent as a normal, already-
+supported combination on this OpenAI-compatible wire shape — nothing in the payload
+builder or the 200/4xx/5xx classification logic assumes non-streaming when structured.
+The design handoff (`design_handoff_agent_chat_upgrade/README.md`, feature 2) also
+states plainly for this backend family: "SSE streaming exists, but a separate
+reasoning delta only exists for the specific proxied models that expose one... For
+everything else on these backends, stream `content` only — do not fabricate a
+reasoning stream" — i.e. the design's intent was real SSE streaming for this family
+in general, not a blanket disable under structured mode; the blanket disable was an
+implementation shortcut from Phase 6/7, not a locked design decision (not memorialized
+in CLAUDE.md as one).
+
+Fix: in both `jsa/agents/_openai_compat.py` and `jsa/agents/opencode_zen.py`, added a
+module-level `_reasoning_only(on_chunk)` helper that wraps `on_chunk` to forward only
+`kind="reasoning"` chunks, dropping `kind="content"` ones (the raw JSON `content`
+delta in structured mode is not human-readable mid-stream, e.g. a stray `{`, and would
+corrupt the chat bubble — this is exactly the ambiguity the user flagged, resolved by
+never showing it rather than trying to distinguish JSON structure from prose text).
+`_call_api` in both files now does `stream_cb = _reasoning_only(on_chunk) if
+structured_schema is not None else on_chunk` instead of gating streaming off entirely,
+and `retry_cb = on_retry` unconditionally (previously also gated off for structured
+calls) — so a retried structured call still correctly discards any reasoning streamed
+by the abandoned attempt via `ChunkAccumulator.end_turn(superseded=True)`. The
+accumulated `content` (full JSON) is still returned as the raw reply regardless of
+what's forwarded to `on_chunk` — `_consume_sse` already accumulated it internally
+either way, unchanged. `mistral.py`, `openrouter.py`, and `opencode_go.py`'s
+`/chat/completions` protocol all inherit the fix for free via the shared base;
+`opencode_go.py`'s `/messages` protocol needed no change — those models are
+sentinel-only (`supports_structured_output = False` on that instance), so they never
+hit this gate in the first place. `anthropic_api.py`'s equivalent gate
+(`use_stream = structured_schema is None and on_chunk is not None`) was NOT touched —
+out of scope (the user doesn't use this backend) and a separate, larger gap besides:
+that backend never enables extended thinking at all, so even sentinel-mode streaming
+there has no reasoning channel to forward regardless of this fix's pattern. Left as a
+known gap, not fixed here.
+
+Updated `tests/backend/test_streaming_openai_compat.py`'s
+`test_structured_schema_never_streams` (pinned the now-wrong old behavior) into two
+tests: `test_structured_schema_streams_reasoning_but_suppresses_content` and
+`test_structured_schema_no_on_chunk_uses_non_streaming_path`. Added a new
+`TestStreamingBehavior` class (3 tests) to `tests/backend/test_opencode_zen.py`, which
+had ZERO prior streaming coverage despite the streaming code (sentinel-mode included)
+predating this fix — covers sentinel-mode streams-both-kinds-unfiltered,
+structured-mode streams-reasoning-only, and structured-mode-without-on_chunk stays on
+the non-streaming `client.post` path.
+
+Verification: verified — targeted files
+(`tests/backend/test_streaming_openai_compat.py`,
+`tests/backend/test_opencode_zen.py`, `tests/backend/test_opencode_go.py`) and the
+full backend suite (1754/1754, up from 1750) pass. One test,
+`test_orchestrator.py::TestAwaitingInputResume::test_unanswered_followup_stays_parked`,
+failed once in the full-suite run and passed cleanly in isolation — a pre-existing
+order-dependent flake unrelated to this change (confirmed by re-running the full suite
+a second time with no failures). Not independently re-verified: whether the user's
+actual configured opencode-zen/opencode-go model ever emits a `reasoning_content`
+delta at all — that is model-specific and this fix cannot manufacture a channel a
+given proxied model doesn't expose (the design handoff explicitly anticipates this: "do
+not fabricate a reasoning stream"). The user should re-run a live job and report
+whether a REASONING card now appears; if their specific model never sends
+`reasoning_content`, the honest outcome is unchanged `content` chunking behavior (still
+non-streamed, by design, in structured mode) with no reasoning card — not a bug, a
+model-capability ceiling.
+
 ## Decisions Log
 
 _Reserved for the user. Not to be written by the agent._

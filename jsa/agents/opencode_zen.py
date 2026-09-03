@@ -107,6 +107,23 @@ class OpenCodeZenSessionHandle(SessionHandle):
     structured_enabled: bool = False
 
 
+def _reasoning_only(on_chunk: OnChunk | None) -> OnChunk | None:
+    """Wrap ``on_chunk`` so only ``kind="reasoning"`` chunks pass through — used
+    for structured-schema calls, where the ``content`` delta is raw partial JSON
+    (not useful to render as chat text) but a ``reasoning_content`` delta, when a
+    routed model exposes one, still is. ``None`` in, ``None`` out. Identical to
+    ``_openai_compat.py``'s copy — see this module's docstring for why this file
+    keeps its own independent implementation rather than sharing that base."""
+    if on_chunk is None:
+        return None
+
+    async def _filtered(chunk: AgentChunk, _cb: OnChunk = on_chunk) -> None:
+        if chunk.kind == "reasoning":
+            await _cb(chunk)
+
+    return _filtered
+
+
 def _active_schema(
     handle: OpenCodeZenSessionHandle, explicit: dict[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -360,8 +377,17 @@ class OpenCodeZenBackend(AgentBackend):
         burns retry budget here and a transient HTTP failure never touches the
         downgrade flag.
         """
-        stream_cb = on_chunk if structured_schema is None else None
-        retry_cb = on_retry if structured_schema is None else None
+        # response_format + stream:true is a normal combination on this wire shape
+        # (see _call_api_once) and some routed models expose a genuine
+        # reasoning_content delta even under a forced JSON schema — so streaming
+        # is attempted in BOTH modes. The content delta is raw partial JSON while
+        # structured though (a stray "{" is not useful to show), so on_chunk is
+        # wrapped to forward reasoning chunks only in that case; sentinel mode
+        # passes it through unwrapped. on_retry is forwarded unconditionally too,
+        # so a retried structured call still discards any reasoning streamed by
+        # the abandoned attempt.
+        stream_cb = _reasoning_only(on_chunk) if structured_schema is not None else on_chunk
+        retry_cb = on_retry
         last_exc: _TransientOpenCodeError | None = None
         for attempt in range(_MAX_ATTEMPTS):
             try:

@@ -129,6 +129,21 @@ class OpenAICompatSessionHandle(SessionHandle):
     structured_enabled: bool = False
 
 
+def _reasoning_only(on_chunk: OnChunk | None) -> OnChunk | None:
+    """Wrap ``on_chunk`` so only ``kind="reasoning"`` chunks pass through — used
+    for structured-schema calls, where the ``content`` delta is raw partial JSON
+    (not useful to render as chat text) but a ``reasoning_content`` delta, when a
+    routed model exposes one, still is. ``None`` in, ``None`` out."""
+    if on_chunk is None:
+        return None
+
+    async def _filtered(chunk: AgentChunk, _cb: OnChunk = on_chunk) -> None:
+        if chunk.kind == "reasoning":
+            await _cb(chunk)
+
+    return _filtered
+
+
 def _active_schema(
     handle: OpenAICompatSessionHandle, explicit: dict[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -397,16 +412,23 @@ class OpenAICompatBackend(AgentBackend):
         disabled for the rest of this backend instance's life and the call is
         retried exactly once, clean.
 
-        ``on_chunk``, when structured mode is off (see ``supports_streaming``
-        above), is forwarded to ``_call_api_once`` for a real SSE stream. Not
-        attempted for a structured-schema call — a partial JSON payload is not
-        useful to stream, and the wire-retry/self-heal machinery needs the
-        complete body regardless. ``on_retry`` is forwarded to ``retry_transient``
-        (the in-backend transient-HTTP retry loop) — see that function's
-        docstring.
+        ``on_chunk`` is forwarded to ``_call_api_once`` for a real SSE stream in
+        BOTH modes — ``response_format`` + ``stream: true`` is a normal, supported
+        combination on this wire shape (see ``_call_api_once``), and some routed
+        models expose a genuine ``reasoning_content`` delta even under a forced
+        JSON schema. The ``content`` delta itself is raw partial JSON while
+        structured, though, and a stray ``{`` is not useful to show — so in
+        structured mode ``on_chunk`` is wrapped to forward ``reasoning`` chunks
+        only, never ``content``; the wire-retry/self-heal machinery still gets the
+        complete body regardless, via ``_consume_sse``'s own accumulation. Sentinel
+        mode passes ``on_chunk`` through unwrapped, as before this filtering
+        existed. ``on_retry`` is forwarded to ``retry_transient`` (the in-backend
+        transient-HTTP retry loop) unconditionally too, so a retried structured
+        call still discards any reasoning streamed by the abandoned attempt — see
+        that function's docstring.
         """
-        stream_cb = on_chunk if structured_schema is None else None
-        retry_cb = on_retry if structured_schema is None else None
+        stream_cb = _reasoning_only(on_chunk) if structured_schema is not None else on_chunk
+        retry_cb = on_retry
         try:
             return await retry_transient(
                 lambda: self._call_api_once(system_prompt, messages, structured_schema, stream_cb),

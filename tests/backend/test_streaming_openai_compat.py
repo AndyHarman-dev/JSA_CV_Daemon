@@ -116,8 +116,41 @@ class TestOpenAICompatStreaming:
         posted_payload = mock_client.post.call_args.kwargs["json"]
         assert "stream" not in posted_payload
 
-    async def test_structured_schema_never_streams(self):
-        """Structured mode must never attempt SSE, even if on_chunk is supplied."""
+    async def test_structured_schema_streams_reasoning_but_suppresses_content(self):
+        """Structured mode DOES attempt SSE when on_chunk is supplied — some routed
+        models expose a genuine reasoning_content delta even under a forced JSON
+        schema. But the content delta in that mode is raw partial JSON (a stray
+        "{" is not useful to show), so on_chunk must only ever receive reasoning
+        chunks; the full JSON is still returned as the reply (accumulated
+        internally regardless of what's forwarded to on_chunk)."""
+        lines = _sse_lines(
+            [
+                {"choices": [{"delta": {"reasoning_content": "weighing options..."}}]},
+                {"choices": [{"delta": {"content": '{"kind":"final",'}}]},
+                {"choices": [{"delta": {"content": '"question":null,"payload":{}}'}}]},
+            ]
+        )
+        mock_client = _make_mock_stream_client(lines)
+        received: list[AgentChunk] = []
+
+        async def on_chunk(chunk: AgentChunk) -> None:
+            received.append(chunk)
+
+        # Exercise _call_api directly (bypassing start_session's downgrade/retry
+        # parsing layer, which isn't what this test is pinning) with a single
+        # attempt — the on_chunk filtering happens in _call_api itself.
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            raw = await backend._call_api(
+                "sys", [{"role": "user", "content": "hi"}], {"type": "object"}, on_chunk
+            )
+        mock_client.stream.assert_called_once()
+        assert received == [AgentChunk(kind="reasoning", text="weighing options...")]
+        assert raw == '{"kind":"final","question":null,"payload":{}}'
+
+    async def test_structured_schema_no_on_chunk_uses_non_streaming_path(self):
+        """Without on_chunk, structured mode stays on the plain client.post path —
+        byte-identical to pre-streaming-in-structured-mode behavior."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json = MagicMock(
@@ -133,17 +166,12 @@ class TestOpenAICompatStreaming:
         mock_client.stream = MagicMock(side_effect=AssertionError("must not stream"))
         mock_client.aclose = AsyncMock()
 
-        async def on_chunk(chunk):
-            pass
-
         with patch("httpx.AsyncClient", return_value=mock_client):
             backend = MistralBackend()
             try:
-                await backend.start_session(
-                    "sys", "hi", structured_schema={"type": "object"}, on_chunk=on_chunk
-                )
+                await backend.start_session("sys", "hi", structured_schema={"type": "object"})
             except Exception:
-                pass  # only the streaming-vs-non-streaming dispatch is under test here
+                pass
         mock_client.post.assert_awaited()
 
 
