@@ -88,6 +88,7 @@ def _parse_structured(
     language: str = "en",
     *,
     structured: bool = False,
+    reemit_hint: str | None = None,
 ) -> BaseModel:
     """Parse a FINAL payload as JSON and validate it against ``model``.
 
@@ -108,13 +109,20 @@ def _parse_structured(
     sentinel-block instruction; the schema is enforced on the wire (forced tool-use /
     ``response_format``), not by prompt wording, so the trailing sentence only needs to
     tell the model to re-emit via its structured reply shape instead.
+
+    ``reemit_hint``, when given, REPLACES the ``structured``-selected sentence entirely.
+    Neither built-in wording fits a tool-patching turn (revision-tool-use plan, Phase 2)
+    — the failure isn't surfaced as a validation error to correct via a whole re-emitted
+    document; it comes back as an ordinary ``finalize`` tool-result the model can act on
+    with more tool calls. ``jsa/schema/patch.py``'s ``finalize()`` passes the loop's own
+    fix-and-retry instruction here (see ``jsa/pipeline/tool_loop.py``).
     """
     text = _strip_code_fence(content)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         _capture_failed_payload(label, job_id, content, f"invalid JSON: {exc}")
-        reemit = (
+        reemit = reemit_hint or (
             "Re-emit ONLY a single JSON object conforming to the schema as your "
             "structured reply's `payload`."
             if structured
@@ -134,7 +142,7 @@ def _parse_structured(
         reasons = "; ".join(
             e.get("msg", "").removeprefix("Value error, ") for e in exc.errors()
         ) or "the payload did not conform to the schema"
-        reemit = (
+        reemit = reemit_hint or (
             "Re-emit a corrected JSON object as your structured reply's `payload`."
             if structured
             else "Re-emit a corrected JSON object inside <<<FINAL>>>...<<<END>>>."
@@ -145,7 +153,13 @@ def _parse_structured(
 
 
 def _validate_final_content(
-    stage: Stage, content: str, job: Job | None, language: str = "en", *, structured: bool = False
+    stage: Stage,
+    content: str,
+    job: Job | None,
+    language: str = "en",
+    *,
+    structured: bool = False,
+    reemit_hint: str | None = None,
 ) -> BaseModel | None:
     """Parse + validate a FINAL payload for the given stage.
 
@@ -168,15 +182,21 @@ def _validate_final_content(
     ``_handle_final``) must pass the SAME value for a given stage invocation, or the
     self-heal loop's correction and the authoritative gate's hard-fail error would
     describe two different reply shapes.
+
+    ``reemit_hint`` overrides ``structured``'s wording entirely — see
+    ``_parse_structured``'s docstring; only ``CvWorkingCopy``/``ClWorkingCopy.finalize``
+    (``jsa/schema/patch.py``) pass it.
     """
     job_id = job.id if job is not None else None
     if stage in (Stage.cv_adjust, Stage.revising_cv):
         return _parse_structured(
-            content, CVDocument, "cv_adjust", job_id, language, structured=structured
+            content, CVDocument, "cv_adjust", job_id, language,
+            structured=structured, reemit_hint=reemit_hint,
         )
     if stage in (Stage.cover_letter, Stage.revising_cl):
         return _parse_structured(
-            content, CoverLetter, "cover_letter", job_id, language, structured=structured
+            content, CoverLetter, "cover_letter", job_id, language,
+            structured=structured, reemit_hint=reemit_hint,
         )
     return None
 

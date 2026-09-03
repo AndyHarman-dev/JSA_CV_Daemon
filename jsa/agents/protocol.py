@@ -1,21 +1,29 @@
-"""Sentinel grammar parser: NEED_INPUT / FINAL block detection and ProtocolError."""
+"""Sentinel grammar parser: NEED_INPUT / FINAL / TOOL_CALLS block detection and
+ProtocolError."""
 
+import json
 import logging
 import re
 from typing import Literal
 
-from jsa.agents.base import AgentReply
+from jsa.agents.base import AgentReply, ToolCall
 
 logger = logging.getLogger(__name__)
 
-# Matches complete sentinel blocks (non-greedy so multiple blocks are found separately)
+# Matches complete sentinel blocks (non-greedy so multiple blocks are found separately).
+# TOOL_CALLS is the revision-tool-use plan's prompt-rung (rung 2) transport — a model
+# whose backend has no native tool-calling channel signals a batch of tool calls as a
+# JSON array inside this block instead. Only revising_cv/revising_cl sessions ever
+# instruct a model to emit it (jsa/pipeline/prompt_assembly.py's tool contract, Phase 4)
+# — see run_stage's guard (jsa/pipeline/stages.py) for what happens if one shows up
+# spontaneously in a non-tool session.
 _BLOCK_RE = re.compile(
-    r"<<<(NEED_INPUT|FINAL)>>>(.*?)<<<END>>>",
+    r"<<<(NEED_INPUT|FINAL|TOOL_CALLS)>>>(.*?)<<<END>>>",
     re.DOTALL,
 )
 
 # Matches any open sentinel marker (to detect unterminated blocks)
-_OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL)>>>")
+_OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL|TOOL_CALLS)>>>")
 
 # Optional suggestions block inside a NEED_INPUT body: everything from the marker to
 # the end of the (already-extracted) content is the suggestion list, one per line.
@@ -57,6 +65,38 @@ class ProtocolError(Exception):
     pass
 
 
+def _parse_tool_calls_block(raw: str, content: str) -> AgentReply:
+    """Parse a TOOL_CALLS block body as a JSON array of ``{"name", "arguments"}``
+    objects, synthesizing ``call_0``, ``call_1``, ... ids (the prompt rung has no
+    provider-issued call id — see ``jsa.agents.base.ToolCall``'s docstring).
+
+    Raises ``ProtocolError`` on invalid JSON, a non-array/empty body, or any item
+    that isn't ``{"name": str, "arguments": dict}`` — mirrors the strictness of the
+    NEED_INPUT/FINAL branches: a malformed tool-call batch fails loudly rather than
+    silently executing a partial or misread set of calls.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(f"malformed TOOL_CALLS block: invalid JSON ({exc})") from exc
+    if not isinstance(data, list) or not data:
+        raise ProtocolError("malformed TOOL_CALLS block: expected a non-empty JSON array")
+    calls: list[ToolCall] = []
+    for i, item in enumerate(data):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not item["name"]
+            or not isinstance(item.get("arguments"), dict)
+        ):
+            raise ProtocolError(
+                f"malformed TOOL_CALLS block: item {i} must be an object with a "
+                "non-empty string 'name' and an object 'arguments'"
+            )
+        calls.append(ToolCall(id=f"call_{i}", name=item["name"], arguments=item["arguments"]))
+    return AgentReply(raw=raw, content=content, kind="tool_calls", tool_calls=calls)
+
+
 def parse_reply(raw: str) -> AgentReply:
     """Parse a raw agent reply and return an AgentReply.
 
@@ -90,6 +130,8 @@ def parse_reply(raw: str) -> AgentReply:
     if marker == "FINAL":
         content = _strip_change_log(content)
         return AgentReply(raw=raw, content=content, kind="final", question=None)
+    elif marker == "TOOL_CALLS":
+        return _parse_tool_calls_block(raw, content)
     else:  # NEED_INPUT
         suggested_replies: list[str] | None = None
         suggestions_match = _SUGGESTIONS_RE.search(content)

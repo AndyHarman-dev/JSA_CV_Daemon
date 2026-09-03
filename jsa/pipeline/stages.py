@@ -864,6 +864,23 @@ async def run_stage(
         )
         raise PausedForInput()
 
+    if reply.kind == "tool_calls":
+        # run_stage never enters jsa/pipeline/tool_loop.py's loop yet (Phase 5 wiring)
+        # — no session dispatched from here is a tool session, so a `<<<TOOL_CALLS>>>`
+        # block (protocol.py's TOOL_CALLS verb, added Phase 2) can only mean the model
+        # hallucinated one unprompted. Without this guard the reply would fall through
+        # to `_handle_final` below: `_self_heal_final`'s `while reply.kind == "final"`
+        # is false for "tool_calls" (skipped, no correction budget), and
+        # `_validate_final_content` would `json.loads` the tool-call array successfully
+        # (it's valid JSON) and then fail `CVDocument`/`CoverLetter.model_validate` on a
+        # list — a confusing schema error instead of a diagnosable one. Raising here
+        # also means this does NOT get the sentinel-nudge retry
+        # (`_parse_with_nudge`/OpenCode Zen's downgrade) a genuine "no sentinel block"
+        # gets — the block DID parse, just unexpectedly — so it hard-fails the job in
+        # one shot. Phase 5 makes this conditional on whether `stage` actually IS a
+        # tool session.
+        raise ProtocolError("unexpected tool-call block outside a tool session")
+
     # reply.kind == "final"
     await _handle_final(
         session=session,

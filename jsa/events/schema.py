@@ -115,6 +115,23 @@ class AgentChunkEvent:
 
 
 @dataclass
+class AgentToolEvent:
+    """One tool call's execution outcome, part of jsa/pipeline/tool_loop.py's bounded
+    revision-patching loop. Published AFTER execution (never before) so `status` is
+    already known — a discrete record, not a text delta, so it is never routed through
+    ChunkAccumulator's 75ms/200-char batching the way AgentChunkEvent is."""
+    type: Literal["agent_tool"] = "agent_tool"
+    job_id: str = ""
+    stage: str = ""
+    seq: int = 0
+    call_id: str = ""
+    name: str = ""
+    summary: str = ""
+    status: Literal["ok", "error", "not_executed", "budget_exhausted"] = "ok"
+    detail: str = ""
+
+
+@dataclass
 class AgentTurnEndEvent:
     """Marks the end of one streamed turn's chunk sequence. superseded=True
     tells clients to discard the streamed buffer entirely — emitted by any of

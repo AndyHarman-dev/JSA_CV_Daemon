@@ -312,22 +312,30 @@ class CvWorkingCopy:
             })
         return {"contact": dict(self._contact), "sections": sections}
 
-    def finalize(self, *, language: str = "en", structured: bool = False) -> dict[str, Any]:
+    def finalize(
+        self,
+        *,
+        language: str = "en",
+        structured: bool = False,
+        reemit_hint: str | None = None,
+    ) -> dict[str, Any]:
         """Validate the working copy and return the canonical ``CVDocument``, or a
         ``validation_failed`` error result.
 
         ``structured`` selects ``_validate_final_content``'s re-emit wording on
         failure — it must match whatever mode the calling session is actually in
-        (see ``jsa/pipeline/validation.py``). Neither existing wording ("re-emit
-        inside <<<FINAL>>>" / "re-emit as your structured reply's `payload`") is
-        exactly right for a tool-patching turn — Phase 2's ``tool_loop.py`` decides
-        the real fix-and-retry instruction; this flag only keeps today's two
-        pre-existing phrasings from being silently wrong in the meantime.
+        (see ``jsa/pipeline/validation.py``); ``reemit_hint``, when given, overrides
+        it entirely. ``jsa/pipeline/tool_loop.py`` (Phase 2) always passes its own
+        tool-specific fix-and-retry instruction here — neither of the two built-in
+        sentinel-vs-structured wordings fits a tool-patching turn, since the failure
+        comes back as an ordinary ``finalize`` tool result, not a whole re-emitted
+        document.
         """
         payload = json.dumps(self._to_document_dict())
         try:
             document = _validate_final_content(
-                Stage.cv_adjust, payload, None, language, structured=structured
+                Stage.cv_adjust, payload, None, language,
+                structured=structured, reemit_hint=reemit_hint,
             )
         except FinalContentError as exc:
             return _err("validation_failed", str(exc))
@@ -444,12 +452,20 @@ class ClWorkingCopy:
             "paragraphs": [self._paragraphs[pid] for pid in self._paragraph_order],
         }
 
-    def finalize(self, *, language: str = "en", structured: bool = False) -> dict[str, Any]:
-        """See ``CvWorkingCopy.finalize``'s docstring for the ``structured`` contract."""
+    def finalize(
+        self,
+        *,
+        language: str = "en",
+        structured: bool = False,
+        reemit_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """See ``CvWorkingCopy.finalize``'s docstring for the ``structured``/
+        ``reemit_hint`` contract."""
         payload = json.dumps(self._to_document_dict())
         try:
             document = _validate_final_content(
-                Stage.cover_letter, payload, None, language, structured=structured
+                Stage.cover_letter, payload, None, language,
+                structured=structured, reemit_hint=reemit_hint,
             )
         except FinalContentError as exc:
             return _err("validation_failed", str(exc))

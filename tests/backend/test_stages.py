@@ -17,7 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from jsa.agents.base import AgentReply, HistoryTurn, SessionHandle
+from jsa.agents.base import AgentReply, HistoryTurn, SessionHandle, ToolCall
+from jsa.agents.protocol import ProtocolError
 from jsa.db import repo
 from jsa.db.models import (
     Base,
@@ -251,6 +252,49 @@ class TestCvAdjustHappyPath:
         assert "system" in roles
         assert "user" in roles
         assert "assistant" in roles
+
+
+# ---------------------------------------------------------------------------
+# Test: an unexpected TOOL_CALLS block (revision-tool-use plan, Phase 2) outside a
+# tool session hard-fails loudly instead of being misrouted as a FINAL payload.
+# run_stage never enters jsa/pipeline/tool_loop.py yet (Phase 5 wiring), so no
+# session dispatched here is a tool session — see the guard in run_stage.
+# ---------------------------------------------------------------------------
+
+
+def _tool_calls_reply(name: str = "get_cv") -> AgentReply:
+    content = json.dumps([{"name": name, "arguments": {}}])
+    return AgentReply(
+        raw=f"<<<TOOL_CALLS>>>\n{content}\n<<<END>>>",
+        content=content,
+        kind="tool_calls",
+        tool_calls=[ToolCall(id="call_0", name=name, arguments={})],
+    )
+
+
+class TestUnexpectedToolCallsBlockOutsideToolSession:
+    async def test_cv_adjust_hard_fails_with_diagnosable_message(self, session):
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = FakeAgentBackend([_tool_calls_reply()])
+        with pytest.raises(ProtocolError, match="unexpected tool-call block"):
+            await run_stage(job, backend, Stage.cv_adjust, session)
+
+    async def test_does_not_get_the_sentinel_nudge_retry(self, session):
+        """A genuine 'no sentinel block' gets one nudge attempt inside the backend
+        (claude-cli/opencode-zen's _parse_with_nudge). A TOOL_CALLS block DID parse —
+        it's just unexpected here — so it must NOT consume a second scripted reply;
+        it fails on the very first (and only) one."""
+        job = await _insert_job(session)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await session.commit()
+
+        backend = FakeAgentBackend([_tool_calls_reply()])
+        with pytest.raises(ProtocolError):
+            await run_stage(job, backend, Stage.cv_adjust, session)
+        assert backend._replies == []  # exactly one reply was consumed, none left over
 
 
 # ---------------------------------------------------------------------------

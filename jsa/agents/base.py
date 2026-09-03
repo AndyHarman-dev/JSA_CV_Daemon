@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 
 class AgentTimeout(Exception):
@@ -31,13 +31,65 @@ class AgentBackendUnavailable(RuntimeError):
     """
 
 
+class ToolsUnsupported(Exception):
+    """Raised when a specific tool-mode request cannot be served on the NATIVE
+    rung, so ``jsa/pipeline/tool_loop.py``'s ladder should downgrade this turn to
+    the prompt rung and retry once.
+
+    Deliberately NOT a subclass of ``AgentBackendUnavailable`` — the two exceptions
+    have opposite subclassing rationale. Phase 3's per-backend ``_ToolsRejected``
+    (e.g. ``anthropic_api.py``) DOES subclass ``AgentBackendUnavailable`` on purpose,
+    as an escape safety net: if a backend's own in-process degrade-and-retry can't
+    recover, falling through to BF-19 is the right outcome. This exception is the
+    mirror image — it must be caught ONLY inside ``tool_loop.py``'s native rung to
+    trigger a same-turn, same-backend downgrade to the prompt rung. If this ever
+    subclassed ``AgentBackendUnavailable``, the orchestrator's BF-19 handler would
+    treat a tools-only degrade as a reason to advance the whole job to the next
+    configured backend — exactly the loss the rung ladder exists to prevent. A
+    genuine auth error or bad-model 4xx must keep raising ``AgentBackendUnavailable``
+    (or ``AgentLimitReached``/``AgentTimeout``) so BF-19 still engages for those.
+    """
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool invocation requested by the model, already normalized to a single
+    shape regardless of wire origin (Anthropic ``tool_use`` block, OpenAI-compatible
+    ``tool_calls`` entry, Gemini ``functionCall`` part, or a parsed
+    ``<<<TOOL_CALLS>>>`` prompt-rung block — see ``jsa/agents/protocol.py``).
+
+    ``id`` is synthesized (``call_0``, ``call_1``, ...) by whichever layer parses the
+    reply when the wire has no natural call id (e.g. the prompt rung); backends with a
+    real provider-issued id may use that instead. ``arguments`` is always a plain
+    JSON-object dict — never a raw string awaiting a second ``json.loads``.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """The outcome of executing one ``ToolCall``, ready to send back to the model via
+    ``AgentBackend.send_tool_results``. ``content`` is the JSON-serializable result
+    dict produced by the applier (``jsa/schema/patch.py``) or synthesized by the loop
+    itself (``not_executed``/``budget_exhausted`` — see ``jsa/pipeline/tool_loop.py``)."""
+
+    call_id: str
+    name: str
+    ok: bool
+    content: Any
+
+
 @dataclass(frozen=True)
 class AgentReply:
     raw: str                                    # full text returned by the model
     content: str                                # text inside the sentinel block
-    kind: Literal["final", "needs_input"]
+    kind: Literal["final", "needs_input", "tool_calls"]
     question: str | None = None                 # populated iff kind == "needs_input"
     suggested_replies: list[str] | None = None   # optional, only iff kind == "needs_input"
+    tool_calls: list[ToolCall] | None = None     # populated iff kind == "tool_calls"
 
 
 @dataclass
@@ -118,6 +170,25 @@ class AgentBackend(ABC):
     # must be swallowed and the synchronous AgentReply returned intact.
     supports_streaming: ClassVar[bool] = False
 
+    # True only for backends whose wire protocol has a genuine tool/function-calling
+    # channel (Anthropic forced tool-use, an OpenAI-compatible `tools` + `tool_choice`,
+    # Gemini `functionDeclarations`). Hard-coded per backend, never runtime-detected —
+    # mirrors supports_structured_output above, with the SAME OpenCodeGoBackend
+    # exception: its `/messages` protocol instances set this as an INSTANCE attribute
+    # in __init__ (forced tool-use does not take on that gateway path), so callers must
+    # read it off the instance, never the class — see CLAUDE.md's structured-output
+    # section for the identical `OpenCodeGoBackend` reasoning applied to this flag.
+    #
+    # Contract: a backend that sets this True MUST (a) accept an optional
+    # ``tools: tuple[ToolSpec, ...] | None = None`` keyword on ``start_session`` and
+    # ``restore_session`` (jsa/agents/tool_spec.py defines ToolSpec and the
+    # provider-shape renderers each backend converts these into internally), and
+    # (b) override ``send_tool_results`` below. ``jsa/pipeline/tool_loop.py`` passes
+    # ``tools=`` ONLY when it has a non-None tuple for the backend in hand, so a
+    # backend that leaves this False is never asked to accept it — do not add an
+    # unused accept-and-ignore parameter to a backend that stays False.
+    supports_native_tools: ClassVar[bool] = False
+
     @abstractmethod
     async def start_session(
         self,
@@ -137,6 +208,22 @@ class AgentBackend(ABC):
 
     @abstractmethod
     async def send_message(self, handle: SessionHandle, text: str) -> AgentReply: ...
+
+    async def send_tool_results(
+        self, handle: SessionHandle, results: list[ToolResult]
+    ) -> AgentReply:
+        """Continue a native tool-mode session with the outcomes of the last round of
+        tool calls. NOT a fifth abstract method — same conditional-capability rule as
+        ``structured_schema``/``on_chunk`` above (see ``supports_native_tools``'s
+        docstring): only a backend that sets ``supports_native_tools = True`` is ever
+        called through here, and such a backend MUST override this. The default raises
+        so a backend that forgets to override it fails loudly instead of silently
+        no-opping.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support native tool calling "
+            "(supports_native_tools is False)"
+        )
 
     @abstractmethod
     async def end_session(self, handle: SessionHandle) -> None: ...

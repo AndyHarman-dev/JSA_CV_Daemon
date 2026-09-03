@@ -369,3 +369,72 @@ class TestSuggestionsBlock:
         )
         reply = parse_reply(raw)
         assert reply.suggested_replies is None
+
+
+# ---------------------------------------------------------------------------
+# TOOL_CALLS block (revision-tool-use plan, Phase 2 — the prompt rung's transport)
+# ---------------------------------------------------------------------------
+
+class TestToolCallsBlock:
+    def test_kind_is_tool_calls(self):
+        raw = '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>'
+        reply = parse_reply(raw)
+        assert reply.kind == "tool_calls"
+
+    def test_single_call_parsed(self):
+        raw = '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>'
+        reply = parse_reply(raw)
+        assert reply.tool_calls is not None
+        assert len(reply.tool_calls) == 1
+        assert reply.tool_calls[0].id == "call_0"
+        assert reply.tool_calls[0].name == "get_cv"
+        assert reply.tool_calls[0].arguments == {}
+
+    def test_multiple_calls_preserve_array_order_and_synthesize_sequential_ids(self):
+        raw = (
+            "<<<TOOL_CALLS>>>\n"
+            '[{"name": "get_cv", "arguments": {}}, '
+            '{"name": "replace_summary", "arguments": {"text": "New summary."}}]\n'
+            "<<<END>>>"
+        )
+        reply = parse_reply(raw)
+        assert [c.id for c in reply.tool_calls] == ["call_0", "call_1"]
+        assert [c.name for c in reply.tool_calls] == ["get_cv", "replace_summary"]
+        assert reply.tool_calls[1].arguments == {"text": "New summary."}
+
+    def test_other_fields_are_none_or_content_only(self):
+        raw = '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>'
+        reply = parse_reply(raw)
+        assert reply.question is None
+        assert reply.suggested_replies is None
+        assert reply.raw == raw
+
+    def test_invalid_json_raises_protocol_error(self):
+        raw = "<<<TOOL_CALLS>>>\nnot json\n<<<END>>>"
+        with pytest.raises(ProtocolError, match="TOOL_CALLS"):
+            parse_reply(raw)
+
+    def test_non_array_body_raises_protocol_error(self):
+        raw = '<<<TOOL_CALLS>>>\n{"name": "get_cv", "arguments": {}}\n<<<END>>>'
+        with pytest.raises(ProtocolError, match="non-empty JSON array"):
+            parse_reply(raw)
+
+    def test_empty_array_raises_protocol_error(self):
+        raw = "<<<TOOL_CALLS>>>\n[]\n<<<END>>>"
+        with pytest.raises(ProtocolError, match="non-empty JSON array"):
+            parse_reply(raw)
+
+    def test_item_missing_name_raises_protocol_error(self):
+        raw = '<<<TOOL_CALLS>>>\n[{"arguments": {}}]\n<<<END>>>'
+        with pytest.raises(ProtocolError, match="item 0"):
+            parse_reply(raw)
+
+    def test_item_with_non_object_arguments_raises_protocol_error(self):
+        raw = '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": "nope"}]\n<<<END>>>'
+        with pytest.raises(ProtocolError, match="item 0"):
+            parse_reply(raw)
+
+    def test_unterminated_tool_calls_block_raises_protocol_error(self):
+        raw = '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]'
+        with pytest.raises(ProtocolError, match="unterminated block"):
+            parse_reply(raw)
