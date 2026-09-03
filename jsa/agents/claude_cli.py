@@ -25,6 +25,7 @@ from jsa.agents.base import (
     AgentReply,
     HistoryTurn,
     OnChunk,
+    OnRetry,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -252,7 +253,13 @@ class ClaudeCliBackend(AgentBackend):
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _parse_with_nudge(self, session_id: str, raw: str) -> AgentReply:
+    async def _parse_with_nudge(
+        self,
+        session_id: str,
+        raw: str,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
+    ) -> AgentReply:
         """Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once.
 
         If the first parse succeeds, return the result immediately.
@@ -260,6 +267,10 @@ class ClaudeCliBackend(AgentBackend):
         via --resume <session_id>, and return parse_reply of the nudge reply
         (propagating on second failure).
         Any other ProtocolError is re-raised immediately without retrying.
+
+        ``on_retry``, when given, is awaited right before the nudge replay — the
+        first attempt may already have streamed a partial (now-stale) buffer;
+        see jsa/agents/base.py's ``OnRetry`` docstring.
         """
         try:
             return parse_reply(raw)
@@ -276,6 +287,8 @@ class ClaudeCliBackend(AgentBackend):
                 "_parse_with_nudge: no sentinel block in reply — sending nudge and retrying once (session=%s)",
                 session_id,
             )
+            if on_retry is not None:
+                await on_retry()
             nudge = (
                 "Your previous response was missing the required sentinel block. "
                 "Please restate your response and end it with exactly one of:\n"
@@ -290,7 +303,7 @@ class ClaudeCliBackend(AgentBackend):
                 "--tools", "",
                 "-p", nudge,
             ]
-            raw2 = await self._run(nudge_cmd, session_id)
+            raw2 = await self._run_dispatch(nudge_cmd, session_id, on_chunk)
             return parse_reply(raw2)  # Propagate on second failure
 
     # ------------------------------------------------------------------
@@ -302,6 +315,7 @@ class ClaudeCliBackend(AgentBackend):
         system_prompt: str,
         initial_user_msg: str,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[ClaudeSessionHandle, AgentReply]:
         """Open a fresh claude CLI session and return the handle + first reply.
 
@@ -322,7 +336,7 @@ class ClaudeCliBackend(AgentBackend):
         ]
         raw = await self._run_dispatch(cmd, session_id, on_chunk)
         handle = ClaudeSessionHandle(id=str(uuid.uuid4()), external_id=session_id)
-        reply = await self._parse_with_nudge(session_id, raw)
+        reply = await self._parse_with_nudge(session_id, raw, on_chunk, on_retry)
         return handle, reply
 
     async def _run_dispatch(
@@ -370,7 +384,8 @@ class ClaudeCliBackend(AgentBackend):
         )
 
     async def send_message(
-        self, handle: SessionHandle, text: str, on_chunk: OnChunk | None = None
+        self, handle: SessionHandle, text: str, on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Send a message to an existing session using --resume mode.
 
@@ -393,7 +408,7 @@ class ClaudeCliBackend(AgentBackend):
             "-p", text,
         ]
         raw = await self._run_dispatch(cmd, handle.external_id, on_chunk)
-        return await self._parse_with_nudge(handle.external_id, raw)
+        return await self._parse_with_nudge(handle.external_id, raw, on_chunk, on_retry)
 
     async def end_session(self, handle: SessionHandle) -> None:
         """No-op: the subprocess has already exited when start_session/send_message returned."""

@@ -31,6 +31,7 @@ from jsa.agents.base import (
     AgentTimeout,
     HistoryTurn,
     OnChunk,
+    OnRetry,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -139,12 +140,13 @@ class OpenCodeZenBackend(AgentBackend):
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[OpenCodeZenSessionHandle, AgentReply]:
         """Open a fresh session: send the initial user message and return the handle + first reply."""
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk)
+        raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk, on_retry)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
-            system_prompt, messages, raw, structured_schema
+            system_prompt, messages, raw, structured_schema, on_chunk, on_retry
         )
         messages.append({"role": "assistant", "content": reply.raw})
         handle = OpenCodeZenSessionHandle(
@@ -188,6 +190,7 @@ class OpenCodeZenBackend(AgentBackend):
         text: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Append a user turn, call the API, parse and store the assistant reply.
 
@@ -202,9 +205,9 @@ class OpenCodeZenBackend(AgentBackend):
             )
         schema = _active_schema(handle, structured_schema)
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk)
+        raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk, on_retry)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
-            handle.system_prompt, pending_messages, raw, schema
+            handle.system_prompt, pending_messages, raw, schema, on_chunk, on_retry
         )
         # Mutate only after success so handle stays consistent on error
         handle.structured_enabled = structured_enabled
@@ -218,6 +221,8 @@ class OpenCodeZenBackend(AgentBackend):
         messages: list[dict],
         raw: str,
         schema: dict[str, Any] | None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[AgentReply, bool]:
         """Parse ``raw`` per the session's current mode; downgrade to sentinel mode
         on an unparseable/missing-``kind`` structured reply.
@@ -261,7 +266,7 @@ class OpenCodeZenBackend(AgentBackend):
         tests/backend/test_opencode_zen.py, pinned for Phase 5's attention.
         """
         if schema is None:
-            return await self._parse_with_nudge(system_prompt, messages, raw), False
+            return await self._parse_with_nudge(system_prompt, messages, raw, on_chunk=on_chunk, on_retry=on_retry), False
         try:
             return parse_structured_reply_for_schema(raw, schema), True
         except ProtocolError as exc:
@@ -271,7 +276,8 @@ class OpenCodeZenBackend(AgentBackend):
                 exc,
             )
             reply = await self._parse_with_nudge(
-                system_prompt, messages, raw, nudge_text=_DOWNGRADE_NUDGE_TEXT
+                system_prompt, messages, raw, nudge_text=_DOWNGRADE_NUDGE_TEXT,
+                on_chunk=on_chunk, on_retry=on_retry,
             )
             return reply, False
 
@@ -281,6 +287,8 @@ class OpenCodeZenBackend(AgentBackend):
         messages: list[dict],
         raw: str,
         nudge_text: str = _NUDGE_TEXT,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once.
 
@@ -310,11 +318,13 @@ class OpenCodeZenBackend(AgentBackend):
         except ProtocolError as exc:
             if "no sentinel block" not in str(exc):
                 raise
+            if on_retry is not None:
+                await on_retry()
             nudge_messages = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": nudge_text},
             ]
-            raw2 = await self._call_api(system_prompt, nudge_messages)
+            raw2 = await self._call_api(system_prompt, nudge_messages, None, on_chunk, on_retry)
             return parse_reply(raw2)  # Propagate on second failure
 
     async def end_session(self, handle: SessionHandle) -> None:
@@ -331,6 +341,7 @@ class OpenCodeZenBackend(AgentBackend):
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> str:
         """POST to the OpenCode Zen endpoint, retrying transient overload/gateway
         failures on THIS backend up to _MAX_ATTEMPTS before giving up.
@@ -350,6 +361,7 @@ class OpenCodeZenBackend(AgentBackend):
         downgrade flag.
         """
         stream_cb = on_chunk if structured_schema is None else None
+        retry_cb = on_retry if structured_schema is None else None
         last_exc: _TransientOpenCodeError | None = None
         for attempt in range(_MAX_ATTEMPTS):
             try:
@@ -361,6 +373,8 @@ class OpenCodeZenBackend(AgentBackend):
                         "OpenCode Zen API transient failure (attempt %d/%d), retrying: %s",
                         attempt + 1, _MAX_ATTEMPTS, exc,
                     )
+                    if retry_cb is not None:
+                        await retry_cb()
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS[attempt])
                     continue
         raise AgentBackendUnavailable(

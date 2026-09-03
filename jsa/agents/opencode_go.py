@@ -56,6 +56,7 @@ from jsa.agents.base import (
     AgentTimeout,
     HistoryTurn,
     OnChunk,
+    OnRetry,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -162,10 +163,11 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         if self._protocol == "messages":
-            return await self._start_session_messages(system_prompt, initial_user_msg, on_chunk)
-        return await super().start_session(system_prompt, initial_user_msg, structured_schema, on_chunk)
+            return await self._start_session_messages(system_prompt, initial_user_msg, on_chunk, on_retry)
+        return await super().start_session(system_prompt, initial_user_msg, structured_schema, on_chunk, on_retry)
 
     async def restore_session(
         self,
@@ -184,10 +186,11 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         text: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         if self._protocol == "messages":
-            return await self._send_message_messages(handle, text, on_chunk)
-        return await super().send_message(handle, text, structured_schema, on_chunk)
+            return await self._send_message_messages(handle, text, on_chunk, on_retry)
+        return await super().send_message(handle, text, structured_schema, on_chunk, on_retry)
 
     # end_session is inherited unchanged from OpenAICompatBackend — both protocols
     # share the same handle shape, and clearing handle.messages is protocol-agnostic.
@@ -197,11 +200,12 @@ class OpenCodeGoBackend(OpenAICompatBackend):
     # ------------------------------------------------------------------
 
     async def _start_session_messages(
-        self, system_prompt: str, initial_user_msg: str, on_chunk: OnChunk | None = None
+        self, system_prompt: str, initial_user_msg: str, on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_messages_api(system_prompt, messages, on_chunk)
-        reply = await self._parse_with_nudge_messages(system_prompt, messages, raw)
+        raw = await self._call_messages_api(system_prompt, messages, on_chunk, on_retry)
+        reply = await self._parse_with_nudge_messages(system_prompt, messages, raw, on_chunk, on_retry)
         messages.append({"role": "assistant", "content": reply.raw})
         handle = OpenAICompatSessionHandle(
             id=str(uuid.uuid4()),
@@ -227,21 +231,23 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         )
 
     async def _send_message_messages(
-        self, handle: SessionHandle, text: str, on_chunk: OnChunk | None = None
+        self, handle: SessionHandle, text: str, on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         if not isinstance(handle, OpenAICompatSessionHandle):
             raise TypeError(
                 f"expected OpenAICompatSessionHandle, got {type(handle).__name__}"
             )
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_messages_api(handle.system_prompt, pending_messages, on_chunk)
-        reply = await self._parse_with_nudge_messages(handle.system_prompt, pending_messages, raw)
+        raw = await self._call_messages_api(handle.system_prompt, pending_messages, on_chunk, on_retry)
+        reply = await self._parse_with_nudge_messages(handle.system_prompt, pending_messages, raw, on_chunk, on_retry)
         handle.messages.append({"role": "user", "content": text})
         handle.messages.append({"role": "assistant", "content": reply.raw})
         return reply
 
     async def _parse_with_nudge_messages(
-        self, system_prompt: str, messages: list[dict], raw: str
+        self, system_prompt: str, messages: list[dict], raw: str,
+        on_chunk: OnChunk | None = None, on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Same sentinel-nudge contract as OpenAICompatBackend._parse_with_nudge,
         but redoes the failed call via the /messages endpoint instead of
@@ -251,15 +257,18 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         except ProtocolError as exc:
             if "no sentinel block" not in str(exc):
                 raise
+            if on_retry is not None:
+                await on_retry()
             nudge_messages = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": _NUDGE_TEXT},
             ]
-            raw2 = await self._call_messages_api(system_prompt, nudge_messages)
+            raw2 = await self._call_messages_api(system_prompt, nudge_messages, on_chunk, on_retry)
             return parse_reply(raw2)  # Propagate on second failure
 
     async def _call_messages_api(
-        self, system_prompt: str, messages: list[dict], on_chunk: OnChunk | None = None
+        self, system_prompt: str, messages: list[dict], on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> str:
         """POST to the /messages endpoint via retry_transient. A ``_CacheRejected``
         (a permanent 4xx while cache_control fields were present) is caught here,
@@ -272,6 +281,7 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             return await retry_transient(
                 lambda: self._call_messages_api_once(system_prompt, messages, on_chunk),
                 unavailable_message=f"{self.name} API (messages) still failing",
+                on_retry=on_retry,
             )
         except _CacheRejected as exc:
             logger.warning(
@@ -284,6 +294,7 @@ class OpenCodeGoBackend(OpenAICompatBackend):
             return await retry_transient(
                 lambda: self._call_messages_api_once(system_prompt, messages, on_chunk),
                 unavailable_message=f"{self.name} API (messages) still failing",
+                on_retry=on_retry,
             )
 
     async def _consume_messages_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:

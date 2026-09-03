@@ -135,3 +135,50 @@ class TestWhitelistParsing:
         backend = ClaudeCliBackend(timeout=5.0)
         handle, reply = await backend.start_session("sys", "hi")
         assert reply.kind == "final"
+
+
+class TestOnRetryOnNudge:
+    async def test_on_retry_called_before_nudge_replay(self, monkeypatch):
+        """A sentinel-less first reply triggers _parse_with_nudge's replay via
+        --resume — on_retry must be awaited before that replay."""
+        calls = {"n": 0}
+
+        async def fake_run_killable_streaming(cmd, *, timeout, cwd=None, label="subprocess", on_line=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                events = [
+                    {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "no sentinel at all"}}},
+                    {"type": "assistant", "message": {"content": [{"type": "text", "text": "no sentinel at all"}]}},
+                ]
+            else:
+                events = [
+                    {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "<<<FINAL>>>\nok\n<<<END>>>"}}},
+                    {"type": "assistant", "message": {"content": [{"type": "text", "text": "<<<FINAL>>>\nok\n<<<END>>>"}]}},
+                ]
+            stdout_parts = []
+            for event in events:
+                line = (json.dumps(event) + "\n").encode()
+                stdout_parts.append(line)
+                if on_line is not None:
+                    await on_line(line)
+            return KillableResult(0, b"".join(stdout_parts), b"")
+
+        monkeypatch.setattr(
+            "jsa.agents.claude_cli.run_killable_streaming", fake_run_killable_streaming
+        )
+
+        retry_calls = {"n": 0}
+
+        async def on_retry():
+            retry_calls["n"] += 1
+
+        async def on_chunk(chunk):
+            pass
+
+        backend = ClaudeCliBackend(timeout=5.0)
+        handle, reply = await backend.start_session(
+            "sys", "hi", on_chunk=on_chunk, on_retry=on_retry
+        )
+        assert reply.kind == "final"
+        assert retry_calls["n"] == 1
+        assert calls["n"] == 2

@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, OnChunk, SessionHandle
+from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, OnChunk, OnRetry, SessionHandle
 from jsa.agents.protocol import ProtocolError
 from jsa.render.registry import renderer_for
 from jsa.render.serialize import cover_letter_to_markdown, cv_to_markdown
@@ -287,17 +287,42 @@ def _schema_kwargs(schema: dict | None) -> dict:
     return {"structured_schema": schema} if schema is not None else {}
 
 
-def _streaming_kwargs(backend: AgentBackend, on_chunk: OnChunk | None) -> dict:
-    """The ``on_chunk=`` kwarg dict for a start_session/send_message call.
+def _streaming_kwargs(
+    backend: AgentBackend, on_chunk: OnChunk | None, on_retry: OnRetry | None = None
+) -> dict:
+    """The ``on_chunk=``/``on_retry=`` kwarg dict for a start_session/send_message
+    call.
 
     Empty unless the backend declares ``supports_streaming`` AND a callback is
     actually in hand — mirrors ``_schema_kwargs``'s conditional-kwarg idiom, so a
     non-streaming backend (e.g. google-cli) is never handed a kwarg it doesn't
-    declare.
+    declare. ``on_retry`` rides along with ``on_chunk`` unconditionally (never
+    omitted on its own) — every backend that accepts ``on_chunk`` must also
+    accept ``on_retry`` per the ``supports_streaming`` contract (see
+    ``jsa/agents/base.py``'s ``OnRetry`` docstring), even if it never calls it.
     """
     if on_chunk is None or not getattr(backend, "supports_streaming", False):
         return {}
-    return {"on_chunk": on_chunk}
+    return {"on_chunk": on_chunk, "on_retry": on_retry}
+
+
+def _on_retry_for(accumulator: ChunkAccumulator | None) -> OnRetry | None:
+    """Build the ``on_retry`` callback a backend calls right before replaying a
+    whole turn on the SAME logical request (a sentinel-nudge retry, or an
+    in-backend transient-HTTP retry) — see ``jsa/agents/base.py``'s ``OnRetry``
+    docstring. Bound to ``ChunkAccumulator.end_turn(superseded=True)``, which
+    force-flushes (so any already-streamed partial reaches the frontend) AND
+    marks it discardable AND clears the buffer for the next attempt — a single
+    call satisfies both halves of the plan's "reset hook" and "superseded
+    signal" requirements at once.
+    """
+    if accumulator is None:
+        return None
+
+    async def _supersede() -> None:
+        await accumulator.end_turn(superseded=True)
+
+    return _supersede
 
 
 def _structured_schema_for(backend: AgentBackend, stage: Stage) -> dict | None:
@@ -488,7 +513,9 @@ async def _self_heal_final(
             # The previous attempt's streamed buffer (if any) is being replaced by
             # this correction turn -- tell the frontend to discard it.
             await accumulator.end_turn(superseded=True)
-        reply = await backend.send_message(handle, message, **_streaming_kwargs(backend, on_chunk))
+        reply = await backend.send_message(
+            handle, message, **_streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
+        )
         assistant_msg = {"role": "assistant", "content": reply.raw}
         if accumulator is not None:
             assistant_msg["reasoning"] = accumulator.take_reasoning()
@@ -548,7 +575,7 @@ async def _start_session_with_retry(
     internal nudge already covers a malformed reply, so re-raising immediately
     preserves the pre-existing hard-fail behavior byte-for-byte.
     """
-    kwargs = _schema_kwargs(schema) | _streaming_kwargs(backend, on_chunk)
+    kwargs = _schema_kwargs(schema) | _streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
     attempts = 0
     while True:
         try:
@@ -602,7 +629,7 @@ async def _send_message_with_wire_retry(
     """
     sent_text = text
     attempts = 0
-    kwargs = _streaming_kwargs(backend, on_chunk)
+    kwargs = _streaming_kwargs(backend, on_chunk, _on_retry_for(accumulator))
     while True:
         try:
             reply = await backend.send_message(handle, sent_text, **kwargs)

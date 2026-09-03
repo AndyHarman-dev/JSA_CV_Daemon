@@ -77,6 +77,7 @@ from jsa.agents.base import (
     AgentReply,
     AgentTimeout,
     OnChunk,
+    OnRetry,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError
@@ -137,10 +138,11 @@ class GeminiBackend(OpenAICompatBackend):
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         try:
             return await super().start_session(
-                system_prompt, initial_user_msg, structured_schema, on_chunk
+                system_prompt, initial_user_msg, structured_schema, on_chunk, on_retry
             )
         except _SchemaRejected as exc:
             if structured_schema is None:
@@ -150,7 +152,7 @@ class GeminiBackend(OpenAICompatBackend):
                 "downgrading to sentinel mode and retrying once",
                 self.name, exc,
             )
-            return await super().start_session(system_prompt, initial_user_msg, None, on_chunk)
+            return await super().start_session(system_prompt, initial_user_msg, None, on_chunk, on_retry)
 
     async def send_message(
         self,
@@ -158,9 +160,10 @@ class GeminiBackend(OpenAICompatBackend):
         text: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         try:
-            return await super().send_message(handle, text, structured_schema, on_chunk)
+            return await super().send_message(handle, text, structured_schema, on_chunk, on_retry)
         except _SchemaRejected as exc:
             logger.warning(
                 "%s rejected the structured-output schema (%s) mid-session — "
@@ -169,7 +172,7 @@ class GeminiBackend(OpenAICompatBackend):
             )
             if isinstance(handle, OpenAICompatSessionHandle):
                 handle.structured_enabled = False
-            return await super().send_message(handle, text, None, on_chunk)
+            return await super().send_message(handle, text, None, on_chunk, on_retry)
 
     async def _consume_gemini_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
         """Drain a ``streamGenerateContent?alt=sse`` stream, forwarding text parts

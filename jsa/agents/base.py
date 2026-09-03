@@ -66,6 +66,18 @@ class AgentChunk:
 
 OnChunk = Callable[[AgentChunk], Awaitable[None]]
 
+# Called by a backend right before it replays a whole turn on the SAME logical
+# request (a sentinel-nudge retry, or an in-backend transient-HTTP retry) —
+# never at true turn completion, which is exclusively stages.py's
+# ChunkAccumulator.end_turn() call. A backend that declares supports_streaming
+# MUST accept an optional ``on_retry: OnRetry | None = None`` keyword on
+# start_session/send_message alongside on_chunk, even if (like
+# AnthropicAPIBackend, which has no in-flight replay-and-retry shape of its
+# own) it never actually calls it — see jsa/pipeline/streaming.py's
+# ChunkAccumulator.end_turn for what the bound callback actually does
+# (force-flush + publish AgentTurnEndEvent(superseded=True)).
+OnRetry = Callable[[], Awaitable[None]]
+
 
 class AgentBackend(ABC):
     """Convention (not enforced by this ABC): if an implementation spawns a

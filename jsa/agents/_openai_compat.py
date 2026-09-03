@@ -41,6 +41,7 @@ from jsa.agents.base import (
     AgentTimeout,
     HistoryTurn,
     OnChunk,
+    OnRetry,
     SessionHandle,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
@@ -144,6 +145,7 @@ async def retry_transient(
     unavailable_message: str,
     max_attempts: int = _MAX_ATTEMPTS,
     backoff: tuple[float, ...] = _RETRY_BACKOFF_SECONDS,
+    on_retry: OnRetry | None = None,
 ) -> str:
     """Call ``call_once()`` up to ``max_attempts`` times, retrying only on
     ``TransientBackendError`` (with a short sleep between attempts) and converting
@@ -151,6 +153,13 @@ async def retry_transient(
     (``AgentLimitReached``, ``AgentTimeout``, a permanent-4xx
     ``AgentBackendUnavailable``) propagates immediately, unretried — see
     ``OpenAICompatBackend._call_api_once``'s docstring for why.
+
+    ``on_retry``, when given, is awaited right before each retried attempt (i.e.
+    once per loop iteration past the first) — this is the same-turn "streamed
+    partials must be retractable" hook (see jsa/agents/base.py's ``OnRetry``
+    docstring / the agent-chat-upgrade plan's Phase 6): if attempt 1 already
+    streamed chunks before failing transiently, attempt 2 must not append onto
+    the same buffer.
     """
     last_exc: TransientBackendError | None = None
     for attempt in range(max_attempts):
@@ -163,6 +172,8 @@ async def retry_transient(
                     "%s (attempt %d/%d), retrying: %s",
                     unavailable_message, attempt + 1, max_attempts, exc,
                 )
+                if on_retry is not None:
+                    await on_retry()
                 await asyncio.sleep(backoff[attempt])
                 continue
     raise AgentBackendUnavailable(f"{unavailable_message}: {last_exc}") from None
@@ -229,12 +240,13 @@ class OpenAICompatBackend(AgentBackend):
         initial_user_msg: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         """Open a fresh session: send the initial user message and return the handle + first reply."""
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
-        raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk)
+        raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk, on_retry)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
-            system_prompt, messages, raw, structured_schema
+            system_prompt, messages, raw, structured_schema, on_chunk, on_retry
         )
         messages.append({"role": "assistant", "content": reply.raw})
         handle = OpenAICompatSessionHandle(
@@ -274,6 +286,7 @@ class OpenAICompatBackend(AgentBackend):
         text: str,
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Append a user turn, call the API, parse and store the assistant reply.
 
@@ -286,9 +299,9 @@ class OpenAICompatBackend(AgentBackend):
             )
         schema = _active_schema(handle, structured_schema)
         pending_messages = handle.messages + [{"role": "user", "content": text}]
-        raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk)
+        raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk, on_retry)
         reply, structured_enabled = await self._parse_structured_with_downgrade(
-            handle.system_prompt, pending_messages, raw, schema
+            handle.system_prompt, pending_messages, raw, schema, on_chunk, on_retry
         )
         # Mutate only after success so handle stays consistent on error
         handle.structured_enabled = structured_enabled
@@ -302,6 +315,8 @@ class OpenAICompatBackend(AgentBackend):
         messages: list[dict],
         raw: str,
         schema: dict[str, Any] | None,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> tuple[AgentReply, bool]:
         """Parse ``raw`` per the session's current mode; downgrade to sentinel mode
         on an unparseable/missing-``kind`` structured reply. See
@@ -309,7 +324,7 @@ class OpenAICompatBackend(AgentBackend):
         is behaviourally identical, just backend-name-agnostic in its log message.
         """
         if schema is None:
-            return await self._parse_with_nudge(system_prompt, messages, raw), False
+            return await self._parse_with_nudge(system_prompt, messages, raw, on_chunk=on_chunk, on_retry=on_retry), False
         try:
             return parse_structured_reply_for_schema(raw, schema), True
         except ProtocolError as exc:
@@ -319,7 +334,8 @@ class OpenAICompatBackend(AgentBackend):
                 self.name, exc,
             )
             reply = await self._parse_with_nudge(
-                system_prompt, messages, raw, nudge_text=_DOWNGRADE_NUDGE_TEXT
+                system_prompt, messages, raw, nudge_text=_DOWNGRADE_NUDGE_TEXT,
+                on_chunk=on_chunk, on_retry=on_retry,
             )
             return reply, False
 
@@ -329,21 +345,29 @@ class OpenAICompatBackend(AgentBackend):
         messages: list[dict],
         raw: str,
         nudge_text: str = _NUDGE_TEXT,
+        on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> AgentReply:
         """Try parse_reply(raw); on 'no sentinel block' ProtocolError, nudge once.
         Any other ProtocolError, or a second failure, is re-raised immediately.
         See ``opencode_zen.py``'s method of the same name for the full rationale.
+
+        ``on_retry``, when given, is awaited right before the nudge replay — the
+        first attempt may already have streamed a partial (now-stale) buffer;
+        see jsa/agents/base.py's ``OnRetry`` docstring.
         """
         try:
             return parse_reply(raw)
         except ProtocolError as exc:
             if "no sentinel block" not in str(exc):
                 raise
+            if on_retry is not None:
+                await on_retry()
             nudge_messages = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": nudge_text},
             ]
-            raw2 = await self._call_api(system_prompt, nudge_messages)
+            raw2 = await self._call_api(system_prompt, nudge_messages, None, on_chunk, on_retry)
             return parse_reply(raw2)  # Propagate on second failure
 
     async def end_session(self, handle: SessionHandle) -> None:
@@ -360,6 +384,7 @@ class OpenAICompatBackend(AgentBackend):
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
+        on_retry: OnRetry | None = None,
     ) -> str:
         """POST to ``endpoint_url``, retrying transient overload/gateway failures on
         THIS backend up to ``_MAX_ATTEMPTS`` before giving up. See
@@ -376,13 +401,17 @@ class OpenAICompatBackend(AgentBackend):
         above), is forwarded to ``_call_api_once`` for a real SSE stream. Not
         attempted for a structured-schema call — a partial JSON payload is not
         useful to stream, and the wire-retry/self-heal machinery needs the
-        complete body regardless.
+        complete body regardless. ``on_retry`` is forwarded to ``retry_transient``
+        (the in-backend transient-HTTP retry loop) — see that function's
+        docstring.
         """
         stream_cb = on_chunk if structured_schema is None else None
+        retry_cb = on_retry if structured_schema is None else None
         try:
             return await retry_transient(
                 lambda: self._call_api_once(system_prompt, messages, structured_schema, stream_cb),
                 unavailable_message=f"{self.name} API still failing after {_MAX_ATTEMPTS} attempts",
+                on_retry=retry_cb,
             )
         except _CacheRejected as exc:
             logger.warning(
@@ -394,6 +423,7 @@ class OpenAICompatBackend(AgentBackend):
             return await retry_transient(
                 lambda: self._call_api_once(system_prompt, messages, structured_schema, stream_cb),
                 unavailable_message=f"{self.name} API still failing after {_MAX_ATTEMPTS} attempts",
+                on_retry=retry_cb,
             )
 
     async def _consume_sse(self, response: httpx.Response, on_chunk: OnChunk) -> str:
