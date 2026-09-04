@@ -370,6 +370,7 @@ class TestSemaphoreConcurrencyLimit:
         orch._stopping = True
         orch.kick()
         await asyncio.wait_for(orch_task, timeout=10.0)
+        await _drain_inflight(orch)
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +406,7 @@ class TestKickUnblocksLoop:
         orch._stopping = True
         orch.kick()
         await asyncio.wait_for(orch_task, timeout=5.0)
+        await _drain_inflight(orch)
 
         async with session_factory() as s:
             refreshed = await repo.get_job(s, job.id)
