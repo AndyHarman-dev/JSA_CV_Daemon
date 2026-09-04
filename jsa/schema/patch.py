@@ -33,6 +33,7 @@ from jsa.db.models import Stage
 from jsa.pipeline.validation import FinalContentError, _validate_final_content
 from jsa.schema.cover_letter import CoverLetter
 from jsa.schema.cv import CVDocument, Entry, SUMMARY_NAME_RE
+from jsa.schema.cv import _str_list as _clean_str_list
 
 # --- shared result-shape + id-lookup helpers ------------------------------------------
 
@@ -63,10 +64,10 @@ def _clean_str_or_none(value: Any) -> str | None:
     return None
 
 
-def _clean_str_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [x.strip() for x in value if isinstance(x, str) and x.strip()]
+# `_clean_str_list` is `jsa.schema.cv._str_list` (imported above) — same tolerant-
+# absorption rule (also coerces a bare non-empty string into a single-item list) the
+# rest of the CV schema uses, so a patched revision and a full-rewrite revision absorb
+# model input identically. Do not re-fork a local copy of this.
 
 
 def _entry_to_dict(entry: Entry) -> dict[str, Any]:

@@ -356,12 +356,17 @@ async def run_tool_loop(
             )
 
         if final_reply is not None:
-            if finalize_change_log:
+            if finalize_change_log is not None:
+                # A schema-valid but empty change_log ("" — the tool's `_STRING` param
+                # has no minLength) must still log that finalize succeeded; only a
+                # genuinely absent change_log (finalize_change_log is None, i.e. this
+                # wasn't a successful finalize call) skips this branch.
+                summary = finalize_change_log or "(no summary provided)"
                 await bus.publish(
                     event_to_dict(
                         LogEvent(
                             job_id=job.id, level="info",
-                            text=f"Stage {stage.value}: revision finalized — {finalize_change_log}",
+                            text=f"Stage {stage.value}: revision finalized — {summary}",
                         )
                     )
                 )
