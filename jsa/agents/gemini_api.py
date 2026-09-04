@@ -59,6 +59,13 @@ spend the self-heal budget rather than being handed to the parser as if complete
 ``generationConfig.maxOutputTokens`` is pinned to 32000 (matching every other
 backend's ``max_tokens``) precisely so this check fires against a limit this project
 chose, not whatever Gemini's un-set default happens to be.
+
+``generationConfig.thinkingConfig.thinkingBudget`` is pinned (``_THINKING_BUDGET``),
+never left dynamic — see ``GeminiBackend._reasoning_payload``'s docstring. Gemini
+counts thought tokens against this same ``maxOutputTokens`` ceiling, and an unbounded
+thought trace was observed live starving the reply down to a schema-valid-but-thin CV
+(a Summary section only, no Experience content) rather than tripping the MAX_TOKENS
+check above.
 """
 
 from __future__ import annotations
@@ -92,6 +99,10 @@ logger = logging.getLogger(__name__)
 
 _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _MAX_OUTPUT_TOKENS = 32000
+# Thinking tokens count against _MAX_OUTPUT_TOKENS on Gemini (see _reasoning_payload's
+# docstring) — this caps the model's thought trace so a guaranteed floor of the ceiling
+# stays reserved for the actual reply content.
+_THINKING_BUDGET = 8192
 
 
 class _SchemaRejected(AgentBackendUnavailable):
@@ -144,6 +155,26 @@ class GeminiBackend(OpenAICompatBackend):
         ``part.get("thought")`` split is never true and the reasoning channel stays
         empty even with streaming on.
 
+        ``thinkingBudget`` is pinned to ``_THINKING_BUDGET`` rather than left unset
+        (dynamic/unbounded thinking). Gemini counts thinking tokens against the SAME
+        ``generationConfig.maxOutputTokens`` ceiling as the visible content — Google's
+        own thinking guide confirms this and recommends capping the budget whenever a
+        long response is expected. Left dynamic, a thinking-capable model (any Gemini
+        model but the catalog's non-reasoning ``gemini-3.1-flash-lite`` default) can
+        let its thought trace expand to consume most or all of ``_MAX_OUTPUT_TOKENS``
+        before it ever writes the reply. Confirmed live against the ``cv_adjust``
+        stage: the model completed the schema-required ``sections`` array (satisfying
+        ``minItems: 1``, since ``Section.name``'s Pydantic default drops it from
+        JSON-Schema ``required`` — see ``jsa/schema/cv.py``) with only a short
+        "Summary" section and no Experience content at all — not a
+        ``finishReason == 'MAX_TOKENS'`` truncation (that already raises
+        ``ProtocolError`` above), but a schema-*valid*, budget-starved reply: with
+        structured/controlled decoding the model must close out a well-formed JSON
+        object within whatever room thinking left it, and dropping the token-heavy
+        ``entries`` arrays is the cheapest way to do that. A fixed budget reserves a
+        guaranteed floor of ``_MAX_OUTPUT_TOKENS`` for the actual CV/cover-letter JSON
+        regardless of how much the model wants to think.
+
         Returned as a ``generationConfig`` fragment, not a top-level payload key —
         this backend overrides ``_call_api_once`` and merges it there; the shared
         base only ever calls this hook to decide whether reasoning fields were
@@ -153,7 +184,7 @@ class GeminiBackend(OpenAICompatBackend):
         which costs the thinking stream rather than the BF-19 slot."""
         if not self._reasoning:
             return {}
-        return {"thinkingConfig": {"includeThoughts": True}}
+        return {"thinkingConfig": {"includeThoughts": True, "thinkingBudget": _THINKING_BUDGET}}
 
     async def start_session(
         self,
