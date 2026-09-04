@@ -3,13 +3,20 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("../api", () => ({
   api: {
     saveCvStructure: vi.fn(),
+    listCvDecks: vi.fn(),
+    getCvDeck: vi.fn(),
+    createCvDeck: vi.fn(),
+    saveCvDeck: vi.fn(),
+    patchCvDeck: vi.fn(),
+    duplicateCvDeck: vi.fn(),
+    deleteCvDeck: vi.fn(),
   },
 }));
 
 import { useEditorStore, exportJson, inferKind, toEditor } from "../editorStore";
 import { useStore } from "../store";
 import { api } from "../api";
-import type { CVDocument } from "../types";
+import type { CVDocument, CvDeckDTO } from "../types";
 
 const SAMPLE: CVDocument = {
   contact: { name: "Jane Doe", email: "jane@x.com", location: "Berlin", links: ["github.com/jane"] },
@@ -190,7 +197,8 @@ describe("undo/redo with coalescing", () => {
 describe("save", () => {
   it("flips the global cvStructureExists flag to true on a successful commit", async () => {
     loadSample();
-    vi.mocked(api.saveCvStructure).mockResolvedValueOnce(structuredClone(SAMPLE));
+    useEditorStore.setState({ activeDeckId: "d1" });
+    vi.mocked(api.saveCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
 
     const ok = await useEditorStore.getState().save();
 
@@ -200,11 +208,334 @@ describe("save", () => {
 
   it("does not flip cvStructureExists when the save fails", async () => {
     loadSample();
-    vi.mocked(api.saveCvStructure).mockRejectedValueOnce(new Error("HTTP 422: {\"detail\":\"bad\"}"));
+    useEditorStore.setState({ activeDeckId: "d1" });
+    vi.mocked(api.saveCvDeck).mockRejectedValueOnce(new Error("HTTP 422: {\"detail\":\"bad\"}"));
 
     const ok = await useEditorStore.getState().save();
 
     expect(ok).toBe(false);
     expect(useStore.getState().cvStructureExists).toBe(null);
+  });
+});
+
+// --- decks ---------------------------------------------------------------------------
+
+function deck(id: string, over: Partial<CvDeckDTO> = {}): CvDeckDTO {
+  return { id, name: null, auto_title: null, has_cv: true, is_default: false, ...over };
+}
+
+function stubIndex(decks: CvDeckDTO[], defaultId: string | null) {
+  vi.mocked(api.listCvDecks).mockResolvedValue({ decks, default_id: defaultId });
+}
+
+describe("hydrateDecks", () => {
+  it("adopts the index's default deck and loads its CV", async () => {
+    stubIndex([deck("a"), deck("b", { is_default: true })], "b");
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    await useEditorStore.getState().hydrateDecks();
+
+    const st = useEditorStore.getState();
+    expect(st.activeDeckId).toBe("b");
+    expect(st.defaultDeckId).toBe("b");
+    expect(api.getCvDeck).toHaveBeenCalledWith("b");
+    expect(st.cv?.contact.name).toBe("Jane Doe");
+  });
+
+  it("falls back to the first deck when the index has no default", async () => {
+    stubIndex([deck("a"), deck("b")], null);
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    await useEditorStore.getState().hydrateDecks();
+
+    expect(useEditorStore.getState().activeDeckId).toBe("a");
+  });
+
+  it("shows the empty state on a fresh install with no decks at all", async () => {
+    stubIndex([], null);
+
+    await useEditorStore.getState().hydrateDecks();
+
+    const st = useEditorStore.getState();
+    expect(st.activeDeckId).toBeNull();
+    expect(st.cv).toBeNull();
+    expect(api.getCvDeck).not.toHaveBeenCalled();
+  });
+
+  it("shows the empty state rather than throwing when the index cannot be read", async () => {
+    vi.mocked(api.listCvDecks).mockRejectedValueOnce(new Error("HTTP 500: boom"));
+
+    await useEditorStore.getState().hydrateDecks();
+
+    expect(useEditorStore.getState().cv).toBeNull();
+    expect(useEditorStore.getState().decks).toEqual([]);
+  });
+});
+
+describe("save targets the active deck", () => {
+  it("PUTs to the active deck, not the legacy default-deck alias", async () => {
+    stubIndex([deck("d1")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    vi.mocked(api.saveCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    await useEditorStore.getState().save();
+
+    expect(api.saveCvDeck).toHaveBeenCalledWith("d1", expect.objectContaining({
+      contact: expect.objectContaining({ name: "Jane Doe" }),
+    }));
+    expect(api.saveCvStructure).not.toHaveBeenCalled();
+  });
+
+  it("mints a deck first when nothing is active yet, and adopts it", async () => {
+    stubIndex([deck("new1")], "new1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: null });
+    vi.mocked(api.createCvDeck).mockResolvedValueOnce(deck("new1"));
+    vi.mocked(api.saveCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    const ok = await useEditorStore.getState().save();
+
+    expect(ok).toBe(true);
+    expect(api.createCvDeck).toHaveBeenCalledWith(null);
+    expect(api.saveCvDeck).toHaveBeenCalledWith("new1", expect.anything());
+    expect(useEditorStore.getState().activeDeckId).toBe("new1");
+  });
+});
+
+describe("flushAndPersist gates every deck navigation", () => {
+  it("persists a structural edit that left `dirty` false — the whole reason `unsaved` exists", async () => {
+    // add/delete/reorder commit synchronously, so `dirty` is already false by the time the
+    // user clicks another deck. Gating the flush on `dirty` would drop this edit silently.
+    stubIndex([deck("d1"), deck("d2")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    useEditorStore.getState().deleteSection(useEditorStore.getState().cv!.sections[0].id);
+
+    expect(useEditorStore.getState().dirty).toBe(false);
+    expect(useEditorStore.getState().unsaved).toBe(true);
+
+    vi.mocked(api.saveCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    await useEditorStore.getState().switchDeck("d2");
+
+    expect(api.saveCvDeck).toHaveBeenCalledWith("d1", expect.anything());
+    expect(useEditorStore.getState().activeDeckId).toBe("d2");
+  });
+
+  it("switches without saving when nothing has changed since the last load", async () => {
+    stubIndex([deck("d1"), deck("d2")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    await useEditorStore.getState().switchDeck("d2");
+
+    expect(api.saveCvDeck).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().activeDeckId).toBe("d2");
+  });
+
+  it("prompts on an unsavable buffer and stays put when the user cancels", async () => {
+    stubIndex([deck("d1"), deck("d2")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    useEditorStore.getState().updateContact({ name: "" });
+    vi.mocked(api.saveCvDeck).mockRejectedValueOnce(
+      new Error('HTTP 422: {"detail":"contact.name is required"}')
+    );
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await useEditorStore.getState().switchDeck("d2");
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(useEditorStore.getState().activeDeckId).toBe("d1");
+    expect(api.getCvDeck).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().saveError).toBe("contact.name is required");
+    confirmSpy.mockRestore();
+  });
+
+  it("discards and moves on when the user confirms", async () => {
+    stubIndex([deck("d1"), deck("d2")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    useEditorStore.getState().updateContact({ name: "" });
+    vi.mocked(api.saveCvDeck).mockRejectedValueOnce(new Error('HTTP 422: {"detail":"bad"}'));
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await useEditorStore.getState().switchDeck("d2");
+
+    expect(useEditorStore.getState().activeDeckId).toBe("d2");
+    expect(useEditorStore.getState().cv?.contact.name).toBe("Jane Doe");
+    confirmSpy.mockRestore();
+  });
+});
+
+describe("newDeck", () => {
+  it("adopts the fresh slot and shows the empty state without saving into it", async () => {
+    stubIndex([deck("d1"), deck("n1", { has_cv: false })], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    vi.mocked(api.createCvDeck).mockResolvedValueOnce(deck("n1", { has_cv: false }));
+
+    await useEditorStore.getState().newDeck();
+
+    const st = useEditorStore.getState();
+    expect(st.activeDeckId).toBe("n1");
+    expect(st.cv).toBeNull();
+    expect(api.saveCvDeck).not.toHaveBeenCalled();
+  });
+
+  it("leaves an untouched new slot clean, so switching straight back out PUTs nothing", async () => {
+    stubIndex([deck("d1"), deck("n1", { has_cv: false })], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    vi.mocked(api.createCvDeck).mockResolvedValueOnce(deck("n1", { has_cv: false }));
+    await useEditorStore.getState().newDeck();
+
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+    await useEditorStore.getState().switchDeck("d1");
+
+    expect(useEditorStore.getState().unsaved).toBe(false);
+    expect(api.saveCvDeck).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().activeDeckId).toBe("d1");
+  });
+});
+
+describe("duplicateDeck refuses rather than prompting", () => {
+  it("never copies stale disk content when the live buffer will not save", async () => {
+    // The server duplicates the deck *file*. flushAndPersist's discard branch would copy
+    // what is on disk while the user believes they copied what is on screen.
+    stubIndex([deck("d1")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    useEditorStore.getState().updateContact({ name: "" });
+    vi.mocked(api.saveCvDeck).mockRejectedValueOnce(new Error('HTTP 422: {"detail":"no name"}'));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await useEditorStore.getState().duplicateDeck("d1");
+
+    expect(api.duplicateCvDeck).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(useEditorStore.getState().saveError).toBe("no name");
+    confirmSpy.mockRestore();
+  });
+
+  it("flushes a valid dirty buffer first, then copies and switches to the copy", async () => {
+    stubIndex([deck("d1"), deck("d2")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    useEditorStore.getState().updateContact({ name: "Jane Q. Doe" });
+    vi.mocked(api.saveCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+    vi.mocked(api.duplicateCvDeck).mockResolvedValueOnce(deck("d2"));
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    await useEditorStore.getState().duplicateDeck("d1");
+
+    expect(api.saveCvDeck).toHaveBeenCalledWith("d1", expect.anything());
+    expect(api.duplicateCvDeck).toHaveBeenCalledWith("d1", expect.stringContaining("Jane Doe"));
+    expect(useEditorStore.getState().activeDeckId).toBe("d2");
+  });
+});
+
+describe("deleteDeck", () => {
+  it("lands on the new default when the active deck is the one deleted", async () => {
+    loadSample();
+    useEditorStore.setState({
+      activeDeckId: "d1",
+      decks: [deck("d1"), deck("d2")],
+      defaultDeckId: "d1",
+    });
+    stubIndex([deck("d2", { is_default: true })], "d2");
+    vi.mocked(api.deleteCvDeck).mockResolvedValueOnce(undefined);
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+
+    await useEditorStore.getState().deleteDeck("d1");
+
+    const st = useEditorStore.getState();
+    expect(st.activeDeckId).toBe("d2");
+    expect(st.defaultDeckId).toBe("d2");
+    expect(api.getCvDeck).toHaveBeenCalledWith("d2");
+  });
+
+  it("leaves the buffer alone when some other deck is deleted", async () => {
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1", decks: [deck("d1"), deck("d2")] });
+    stubIndex([deck("d1", { is_default: true })], "d1");
+    vi.mocked(api.deleteCvDeck).mockResolvedValueOnce(undefined);
+
+    await useEditorStore.getState().deleteDeck("d2");
+
+    expect(useEditorStore.getState().activeDeckId).toBe("d1");
+    expect(useEditorStore.getState().cv?.contact.name).toBe("Jane Doe");
+    expect(api.getCvDeck).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the empty state when the last deck goes", async () => {
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1", decks: [deck("d1")], defaultDeckId: "d1" });
+    stubIndex([], null);
+    vi.mocked(api.deleteCvDeck).mockResolvedValueOnce(undefined);
+
+    await useEditorStore.getState().deleteDeck("d1");
+
+    const st = useEditorStore.getState();
+    expect(st.activeDeckId).toBeNull();
+    expect(st.cv).toBeNull();
+  });
+});
+
+describe("deckLabel", () => {
+  it("prefers the custom name over everything else", () => {
+    useEditorStore.setState({ activeDeckId: "d1" });
+    expect(useEditorStore.getState().deckLabel(deck("d1", { name: "Backend CV", auto_title: "Jane Doe" })))
+      .toBe("Backend CV");
+  });
+
+  it("tracks the live buffer for the active row, so a contact rename retitles it as you type", () => {
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    useEditorStore.getState().updateContact({ name: "Renamed Live" });
+
+    expect(useEditorStore.getState().deckLabel(deck("d1", { auto_title: "Jane Doe" })))
+      .toBe("Renamed Live");
+  });
+
+  it("uses the server's auto_title for every non-active row", () => {
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    expect(useEditorStore.getState().deckLabel(deck("d2", { auto_title: "John Smith" })))
+      .toBe("John Smith");
+  });
+
+  it("falls back to the untitled string when a slot has no name at all", () => {
+    useEditorStore.setState({ activeDeckId: null });
+    expect(useEditorStore.getState().deckLabel(deck("d9", { has_cv: false }))).toBe("Untitled");
+  });
+});
+
+describe("setDefaultDeck", () => {
+  it("moves the star optimistically and rolls back when the server refuses", async () => {
+    useEditorStore.setState({ decks: [deck("d1"), deck("d2")], defaultDeckId: "d1" });
+    stubIndex([deck("d1", { is_default: true }), deck("d2")], "d1");
+    vi.mocked(api.patchCvDeck).mockRejectedValueOnce(new Error("HTTP 500: nope"));
+
+    await useEditorStore.getState().setDefaultDeck("d2");
+
+    expect(useEditorStore.getState().defaultDeckId).toBe("d1");
+  });
+});
+
+describe("renameDeck", () => {
+  it("sends null for an empty name so the row falls back to the auto title", async () => {
+    useEditorStore.setState({ renameId: "d1", renameDraft: "  " });
+    stubIndex([deck("d1")], "d1");
+    vi.mocked(api.patchCvDeck).mockResolvedValueOnce(deck("d1"));
+
+    await useEditorStore.getState().renameDeck("d1", "  ");
+
+    expect(api.patchCvDeck).toHaveBeenCalledWith("d1", { name: null });
+    expect(useEditorStore.getState().renameId).toBeNull();
   });
 });

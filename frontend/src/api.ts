@@ -1,4 +1,6 @@
-import type { JobDTO, FullJobDTO, Stage, CVDocument, TranscriptTurn } from "./types";
+import type {
+  JobDTO, FullJobDTO, Stage, CVDocument, TranscriptTurn, CvDeckDTO,
+} from "./types";
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -144,6 +146,86 @@ export const api = {
       body: JSON.stringify({ structured: cv }),
     });
     return body.structured;
+  },
+
+  // --- Base-CV decks (many base CVs; the CV Structure Editor's rail) ---
+  //
+  // The /api/cv-structure pair above stays as a default-deck alias for pre-decks callers;
+  // everything below addresses a deck explicitly by id.
+
+  // The whole index in one read — deck metadata only, never any deck's CV content.
+  async listCvDecks(): Promise<{ decks: CvDeckDTO[]; default_id: string | null }> {
+    return apiFetch<{ decks: CvDeckDTO[]; default_id: string | null }>("/api/cv-decks");
+  },
+
+  // GET one deck's CV, or null when the slot exists but has no CV saved yet (server 404 →
+  // the editor's empty state), mirroring getCvStructure.
+  async getCvDeck(id: string): Promise<CVDocument | null> {
+    const response = await fetch(`/api/cv-decks/${encodeURIComponent(id)}`);
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    }
+    const body = (await response.json()) as { structured: CVDocument };
+    return body.structured;
+  },
+
+  // Register an empty slot. `name` null means "no custom name" — the rail then falls back
+  // to the server's auto_title (the CV's contact name) for the label.
+  async createCvDeck(name: string | null): Promise<CvDeckDTO> {
+    const body = await apiFetch<{ deck: CvDeckDTO }>("/api/cv-decks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    return body.deck;
+  },
+
+  // PUT (validate + persist) a CV into one deck. Surfaces the server's 422 reason.
+  async saveCvDeck(id: string, cv: CVDocument): Promise<CVDocument> {
+    const body = await apiFetch<{ structured: CVDocument }>(
+      `/api/cv-decks/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ structured: cv }),
+      }
+    );
+    return body.structured;
+  },
+
+  // Metadata-only patch: rename (`name`) and/or promote to default (`is_default`).
+  async patchCvDeck(
+    id: string,
+    patch: { name?: string | null; is_default?: boolean }
+  ): Promise<CvDeckDTO> {
+    const body = await apiFetch<{ deck: CvDeckDTO }>(
+      `/api/cv-decks/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }
+    );
+    return body.deck;
+  },
+
+  // Server-side copy of the deck *file*. The caller must have flushed any live edits to
+  // that deck first — see editorStore.duplicateDeck.
+  async duplicateCvDeck(id: string, name: string | null): Promise<CvDeckDTO> {
+    const body = await apiFetch<{ deck: CvDeckDTO }>(
+      `/api/cv-decks/${encodeURIComponent(id)}/duplicate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }
+    );
+    return body.deck;
+  },
+
+  async deleteCvDeck(id: string): Promise<void> {
+    await apiFetch<void>(`/api/cv-decks/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
 
   // POST a CV file to infer a structure. Runs synchronously server-side (streams

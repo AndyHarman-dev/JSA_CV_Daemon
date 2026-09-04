@@ -1,6 +1,10 @@
 // Zustand store for the CV Structure Editor — a standalone editor over the single canonical
-// base-CV CVDocument JSON (job-less). It is the source of truth while editing; the server is
-// written only on Done (PUT /api/cv-structure), not per keystroke.
+// base-CV CVDocument JSON of *one deck* (job-less). It is the source of truth while editing;
+// the server is written only on Done / before navigating away, not per keystroke.
+//
+// Decks: the editor edits one deck at a time (`activeDeckId`). The rail's switch / new /
+// duplicate actions all pass through flushAndPersist() first, so leaving a deck never
+// silently drops its buffer.
 //
 // Identity & kind: each section/entry carries a transient `id` (React keys / drag / selection)
 // and each section an inferred `kind` (drives the editing UI). Both are stripped on export
@@ -13,9 +17,11 @@
 import { create } from "zustand";
 import { api } from "./api";
 import { useStore } from "./store";
+import { getCatalog, englishCatalog } from "./i18n";
 import type {
   CVDocument,
   CVSection,
+  CvDeckDTO,
   EditorCV,
   EditorEntry,
   EditorSection,
@@ -228,13 +234,30 @@ interface EditorState {
   // history
   history: EditorCV[];
   hpos: number;
+  // `dirty` is the *coalescing* flag only: "the buffer differs from the newest history
+  // snapshot". commit() always clears it, and structural edits commit immediately, so it is
+  // false almost all the time and says nothing about the server.
   dirty: boolean;
+  // `unsaved` is the real "buffer differs from what the server holds for activeDeckId" flag,
+  // and the one flushAndPersist() gates on. It has to be separate from `dirty`: an add /
+  // delete / reorder commits synchronously, leaving `dirty` false while the change has never
+  // been PUT — gating on `dirty` would drop exactly those edits on a deck switch.
+  unsaved: boolean;
   canUndo: boolean;
   canRedo: boolean;
 
   // save
   saving: boolean;
   saveError: string | null;
+
+  // --- decks (the editor rail) ---
+  decks: CvDeckDTO[];
+  defaultDeckId: string | null;
+  activeDeckId: string | null;
+  railOpen: boolean;
+  renameId: string | null;
+  renameDraft: string;
+  deckBusy: boolean;
 
   // --- lifecycle ---
   load(cv: CVDocument): void;
@@ -287,12 +310,53 @@ interface EditorState {
   onInferProgress(e: Extract<WSEvent, { type: "infer_progress" }>): void;
   inferFromFile(file: File): Promise<void>;
   save(): Promise<boolean>;
+
+  // --- decks ---
+  hydrateDecks(): Promise<void>;
+  refreshDeckIndex(): Promise<void>;
+  setRailOpen(open: boolean): void;
+  beginRename(id: string, draft: string): void;
+  setRenameDraft(v: string): void;
+  cancelRename(): void;
+  flushAndPersist(): Promise<boolean>;
+  switchDeck(id: string): Promise<void>;
+  newDeck(): Promise<void>;
+  duplicateDeck(id: string): Promise<void>;
+  renameDeck(id: string, name: string): Promise<void>;
+  setDefaultDeck(id: string): Promise<void>;
+  deleteDeck(id: string): Promise<void>;
+  deckLabel(d: CvDeckDTO): string;
 }
 
 let _commitTimer: ReturnType<typeof setTimeout> | null = null;
 
 function clone<T>(v: T): T {
   return structuredClone(v);
+}
+
+// apiFetch throws `HTTP <code>: <body>`, where body is FastAPI's {"detail": "..."}. Unwrap
+// both layers so the UI shows the server's reason and not the transport envelope. Extracted
+// here because inferFromFile and save() each carried a copy and the deck actions would have
+// made it four.
+function detailOf(err: unknown, fallback: string): string {
+  const raw = err instanceof Error ? err.message : fallback;
+  const m = /^HTTP \d+:\s*(.*)$/s.exec(raw);
+  let detail = m ? m[1] : raw;
+  try {
+    const parsed = JSON.parse(detail) as { detail?: string };
+    if (parsed && typeof parsed.detail === "string") detail = parsed.detail;
+  } catch {
+    /* body wasn't JSON — keep the raw text */
+  }
+  return detail;
+}
+
+// The store's non-hook twin of useT(): same catalogs, same en-then-key fallback, but read
+// imperatively because these strings are needed inside async actions (window.confirm text,
+// the duplicate suffix), not during render.
+function tr(key: string): string {
+  const language = useStore.getState().language;
+  return getCatalog(language)?.[key] ?? englishCatalog[key] ?? key;
 }
 
 export const useEditorStore = create<EditorState>((set, get) => {
@@ -303,16 +367,33 @@ export const useEditorStore = create<EditorState>((set, get) => {
     return { ...cv, sections: cv.sections.map((s) => (s.id === id ? fn(s) : s)) };
   }
 
+  // Pull one deck's saved CV into the buffer, or clear to the empty state. Shared by
+  // hydrateDecks / switchDeck / deleteDeck, which all need exactly this and nothing else.
+  // Swallows like the pre-decks mount effect did: a failed fetch shows the empty state.
+  async function loadDeckInto(id: string | null): Promise<void> {
+    if (id === null) {
+      get().reset();
+      return;
+    }
+    try {
+      const cv = await api.getCvDeck(id);
+      if (cv) get().load(cv);
+      else get().reset(); // a registered slot that has no CV saved yet
+    } catch {
+      get().reset();
+    }
+  }
+
   // Apply a mutation. coalesce=true → typing burst (debounced single snapshot);
   // false → structural (flush pending typing, then push this change immediately).
   function applyEdit(next: EditorCV, coalesce: boolean): void {
     if (coalesce) {
-      set({ cv: next, dirty: true, canUndo: true });
+      set({ cv: next, dirty: true, unsaved: true, canUndo: true });
       if (_commitTimer) clearTimeout(_commitTimer);
       _commitTimer = setTimeout(() => get().commit(), COALESCE_MS);
     } else {
       get().commit(); // push any pending typed state as its own snapshot first
-      set({ cv: next, dirty: true });
+      set({ cv: next, dirty: true, unsaved: true });
       get().commit(); // then push the structural change
     }
   }
@@ -336,10 +417,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
     history: [],
     hpos: -1,
     dirty: false,
+    unsaved: false,
     canUndo: false,
     canRedo: false,
     saving: false,
     saveError: null,
+    decks: [],
+    defaultDeckId: null,
+    activeDeckId: null,
+    railOpen: false,
+    renameId: null,
+    renameDraft: "",
+    deckBusy: false,
 
     load(cv) {
       const ed = toEditor(cv);
@@ -355,6 +444,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         inferError: null,
         selectedId: ed.sections[0]?.id ?? null,
         saveError: null,
+        unsaved: false,
       });
     },
 
@@ -372,6 +462,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         inferError: null,
         selectedId: ed.sections[0]?.id ?? null,
         saveError: null,
+        // A pristine blank slate is not an unsaved *change* — the first edit sets the flag.
+        // Otherwise INIT BLANK followed by an immediate deck switch would 422 and prompt.
+        unsaved: false,
       });
     },
 
@@ -390,6 +483,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         selectedId: null,
         jsonOpen: false,
         saveError: null,
+        unsaved: false,
       });
     },
 
@@ -431,6 +525,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         dirty: false,
         canUndo: newPos > 0,
         canRedo: true,
+        unsaved: true,
       });
     },
 
@@ -448,6 +543,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         dirty: false,
         canUndo: newPos > 0,
         canRedo: newPos < h2.length - 1,
+        unsaved: true,
       });
     },
 
@@ -653,17 +749,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         const { structured } = await api.inferCvStructure(file);
         get().load(structured); // populate + reset history; clears inferring
       } catch (err) {
-        const raw = err instanceof Error ? err.message : "Inference failed";
-        // apiFetch throws `HTTP <code>: <body>` where body is FastAPI's {"detail": "..."}.
-        const m = /^HTTP \d+:\s*(.*)$/s.exec(raw);
-        let detail = m ? m[1] : raw;
-        try {
-          const parsed = JSON.parse(detail) as { detail?: string };
-          if (parsed && typeof parsed.detail === "string") detail = parsed.detail;
-        } catch {
-          /* body wasn't JSON — keep raw text */
-        }
-        set({ inferring: true, inferError: detail });
+        set({ inferring: true, inferError: detailOf(err, "Inference failed") });
       }
     },
 
@@ -673,27 +759,195 @@ export const useEditorStore = create<EditorState>((set, get) => {
       get().commit();
       set({ saving: true, saveError: null });
       try {
-        const saved = await api.saveCvStructure(exportJson(cv));
+        // No active deck means a fresh install (or the slot right after NEW BASE CV that was
+        // never adopted): mint one and adopt it, so the very first save still lands somewhere.
+        let id = get().activeDeckId;
+        if (id === null) {
+          const deck = await api.createCvDeck(null);
+          id = deck.id;
+          set({ activeDeckId: deck.id });
+        }
+        const saved = await api.saveCvDeck(id, exportJson(cv));
         // Reload from the server's canonical form so ids/kinds re-derive cleanly.
         get().load(saved);
         set({ saving: false });
         // Unblock the orchestrator's gate banner without a page reload.
         useStore.getState().setCvStructureExists(true);
+        // auto_title / has_cv just changed for this deck — refresh the rail's rows.
+        await get().refreshDeckIndex();
         return true;
       } catch (err) {
-        const raw = err instanceof Error ? err.message : "Save failed";
-        // apiFetch throws `HTTP <code>: <body>` where body is FastAPI's {"detail": "..."}.
-        const m = /^HTTP \d+:\s*(.*)$/s.exec(raw);
-        let detail = m ? m[1] : raw;
-        try {
-          const parsed = JSON.parse(detail) as { detail?: string };
-          if (parsed && typeof parsed.detail === "string") detail = parsed.detail;
-        } catch {
-          /* body wasn't JSON — keep the raw text */
-        }
-        set({ saving: false, saveError: detail });
+        set({ saving: false, saveError: detailOf(err, "Save failed") });
         return false;
       }
+    },
+
+    // --- decks ------------------------------------------------------------------------
+
+    async hydrateDecks() {
+      try {
+        const { decks, default_id } = await api.listCvDecks();
+        const active = default_id ?? decks[0]?.id ?? null;
+        set({ decks, defaultDeckId: default_id, activeDeckId: active });
+        await loadDeckInto(active);
+      } catch {
+        // Same failure shape as the pre-decks mount effect: show the empty state rather
+        // than a broken editor. The rail simply renders no rows.
+        set({ decks: [], defaultDeckId: null, activeDeckId: null });
+        get().reset();
+      }
+    },
+
+    // Metadata-only re-read. Deliberately swallows: a stale rail row is cosmetic, and this
+    // runs on the tail of actions (save, rename, set-default) whose real work already
+    // succeeded — surfacing a refresh failure as a save failure would be a lie.
+    async refreshDeckIndex() {
+      try {
+        const { decks, default_id } = await api.listCvDecks();
+        set({ decks, defaultDeckId: default_id });
+      } catch {
+        /* keep the last-known rows */
+      }
+    },
+
+    setRailOpen(open) {
+      set({ railOpen: open, ...(open ? {} : { renameId: null, renameDraft: "" }) });
+    },
+
+    beginRename(id, draft) {
+      set({ renameId: id, renameDraft: draft });
+    },
+
+    setRenameDraft(v) {
+      set({ renameDraft: v });
+    },
+
+    cancelRename() {
+      set({ renameId: null, renameDraft: "" });
+    },
+
+    async flushAndPersist() {
+      get().commit(); // fold a pending typing burst into history first
+      if (!get().unsaved || !get().cv) return true;
+      if (await get().save()) return true;
+      // The buffer does not validate (422) or the server is unreachable. Navigating away
+      // would drop it silently, so make the user own that: OK discards, Cancel stays put
+      // with the inline saveError already on screen.
+      return window.confirm(tr("cvDecks.discardDraft"));
+    },
+
+    async switchDeck(id) {
+      if (id === get().activeDeckId || get().deckBusy) return;
+      if (!(await get().flushAndPersist())) return;
+      set({ deckBusy: true });
+      try {
+        // view/jsonOpen first: load()/reset() own selectedId and saveError, so setting them
+        // afterwards would clobber the fresh deck's own selection.
+        set({ activeDeckId: id, view: "blocks", jsonOpen: false });
+        await loadDeckInto(id);
+      } finally {
+        set({ deckBusy: false });
+      }
+    },
+
+    async newDeck() {
+      if (get().deckBusy) return;
+      if (!(await get().flushAndPersist())) return;
+      set({ deckBusy: true });
+      try {
+        const deck = await api.createCvDeck(null);
+        set({ activeDeckId: deck.id, view: "blocks", jsonOpen: false });
+        // reset() (not startBlank) so the existing EmptyState re-offers RUN INFERENCE /
+        // INIT BLANK for the new slot, and leaves `unsaved` false — switching straight back
+        // out of an untouched new deck must not try to PUT an empty CV.
+        get().reset();
+        await get().refreshDeckIndex();
+      } catch (err) {
+        set({ saveError: detailOf(err, "Could not create a base CV") });
+      } finally {
+        set({ deckBusy: false });
+      }
+    },
+
+    async duplicateDeck(id) {
+      if (get().deckBusy) return;
+      // Deliberately NOT flushAndPersist(): the server duplicates the deck *file*, so
+      // taking its discard branch would copy stale on-disk content while the user believes
+      // they duplicated what is on screen. If the live buffer is the source and it will not
+      // save, refuse outright and leave the inline saveError up — no prompt, nothing copied.
+      if (id === get().activeDeckId && get().cv) {
+        get().commit();
+        if (get().unsaved && !(await get().save())) return;
+      }
+      let created: string | null = null;
+      set({ deckBusy: true });
+      try {
+        const src = get().decks.find((d) => d.id === id);
+        // deckLabel() reads the live buffer for the active deck, so the copy is named after
+        // what is on screen — which, thanks to the flush above, is also what was copied.
+        const name = src ? `${get().deckLabel(src)} ${tr("cvDecks.copySuffix")}` : null;
+        created = (await api.duplicateCvDeck(id, name)).id;
+        await get().refreshDeckIndex();
+      } catch (err) {
+        set({ saveError: detailOf(err, "Could not duplicate this base CV") });
+      } finally {
+        set({ deckBusy: false });
+      }
+      // Outside the try on purpose: a failure inside switchDeck is a *switch* failure and
+      // must not surface as "could not duplicate". deckBusy is released by now, so the
+      // switch is not turned away by its own busy guard.
+      if (created) await get().switchDeck(created);
+    },
+
+    async renameDeck(id, name) {
+      const clean = name.trim();
+      set({ renameId: null, renameDraft: "" });
+      try {
+        // "" means "drop the custom name", i.e. fall back to the server's auto title.
+        await api.patchCvDeck(id, { name: clean === "" ? null : clean });
+      } catch (err) {
+        set({ saveError: detailOf(err, "Could not rename this base CV") });
+      }
+      await get().refreshDeckIndex();
+    },
+
+    async setDefaultDeck(id) {
+      const previous = get().defaultDeckId;
+      set({ defaultDeckId: id }); // optimistic: the star moves on click
+      try {
+        await api.patchCvDeck(id, { is_default: true });
+      } catch (err) {
+        set({ defaultDeckId: previous, saveError: detailOf(err, "Could not set the default") });
+      }
+      await get().refreshDeckIndex();
+    },
+
+    async deleteDeck(id) {
+      if (get().deckBusy) return;
+      set({ deckBusy: true });
+      try {
+        await api.deleteCvDeck(id);
+        const { decks, default_id } = await api.listCvDecks();
+        set({ decks, defaultDeckId: default_id });
+        if (get().activeDeckId === id) {
+          // The buffer belonged to the deck that is now gone — land on the new default,
+          // or on the empty state when that was the last deck.
+          const next = default_id ?? decks[0]?.id ?? null;
+          set({ activeDeckId: next, view: "blocks", jsonOpen: false });
+          await loadDeckInto(next);
+        }
+      } catch (err) {
+        set({ saveError: detailOf(err, "Could not delete this base CV") });
+      } finally {
+        set({ deckBusy: false });
+      }
+    },
+
+    deckLabel(d) {
+      // The active row tracks the *live* buffer, so renaming yourself in the contact block
+      // renames the row as you type; every other row reads the server's cached auto_title.
+      const live = d.id === get().activeDeckId ? get().cv?.contact.name : undefined;
+      return (d.name || live || d.auto_title || "").trim() || tr("cvDecks.untitled");
     },
   };
 });

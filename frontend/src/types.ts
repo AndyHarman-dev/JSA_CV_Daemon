@@ -5,6 +5,18 @@ export type JobState =
 export type Stage =
   | "fit_assessment" | "cv_adjust" | "cover_letter" | "revising_cv" | "revising_cl";
 
+// One row of the base-CV deck index (GET /api/cv-decks). `is_default` is server-computed
+// against the index's `default_id`; the editor store also tracks `defaultDeckId` from the
+// same response, and that store field — not this flag — is the deck rail's source of truth,
+// so a local set-default reflects before the index round-trips.
+export interface CvDeckDTO {
+  id: string;
+  name: string | null;
+  auto_title: string | null;
+  has_cv: boolean;
+  is_default: boolean;
+}
+
 export interface JobDTO {
   id: string;
   company: string;

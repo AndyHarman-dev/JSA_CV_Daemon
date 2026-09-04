@@ -250,5 +250,16 @@
   "boot.setLanguageFailed": "Could not save language preference. Please try again.",
   "toast.backendSwitched": "{job}: backend switched {from} → {to}. Any pending question was re-asked on the new backend.",
   "toast.modelSwitched": "{job}: model switched {from} → {to}. Any pending question was re-asked on the new model.",
-  "toast.dismissTitle": "Dismiss"
+  "toast.dismissTitle": "Dismiss",
+  "cvDecks.railLabel": "BASE CVs",
+  "cvDecks.newDeck": "NEW BASE CV",
+  "cvDecks.rename": "Rename",
+  "cvDecks.duplicate": "Duplicate",
+  "cvDecks.delete": "Delete",
+  "cvDecks.setDefault": "Set as default",
+  "cvDecks.default": "DEFAULT",
+  "cvDecks.untitled": "Untitled",
+  "cvDecks.copySuffix": "copy",
+  "cvDecks.discardDraft": "This base CV has unsaved changes that could not be saved. Discard them and continue?",
+  "cvDecks.deckCount": "{n}"
 }
