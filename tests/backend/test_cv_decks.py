@@ -485,3 +485,60 @@ class TestIndexMutatorSerialization:
         saved = next(m for m in index.decks if m.id == target.id)
         assert saved.has_cv is True
         assert saved.auto_title == "Jane Doe"
+
+
+class TestEnsureDefaultDeck:
+    """`ensure_default_deck` is the atomic replacement for the `load_index` -> `if
+    default_id is None: create_deck` check-then-act that `PUT /api/cv-structure` used to
+    inline. The read and the mint must share one hold of the index lock."""
+
+    async def test_mints_the_first_deck_on_an_empty_index(self, tmp_path):
+        settings = _settings(tmp_path)
+
+        deck_id = await cv_decks.ensure_default_deck(settings)
+
+        index = await cv_decks.read_index(cv_decks.index_path(settings))
+        assert [m.id for m in index.decks] == [deck_id]
+        assert index.default_id == deck_id
+        assert index.decks[0].has_cv is False, "an ensured slot holds no CV until saved"
+
+    async def test_returns_the_existing_default_without_minting(self, tmp_path):
+        settings = _settings(tmp_path)
+        existing = await cv_decks.create_deck(settings, name="mine")
+        await cv_decks.create_deck(settings, name="other")
+
+        assert await cv_decks.ensure_default_deck(settings) == existing.id
+
+        index = await cv_decks.read_index(cv_decks.index_path(settings))
+        assert len(index.decks) == 2, "ensure minted a deck despite a default existing"
+
+    async def test_concurrent_first_installs_agree_on_one_deck(self, tmp_path):
+        """The reason this function exists. Ten callers racing on a fresh install must all
+        return the same id and leave exactly one deck -- the pre-fix inline shape had each
+        one read an empty index, mint its own deck, and clobber the previous write."""
+        settings = _settings(tmp_path)
+
+        ids = await asyncio.gather(
+            *(cv_decks.ensure_default_deck(settings) for _ in range(10))
+        )
+
+        assert len(set(ids)) == 1, f"callers disagreed on the default deck: {set(ids)}"
+        index = await cv_decks.read_index(cv_decks.index_path(settings))
+        assert [m.id for m in index.decks] == [ids[0]]
+        assert index.default_id == ids[0]
+
+    async def test_adopts_the_deck_a_legacy_migration_just_created(self, tmp_path):
+        """On a pre-decks install `load_index` migrates `cv_structure.json` into one deck.
+        Ensure must return *that* deck, not mint a second empty one beside the user's
+        actual CV."""
+        settings = _settings(tmp_path)
+        await cv_structure.write(
+            settings.cv_structure_path, CVDocument.model_validate(_VALID_CV)
+        )
+
+        deck_id = await cv_decks.ensure_default_deck(settings)
+
+        index = await cv_decks.read_index(cv_decks.index_path(settings))
+        assert [m.id for m in index.decks] == [deck_id]
+        assert index.decks[0].has_cv is True
+        assert index.decks[0].auto_title == "Jane Doe"

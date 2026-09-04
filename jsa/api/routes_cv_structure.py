@@ -66,11 +66,10 @@ async def put_cv_structure(request: Request, body: CvStructureBody) -> dict:
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=_concise_reason(exc)) from exc
 
-    index = await cv_decks.load_index(settings)
-    default_id = index.default_id
-    if default_id is None:
-        meta = await cv_decks.create_deck(settings)
-        default_id = meta.id
+    # ensure_default_deck, not load_index-then-create: the read and the mint have to share
+    # one hold of the index lock, or two concurrent first-install PUTs each create a deck
+    # and the loser's save_index clobbers the winner's. See cv_decks.ensure_default_deck.
+    default_id = await cv_decks.ensure_default_deck(settings)
     await cv_decks.save_deck(settings, default_id, cv)
     # Unblock the orchestrator's "no CV structure" gate without requiring a restart.
     request.app.state.orchestrator.kick()

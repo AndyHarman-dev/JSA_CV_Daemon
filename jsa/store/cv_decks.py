@@ -240,6 +240,21 @@ async def save_deck(settings: Settings, deck_id: str, cv: CVDocument) -> None:
         await save_index(settings, index)
 
 
+def _append_deck(index: DeckIndex, name: str | None) -> DeckMeta:
+    """Append a fresh, empty deck to ``index`` **in memory** and return it.
+
+    Await-free and caller-persisted by design: the caller must already hold
+    ``_lock("index")`` and is responsible for the following ``save_index``. Split out of
+    ``create_deck`` so ``ensure_default_deck`` can mint a deck while holding that same
+    lock -- ``asyncio.Lock`` is not reentrant, so it cannot simply call ``create_deck``.
+    """
+    meta = DeckMeta(id=uuid4().hex, name=name, auto_title=None, has_cv=False)
+    index.decks.append(meta)
+    if index.default_id is None:
+        index.default_id = meta.id
+    return meta
+
+
 async def create_deck(settings: Settings, *, name: str | None = None) -> DeckMeta:
     """Register a new, empty deck slot -- no CV file is written yet (``has_cv=False``).
 
@@ -248,12 +263,34 @@ async def create_deck(settings: Settings, *, name: str | None = None) -> DeckMet
     """
     async with _lock("index"):
         index = await load_index(settings)
-        meta = DeckMeta(id=uuid4().hex, name=name, auto_title=None, has_cv=False)
-        index.decks.append(meta)
-        if index.default_id is None:
-            index.default_id = meta.id
+        meta = _append_deck(index, name)
         await save_index(settings, index)
         return meta
+
+
+async def ensure_default_deck(settings: Settings) -> str:
+    """Return the index's default deck id, minting the first deck if there is none.
+
+    This exists so a caller that needs "the default deck, whatever it takes" never has to
+    write ``load_index`` -> ``if default_id is None: create_deck`` itself. That shape is a
+    check-then-act *above* the index lock: two concurrent callers on a fresh install (the
+    editor's ``PUT /api/cv-structure`` and any future client-side save path) would each
+    read an empty index, each mint a deck, and the second ``save_index`` would clobber the
+    first -- leaving an orphan deck file with no index entry. Here the read and the mint
+    happen under a single hold of the "index" lock, so the loser of the race sees the
+    winner's ``default_id`` and adopts it.
+
+    ``default_id is None`` is equivalent to "no decks": ``_append_deck`` sets it on the
+    first deck and ``delete_deck`` re-points it at ``decks[0]``, clearing it only when the
+    last deck goes. So the ``None`` branch below is exactly the empty-index case.
+    """
+    async with _lock("index"):
+        index = await load_index(settings)
+        if index.default_id is not None:
+            return index.default_id
+        meta = _append_deck(index, None)
+        await save_index(settings, index)
+        return meta.id
 
 
 async def rename_deck(settings: Settings, deck_id: str, name: str | None) -> DeckMeta:
