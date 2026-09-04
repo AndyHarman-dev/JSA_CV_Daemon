@@ -70,9 +70,11 @@ describe("BaseCvPicker", () => {
     expect(d2).not.toHaveTextContent("DEFAULT");
   });
 
-  it("marks the currently assigned deck", () => {
+  it("marks the currently assigned deck with a check, and no other row", () => {
     seed({ jobs: { job1: makeJob({ base_cv_id: "d2" }) } });
     render(<BaseCvPicker />);
+    expect(screen.getByTestId("base-cv-picker-check-d2")).toBeInTheDocument();
+    expect(screen.queryByTestId("base-cv-picker-check-d1")).not.toBeInTheDocument();
     expect(screen.getByTestId("base-cv-picker-unassign")).toBeInTheDocument();
   });
 

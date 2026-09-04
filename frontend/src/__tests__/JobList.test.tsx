@@ -3,6 +3,9 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { useStore } from "../store";
 import { JobList } from "../components/JobList";
 import type { JobDTO } from "../types";
+import { SHELL_THEME } from "../theme/tokens";
+
+const T = SHELL_THEME;
 
 function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   return {
@@ -502,8 +505,19 @@ describe("JobList — base-CV trigger (Phase 6)", () => {
 
     render(<JobList />);
 
-    expect(screen.getByTitle("Change base CV")).toBeInTheDocument();
+    const trigger = screen.getByTitle("Change base CV");
+    expect(trigger).toBeInTheDocument();
     expect(screen.queryByTitle("Assign base CV")).toBeNull();
+    expect(trigger).toHaveStyle({ color: T.a });
+  });
+
+  it("shows no accent styling when unassigned", () => {
+    const job = makeJob({ id: "j1", state: "queued", base_cv_id: null });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.getByTitle("Assign base CV")).toHaveStyle({ color: T.ink3 });
   });
 
   it("clicking the trigger opens the picker for that job without selecting the row", () => {

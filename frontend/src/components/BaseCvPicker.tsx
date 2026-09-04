@@ -46,7 +46,7 @@ export function BaseCvPicker() {
         zIndex: 90,
         display: "flex",
         flexDirection: "column",
-        ...panelBase(T, { chamfer: 10 }),
+        ...panelBase(T, { chamfer: 12 }),
         boxShadow: T.shadowMd,
         animation: "jsfade .1s ease",
       }}
@@ -196,7 +196,10 @@ export function BaseCvPicker() {
                   </span>
                 )}
                 {isAssigned && (
-                  <span style={{ color: T.a, display: "flex", flex: "none" }}>
+                  <span
+                    data-testid={`base-cv-picker-check-${d.id}`}
+                    style={{ color: T.a, display: "flex", flex: "none" }}
+                  >
                     <Icon name="check" size={12} />
                   </span>
                 )}
