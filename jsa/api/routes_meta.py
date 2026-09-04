@@ -20,8 +20,10 @@ async def config(request: Request):
     # "cv_structure_exists" now means "at least one deck has a CV" — an .exists() check on
     # the legacy file would be a permanent lie post-migration (the legacy file is left in
     # place forever, see CLAUDE.md → "CV structure — single source of truth"). Note:
-    # resolve_path is async, so this must be awaited, not wrapped in bool(...).
-    cv_structure_exists = await cv_decks.resolve_path(settings, None) is not None
+    # resolve_path is async, so this must be awaited, not wrapped in bool(...). The
+    # index just read is handed to it so this boot-path endpoint pays one index read,
+    # not two (and attempts the legacy migration at most once).
+    cv_structure_exists = await cv_decks.resolve_path(settings, None, index=index) is not None
     return {
         "backend": settings.backend,
         "backends": settings.backends,

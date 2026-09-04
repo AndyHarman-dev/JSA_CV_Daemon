@@ -22,7 +22,11 @@ deleted or rewritten, so it remains an inert backup of the pre-decks state forev
 ``migrate_legacy`` serializes its write behind a module-level lock and re-checks the
 index file's existence *inside* the lock, immediately before writing -- two concurrent
 first-boot callers (e.g. ``GET /api/config`` and the orchestrator's dispatch gate, both
-on the same event loop) must mint exactly one deck from the legacy file, not two.
+on the same event loop) must mint exactly one deck from the legacy file, not two. Every
+other index mutator (``create_deck``/``save_deck``/``rename_deck``/``set_default``/
+``duplicate_deck``/``delete_deck``) is a load-mutate-write cycle over the whole index file
+and is serialized behind the "index" lock for the same reason -- two overlapping mutations
+would otherwise have the later write silently drop the earlier one.
 
 Errors are split into two ``ValueError`` subclasses so the API layer can map them to the
 right HTTP status without re-deriving this module's own validation rules: ``InvalidDeckId``
@@ -43,6 +47,7 @@ import re
 import shutil
 from pathlib import Path
 from uuid import uuid4
+from weakref import WeakKeyDictionary
 
 from pydantic import BaseModel, ValidationError
 
@@ -54,8 +59,49 @@ logger = logging.getLogger(__name__)
 
 _DECK_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
-# Guards migrate_legacy's write section -- see the module docstring's race-condition note.
-_migrate_lock = asyncio.Lock()
+# Two named locks, both resolved through ``_lock`` below:
+#
+# "migrate" guards migrate_legacy's write section -- see the module docstring's
+# race-condition note.
+#
+# "index" serializes every read-modify-write of the index file. Each mutator below loads
+# the index, mutates it in memory and writes the whole file back, so two overlapping
+# mutations would otherwise interleave and the later write would silently drop the earlier
+# one (e.g. a POST /api/cv-decks create overlapping a PUT /api/cv-decks/{id} save loses the
+# save's has_cv=True/auto_title refresh -- the deck then renders as an empty slot and the
+# assignment endpoint rejects it with a 422). Lock ordering is always
+# "index" -> "migrate" (load_index may migrate); never the reverse.
+#
+# They are keyed by running event loop rather than held as module-level singletons.
+# ``asyncio.Lock`` binds itself to a loop on its first *contended* acquire and raises
+# ``RuntimeError: bound to a different event loop`` for every contended acquire from any
+# other loop thereafter. Production only ever has one loop, so a singleton would work
+# there -- but each pytest-asyncio test gets a fresh loop, so the first test to actually
+# contend a lock would poison it for every later one, and the failure surfaces as an
+# inscrutable RuntimeError in unrelated code rather than as the concurrency bug it isn't.
+# Do not "simplify" this back to two module-level ``asyncio.Lock()`` objects.
+_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+    WeakKeyDictionary()
+)
+
+
+def _lock(name: str) -> asyncio.Lock:
+    """Return the ``name`` lock for the running event loop, creating it on first use.
+
+    Synchronous and await-free by design: the get-or-create below must not yield, or two
+    coroutines could each mint a separate lock for the same (loop, name) pair and neither
+    would exclude the other.
+    """
+    loop = asyncio.get_running_loop()
+    per_loop = _locks.get(loop)
+    if per_loop is None:
+        per_loop = {}
+        _locks[loop] = per_loop
+    lock = per_loop.get(name)
+    if lock is None:
+        lock = asyncio.Lock()
+        per_loop[name] = lock
+    return lock
 
 
 class InvalidDeckId(ValueError):
@@ -162,15 +208,16 @@ async def save_deck(settings: Settings, deck_id: str, cv: CVDocument) -> None:
     Membership is checked *before* writing the file -- an unknown ``deck_id`` must raise
     without leaving an orphan file on disk.
     """
-    index = await load_index(settings)
-    meta = next((m for m in index.decks if m.id == deck_id), None)
-    if meta is None:
-        raise UnknownDeckId(f"unknown deck id: {deck_id!r}")
+    async with _lock("index"):
+        index = await load_index(settings)
+        meta = next((m for m in index.decks if m.id == deck_id), None)
+        if meta is None:
+            raise UnknownDeckId(f"unknown deck id: {deck_id!r}")
 
-    await cv_structure.write(deck_path(settings, deck_id), cv)
-    meta.auto_title = cv.contact.name
-    meta.has_cv = True
-    await save_index(settings, index)
+        await cv_structure.write(deck_path(settings, deck_id), cv)
+        meta.auto_title = cv.contact.name
+        meta.has_cv = True
+        await save_index(settings, index)
 
 
 async def create_deck(settings: Settings, *, name: str | None = None) -> DeckMeta:
@@ -179,55 +226,61 @@ async def create_deck(settings: Settings, *, name: str | None = None) -> DeckMet
     Becomes the index's ``default_id`` if it is the first deck. Ids are always minted
     here via ``uuid4().hex``; callers never supply one.
     """
-    index = await load_index(settings)
-    meta = DeckMeta(id=uuid4().hex, name=name, auto_title=None, has_cv=False)
-    index.decks.append(meta)
-    if index.default_id is None:
-        index.default_id = meta.id
-    await save_index(settings, index)
-    return meta
+    async with _lock("index"):
+        index = await load_index(settings)
+        meta = DeckMeta(id=uuid4().hex, name=name, auto_title=None, has_cv=False)
+        index.decks.append(meta)
+        if index.default_id is None:
+            index.default_id = meta.id
+        await save_index(settings, index)
+        return meta
 
 
 async def rename_deck(settings: Settings, deck_id: str, name: str | None) -> DeckMeta:
-    index = await load_index(settings)
-    for meta in index.decks:
-        if meta.id == deck_id:
-            meta.name = name
-            await save_index(settings, index)
-            return meta
+    async with _lock("index"):
+        index = await load_index(settings)
+        for meta in index.decks:
+            if meta.id == deck_id:
+                meta.name = name
+                await save_index(settings, index)
+                return meta
     raise UnknownDeckId(f"unknown deck id: {deck_id!r}")
 
 
 async def set_default(settings: Settings, deck_id: str) -> None:
-    index = await load_index(settings)
-    if not any(meta.id == deck_id for meta in index.decks):
-        raise UnknownDeckId(f"unknown deck id: {deck_id!r}")
-    index.default_id = deck_id
-    await save_index(settings, index)
+    async with _lock("index"):
+        index = await load_index(settings)
+        if not any(meta.id == deck_id for meta in index.decks):
+            raise UnknownDeckId(f"unknown deck id: {deck_id!r}")
+        index.default_id = deck_id
+        await save_index(settings, index)
 
 
 async def duplicate_deck(
     settings: Settings, src_id: str, *, name: str | None = None
 ) -> DeckMeta:
     """Copy ``src_id``'s file content into a brand-new deck id."""
-    index = await load_index(settings)
-    src_meta = next((m for m in index.decks if m.id == src_id), None)
-    if src_meta is None:
-        raise UnknownDeckId(f"unknown deck id: {src_id!r}")
+    async with _lock("index"):
+        index = await load_index(settings)
+        src_meta = next((m for m in index.decks if m.id == src_id), None)
+        if src_meta is None:
+            raise UnknownDeckId(f"unknown deck id: {src_id!r}")
 
-    new_id = uuid4().hex
-    src_path = deck_path(settings, src_id)
-    dst_path = deck_path(settings, new_id)
+        new_id = uuid4().hex
+        src_path = deck_path(settings, src_id)
+        dst_path = deck_path(settings, new_id)
 
-    has_cv = await asyncio.to_thread(src_path.exists)
-    if has_cv:
-        await asyncio.to_thread(dst_path.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(shutil.copyfile, src_path, dst_path)
+        has_cv = await asyncio.to_thread(src_path.exists)
+        if has_cv:
+            await asyncio.to_thread(dst_path.parent.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(shutil.copyfile, src_path, dst_path)
 
-    new_meta = DeckMeta(id=new_id, name=name, auto_title=src_meta.auto_title, has_cv=has_cv)
-    index.decks.append(new_meta)
-    await save_index(settings, index)
-    return new_meta
+        new_meta = DeckMeta(
+            id=new_id, name=name, auto_title=src_meta.auto_title, has_cv=has_cv
+        )
+        index.decks.append(new_meta)
+        await save_index(settings, index)
+        return new_meta
 
 
 async def delete_deck(settings: Settings, deck_id: str) -> None:
@@ -236,25 +289,36 @@ async def delete_deck(settings: Settings, deck_id: str) -> None:
     Promotes ``decks[0]`` to default if the deleted deck was the default; clears
     ``default_id`` to ``None`` when no decks remain.
     """
-    index = await load_index(settings)
-    path = deck_path(settings, deck_id)
-    await asyncio.to_thread(path.unlink, missing_ok=True)
+    async with _lock("index"):
+        index = await load_index(settings)
+        path = deck_path(settings, deck_id)
+        await asyncio.to_thread(path.unlink, missing_ok=True)
 
-    index.decks = [m for m in index.decks if m.id != deck_id]
-    if index.default_id == deck_id:
-        index.default_id = index.decks[0].id if index.decks else None
-    await save_index(settings, index)
+        index.decks = [m for m in index.decks if m.id != deck_id]
+        if index.default_id == deck_id:
+            index.default_id = index.decks[0].id if index.decks else None
+        await save_index(settings, index)
 
 
-async def resolve_path(settings: Settings, deck_id: str | None) -> Path | None:
+async def resolve_path(
+    settings: Settings, deck_id: str | None, *, index: DeckIndex | None = None
+) -> Path | None:
     """The pipeline seam -- return the first *existing* deck file among:
     the requested deck -> the index's ``default_id`` -> index order.
 
     Pure ``.exists()`` checks: loadability/corruption of the file's content stays
     ``stages._read_base_structure``'s job, exactly as for the legacy single-file store.
-    Logs a warning when a requested deck id could not be honored.
+    Logs a warning whenever the deck actually used is not the one that was asked for --
+    including the ``deck_id=None`` case, where "asked for" means the index's
+    ``default_id``. A silent fall-through there is exactly the confusing case: the rail
+    shows deck B starred as DEFAULT while every unassigned job runs against deck A.
+
+    ``index`` lets a caller that has already loaded the index (e.g. ``GET /api/config``)
+    pass it in rather than paying a second index read -- and, on a first-boot install, a
+    second legacy-migration attempt.
     """
-    index = await load_index(settings)
+    if index is None:
+        index = await load_index(settings)
 
     ordered_ids: list[str] = []
     if deck_id is not None:
@@ -271,11 +335,12 @@ async def resolve_path(settings: Settings, deck_id: str | None) -> Path | None:
         except ValueError:
             continue
         if await asyncio.to_thread(path.exists):
-            if deck_id is not None and candidate != deck_id:
+            wanted = deck_id if deck_id is not None else index.default_id
+            if wanted is not None and candidate != wanted:
                 logger.warning(
                     "cv_decks.resolve_path: requested deck %r has no usable CV yet, "
                     "falling back to deck %r",
-                    deck_id,
+                    wanted,
                     candidate,
                 )
             return path
@@ -297,7 +362,7 @@ async def migrate_legacy(settings: Settings) -> DeckIndex:
     legacy file returns an empty ``DeckIndex()`` *without* writing the index file, so it has
     no on-disk state until the user creates something.
 
-    The actual write is serialized behind ``_migrate_lock``, with the index file's
+    The actual write is serialized behind the "migrate" lock, with the index file's
     existence re-checked *inside* the lock immediately before writing -- two concurrent
     first-boot callers on the same event loop (e.g. ``GET /api/config`` and the
     orchestrator's dispatch gate, both calling ``load_index`` before either has written)
@@ -326,7 +391,7 @@ async def migrate_legacy(settings: Settings) -> DeckIndex:
     if cv is None:
         return DeckIndex()
 
-    async with _migrate_lock:
+    async with _lock("migrate"):
         # Re-check inside the lock: a concurrent caller may have already won the race
         # and written the index while we were waiting for the lock above.
         idx_path = index_path(settings)

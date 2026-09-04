@@ -446,3 +446,42 @@ class TestMigrateLegacy:
 
         deck_files = list(settings.cv_decks_dir.glob("*.json"))
         assert len(deck_files) == 1
+
+
+class TestIndexMutatorSerialization:
+    """Every index mutator is a load-mutate-write cycle over one JSON file, and each of
+    its steps awaits (`asyncio.to_thread`). Two overlapping mutations therefore interleave
+    and the later write silently drops the earlier one unless they are serialized -- the
+    reachable case being the editor rail's create/duplicate firing while a deck autosave
+    PUT is still in flight."""
+
+    async def test_concurrent_creates_all_survive(self, tmp_path):
+        settings = _settings(tmp_path)
+
+        metas = await asyncio.gather(
+            *(cv_decks.create_deck(settings, name=f"deck-{i}") for i in range(10))
+        )
+
+        index = await cv_decks.read_index(cv_decks.index_path(settings))
+        assert len(index.decks) == 10, "a lost update dropped one or more created decks"
+        assert {m.id for m in metas} == {m.id for m in index.decks}
+        assert index.default_id in {m.id for m in metas}
+
+    async def test_concurrent_save_and_creates_keep_the_save(self, tmp_path):
+        """The save's `has_cv=True`/`auto_title` refresh must not be clobbered by a
+        create that loaded the index before the save wrote it -- a deck that loses it
+        renders as an empty slot and PUT /api/jobs/{id}/base-cv 422s it despite the CV
+        being on disk."""
+        settings = _settings(tmp_path)
+        target = await cv_decks.create_deck(settings, name="target")
+
+        await asyncio.gather(
+            cv_decks.save_deck(settings, target.id, CVDocument.model_validate(_VALID_CV)),
+            *(cv_decks.create_deck(settings, name=f"other-{i}") for i in range(5)),
+        )
+
+        index = await cv_decks.read_index(cv_decks.index_path(settings))
+        assert len(index.decks) == 6
+        saved = next(m for m in index.decks if m.id == target.id)
+        assert saved.has_cv is True
+        assert saved.auto_title == "Jane Doe"
