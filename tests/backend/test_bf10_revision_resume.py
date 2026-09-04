@@ -50,7 +50,7 @@ from jsa.db.models import (
 from jsa.pipeline.stages import PausedForInput, run_stage
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
-from tests.backend.fakes.finals import cl_final, cv_final
+from tests.backend.fakes.finals import cl_final, cv_final, tool_loop_miss
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +229,9 @@ class TestRevisingClResumesSendAnswer:
         backend = TrackingFakeBackend([
             cv_final("CV v1"),                                                # cv_adjust
             cl_final(),                                                       # cover_letter
+            tool_loop_miss(),                              # revising_cl #1 — rung-2 probe
             _needs_input_reply("Here is the draft. Type 'finalize' to approve."),  # revising_cl (1st call)
+            tool_loop_miss(),                              # revising_cl resume — rung-2 probe
             cl_final(
                 "REVISED_CL_CONTENT: rewritten per the revision instruction to remove "
                 "the closing phrase and tighten the overall tone throughout."
@@ -259,14 +261,16 @@ class TestRevisingClResumesSendAnswer:
         assert job.state == JobState.awaiting_input
         assert job.current_stage == Stage.revising_cl
 
-        # Verify the fresh run sent the instruction
-        assert len(backend.send_message_calls) == 1, (
-            f"Expected 1 send_message call after fresh revision, "
-            f"got {len(backend.send_message_calls)}: {backend.send_message_calls}"
+        # Verify the fresh run sent the instruction — twice, on both rungs: the
+        # tool loop's rung-2 probe and then rung 3 (see tool_loop_miss's docstring).
+        assert len(backend.send_message_calls) == 2, (
+            f"Expected 2 send_message calls after fresh revision (rung-2 probe + "
+            f"rung 3), got {len(backend.send_message_calls)}: "
+            f"{backend.send_message_calls}"
         )
-        assert backend.send_message_calls[0] == instruction, (
-            f"First send_message should be the instruction, "
-            f"got: {backend.send_message_calls[0]!r}"
+        assert backend.send_message_calls == [instruction, instruction], (
+            f"Both fresh-revision send_message calls should carry the instruction "
+            f"verbatim, got: {backend.send_message_calls!r}"
         )
 
         # Answer the follow-up
@@ -280,16 +284,18 @@ class TestRevisingClResumesSendAnswer:
 
         # --- Primary assertions ---
 
-        # send_message called exactly twice total
-        assert len(backend.send_message_calls) == 2, (
-            f"Expected 2 send_message calls total (instruction + answer), "
+        # send_message called exactly four times total: two per revision turn
+        # (rung-2 probe + rung 3), across the fresh turn and the resume turn.
+        assert len(backend.send_message_calls) == 4, (
+            f"Expected 4 send_message calls total (instruction x2 + answer x2), "
             f"got {len(backend.send_message_calls)}: {backend.send_message_calls}"
         )
 
-        # Second call received the user's answer, NOT the instruction again
-        assert backend.send_message_calls[1] == user_answer, (
-            f"Resume send_message should receive the user answer {user_answer!r}, "
-            f"got {backend.send_message_calls[1]!r}. "
+        # BOTH resume calls received the user's answer, NOT the instruction again —
+        # the discriminating assertion of this test, unchanged in substance.
+        assert backend.send_message_calls[2:] == [user_answer, user_answer], (
+            f"Both resume send_message calls should receive the user answer "
+            f"{user_answer!r}, got {backend.send_message_calls[2:]!r}. "
             f"(Pre-fix bug: instruction would be re-sent instead.)"
         )
 
@@ -336,7 +342,9 @@ class TestRevisingCvResumesSendAnswer:
         backend = TrackingFakeBackend([
             cv_final("CV v1"),                                                # cv_adjust
             cl_final(),                                                       # cover_letter
+            tool_loop_miss(),                              # revising_cv #1 — rung-2 probe
             _needs_input_reply("Draft ready. Does this look good?"),          # revising_cv (1st call)
+            tool_loop_miss(),                              # revising_cv resume — rung-2 probe
             cv_final("REVISED_CV_CONTENT"),                                   # revising_cv (2nd call / resume)
         ])
 
@@ -363,10 +371,12 @@ class TestRevisingCvResumesSendAnswer:
         assert job.state == JobState.awaiting_input
         assert job.current_stage == Stage.revising_cv
 
-        # First send_message sent the instruction
-        assert len(backend.send_message_calls) == 1
-        assert backend.send_message_calls[0] == instruction, (
-            f"First send_message should be the instruction, got: {backend.send_message_calls[0]!r}"
+        # Both fresh-revision send_message calls sent the instruction — the tool
+        # loop's rung-2 probe and rung 3 (see tool_loop_miss's docstring).
+        assert len(backend.send_message_calls) == 2
+        assert backend.send_message_calls == [instruction, instruction], (
+            f"Both fresh-revision send_message calls should carry the instruction, "
+            f"got: {backend.send_message_calls!r}"
         )
 
         # Answer the follow-up
@@ -380,14 +390,15 @@ class TestRevisingCvResumesSendAnswer:
 
         # --- Primary assertions ---
 
-        assert len(backend.send_message_calls) == 2, (
-            f"Expected 2 send_message calls, got {len(backend.send_message_calls)}: "
+        assert len(backend.send_message_calls) == 4, (
+            f"Expected 4 send_message calls (two per revision turn: rung-2 probe + "
+            f"rung 3), got {len(backend.send_message_calls)}: "
             f"{backend.send_message_calls}"
         )
 
-        assert backend.send_message_calls[1] == user_answer, (
-            f"Resume send_message should receive {user_answer!r}, "
-            f"got {backend.send_message_calls[1]!r}. "
+        assert backend.send_message_calls[2:] == [user_answer, user_answer], (
+            f"Both resume send_message calls should receive {user_answer!r}, "
+            f"got {backend.send_message_calls[2:]!r}. "
             f"(Pre-fix bug: instruction would be re-sent.)"
         )
 
@@ -444,10 +455,12 @@ class TestSecondRevisionAfterFirstCompletes:
         backend = TrackingFakeBackend([
             cv_final("CV v1"),                              # cv_adjust
             cl_final(),                                     # cover_letter
+            tool_loop_miss(),                            # revising_cl #1 — rung-2 probe
             cl_final(
                 "REVISED_CV_V2 (short): the first revision, tightened per the "
                 "instruction to make the summary noticeably shorter and punchier."
             ),  # first revising_cl — completes immediately
+            tool_loop_miss(),                            # revising_cl #2 — rung-2 probe
             cl_final(
                 "REVISED_CV_V3 (metrics): the second revision, adding measurable "
                 "impact metrics to every bullet point across the experience section."
@@ -471,9 +484,10 @@ class TestSecondRevisionAfterFirstCompletes:
         job = await repo.get_job(session, job.id)
         assert job.state == JobState.review, "Job should be back in review after first revision"
 
-        # Verify first revision consumed the first instruction
-        assert len(backend.send_message_calls) == 1
-        assert backend.send_message_calls[0] == first_instruction
+        # Verify first revision consumed the first instruction on both rungs
+        # (tool-loop rung-2 probe + rung 3 — see tool_loop_miss's docstring).
+        assert len(backend.send_message_calls) == 2
+        assert backend.send_message_calls == [first_instruction, first_instruction]
 
         # Verify RevisionRequest #1 is consumed
         result = await session.execute(
@@ -493,17 +507,17 @@ class TestSecondRevisionAfterFirstCompletes:
 
         # --- Primary assertions ---
 
-        # Two send_message calls total (one per revision)
-        assert len(backend.send_message_calls) == 2, (
-            f"Expected 2 send_message calls (one per revision), "
+        # Four send_message calls total (two per revision: rung-2 probe + rung 3)
+        assert len(backend.send_message_calls) == 4, (
+            f"Expected 4 send_message calls (two per revision), "
             f"got {len(backend.send_message_calls)}: {backend.send_message_calls}"
         )
 
-        # Second call must be the NEW instruction, not the answer from a FollowUp
-        # (which wouldn't exist here) or the first instruction
-        assert backend.send_message_calls[1] == second_instruction, (
-            f"Second revision send_message should be the second instruction "
-            f"{second_instruction!r}, got {backend.send_message_calls[1]!r}. "
+        # The second revision's calls must be the NEW instruction, not the answer
+        # from a FollowUp (which wouldn't exist here) or the first instruction
+        assert backend.send_message_calls[2:] == [second_instruction, second_instruction], (
+            f"Second revision send_message calls should be the second instruction "
+            f"{second_instruction!r}, got {backend.send_message_calls[2:]!r}. "
             f"(Bug: old message history would erroneously trigger resume path.)"
         )
 
@@ -564,10 +578,11 @@ class TestSecondRevisionAfterFirstParked:
            Run revising_cl → FINAL. Must send instruction from #2, not "finalize".
 
         Assertions:
-        - send_message_calls has 3 entries total:
-            [0] == first_instruction   (fresh first revision)
-            [1] == "finalize"          (resume of first revision — user's answer)
-            [2] == second_instruction  (fresh second revision — must NOT be "finalize")
+        - send_message_calls has 6 entries total — two per revision turn, since the
+          tool loop's rung-2 probe precedes rung 3 on each (see tool_loop_miss's docstring):
+            [0:2] == first_instruction   (fresh first revision)
+            [2:4] == "finalize"          (resume of first revision — user's answer)
+            [4:6] == second_instruction  (fresh second revision — must NOT be "finalize")
         - cover_letter documents: versions [1, 2, 3].
         - Both RevisionRequests consumed.
         - Job ends in review, current_stage is None.
@@ -578,20 +593,24 @@ class TestSecondRevisionAfterFirstParked:
 
         job = await _insert_job(session, job_id="bf10parked001122")
 
-        # 5 scripted replies consumed in this order:
+        # 8 scripted replies consumed in this order — each revision turn spends TWO,
+        # the tool loop's rung-2 probe then rung 3 (see tool_loop_miss's docstring):
         #   start_session: cv_adjust   → FINAL
         #   start_session: cover_letter → FINAL
-        #   send_message: revising_cl #1 fresh → NEED_INPUT
-        #   send_message: revising_cl #1 resume → FINAL
-        #   send_message: revising_cl #2 fresh → FINAL
+        #   send_message: revising_cl #1 fresh  → probe, then NEED_INPUT
+        #   send_message: revising_cl #1 resume → probe, then FINAL
+        #   send_message: revising_cl #2 fresh  → probe, then FINAL
         backend = TrackingFakeBackend([
             cv_final("CV v1"),                                                     # cv_adjust
             cl_final(),                                                            # cover_letter
+            tool_loop_miss(),                                                   # #1 fresh — probe
             _needs_input_reply("Here is the draft, finalize?"),                    # revising_cl #1 fresh
+            tool_loop_miss(),                                                   # #1 resume — probe
             cl_final(
                 "REVISED_CL_V2 (closing removed): the closing phrase has been "
                 "removed and the letter now ends directly after the final paragraph."
             ),  # revising_cl #1 resume
+            tool_loop_miss(),                                                   # #2 fresh — probe
             cl_final(
                 "REVISED_CL_V3 (formal tone): the tone has been rewritten to be "
                 "more formal throughout, per the second revision instruction."
@@ -621,14 +640,14 @@ class TestSecondRevisionAfterFirstParked:
         assert job.state == JobState.awaiting_input
         assert job.current_stage == Stage.revising_cl
 
-        # Verify the fresh run sent the instruction
-        assert len(backend.send_message_calls) == 1, (
-            f"Expected 1 send_message call after fresh first revision, "
+        # Verify the fresh run sent the instruction on both rungs
+        assert len(backend.send_message_calls) == 2, (
+            f"Expected 2 send_message calls after fresh first revision, "
             f"got {len(backend.send_message_calls)}: {backend.send_message_calls}"
         )
-        assert backend.send_message_calls[0] == first_instruction, (
-            f"First send_message should be the first instruction, "
-            f"got: {backend.send_message_calls[0]!r}"
+        assert backend.send_message_calls == [first_instruction, first_instruction], (
+            f"Both fresh send_message calls should be the first instruction, "
+            f"got: {backend.send_message_calls!r}"
         )
 
         # Answer the follow-up (simulates user responding in the Inbox)
@@ -648,13 +667,13 @@ class TestSecondRevisionAfterFirstParked:
         assert job.current_stage is None
 
         # Verify resume sent the user's answer
-        assert len(backend.send_message_calls) == 2, (
-            f"Expected 2 send_message calls after resume, "
+        assert len(backend.send_message_calls) == 4, (
+            f"Expected 4 send_message calls after resume, "
             f"got {len(backend.send_message_calls)}: {backend.send_message_calls}"
         )
-        assert backend.send_message_calls[1] == user_answer, (
-            f"Resume send_message should be the user's answer {user_answer!r}, "
-            f"got: {backend.send_message_calls[1]!r}"
+        assert backend.send_message_calls[2:4] == [user_answer, user_answer], (
+            f"Resume send_message calls should be the user's answer {user_answer!r}, "
+            f"got: {backend.send_message_calls[2:4]!r}"
         )
 
         # Verify first RevisionRequest is consumed
@@ -686,25 +705,26 @@ class TestSecondRevisionAfterFirstParked:
 
         # --- Primary assertions ---
 
-        # Three send_message calls total across all revisions
-        assert len(backend.send_message_calls) == 3, (
-            f"Expected 3 send_message calls total (first_instruction, finalize, second_instruction), "
+        # Six send_message calls total across all revisions (two per turn)
+        assert len(backend.send_message_calls) == 6, (
+            f"Expected 6 send_message calls total (first_instruction x2, finalize x2, "
+            f"second_instruction x2), "
             f"got {len(backend.send_message_calls)}: {backend.send_message_calls}"
         )
 
         # The third call must be the second instruction, NOT "finalize".
         # If the discriminator erroneously detects a resume (using old FollowUp), it
         # would re-send "finalize" — this assertion catches that exact bug.
-        assert backend.send_message_calls[2] == second_instruction, (
-            f"Second fresh revision send_message must be {second_instruction!r}, "
-            f"got {backend.send_message_calls[2]!r}. "
+        assert backend.send_message_calls[4:6] == [second_instruction, second_instruction], (
+            f"Second fresh revision send_message calls must be {second_instruction!r}, "
+            f"got {backend.send_message_calls[4:6]!r}. "
             f"(Bug: naive discriminator finds old FollowUp and sends 'finalize' instead.)"
         )
 
-        # The second call was the resume answer, not re-sent instruction
-        assert backend.send_message_calls[1] == user_answer, (
-            f"Resume send_message should have been {user_answer!r}, "
-            f"got {backend.send_message_calls[1]!r}"
+        # The middle pair was the resume answer, not a re-sent instruction
+        assert backend.send_message_calls[2:4] == [user_answer, user_answer], (
+            f"Resume send_message calls should have been {user_answer!r}, "
+            f"got {backend.send_message_calls[2:4]!r}"
         )
 
         # Three cover_letter documents: v1 (cover_letter stage), v2 (1st revision), v3 (2nd revision)

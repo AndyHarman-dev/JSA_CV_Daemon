@@ -50,6 +50,15 @@ export interface ReasoningSegments {
   closed: ReasoningStep[];
   /** The step still being written, if any. Only this one grows between renders. */
   open: ReasoningStep | null;
+  /**
+   * bounds[i] is the END offset in the raw string of closed[i] — the anchor
+   * `lib/mergeToolSteps.ts` compares a tool mark's arrival offset against to interleave
+   * it into the right position. Always the same length as `closed`. Omitted (not an
+   * empty array) whenever `closed` is empty, so a degenerate `{closed: [], open: null}`
+   * buffer stays exactly that shape — existing whole-object equality tests for the
+   * empty/whitespace-only inputs depend on no extra key being present.
+   */
+  bounds?: number[];
 }
 
 // Gemini's thought summaries (and any markdown-ish reasoning stream) prefix a section
@@ -72,12 +81,16 @@ export function segmentReasoning(raw: string): ReasoningSegments {
   const closed: ReasoningStep[] = [];
   if (raw.length === 0) return { closed, open: null };
 
+  const bounds: number[] = [];
   let start = 0;
   let i = 0;
 
   const close = (end: number, resumeAt: number) => {
     const step = toStep(raw.slice(start, end));
-    if (step) closed.push(step);
+    if (step) {
+      closed.push(step);
+      bounds.push(end);
+    }
     start = resumeAt;
     i = resumeAt;
   };
@@ -123,5 +136,5 @@ export function segmentReasoning(raw: string): ReasoningSegments {
     i += 1;
   }
 
-  return { closed, open: toStep(raw.slice(start)) };
+  return { closed, open: toStep(raw.slice(start)), ...(bounds.length > 0 ? { bounds } : {}) };
 }

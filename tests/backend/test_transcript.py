@@ -253,3 +253,105 @@ class TestPostRevisionChronology:
             "Any specific achievements to highlight?"
         )
         assert texts_in_order.index("Yes, the Q3 launch.") < texts_in_order.index("Delivered CV v2")
+
+
+class TestToolRowsFoldIntoTheFollowingAssistantTurn:
+    """Revision-tool-use plan, Option A: `role="tool"` Message rows are not turns of
+    their own — they become the FOLLOWING assistant turn's `tools` field, in the same
+    shape store.ts accumulates from a live `agent_tool` WS event, so a settled REASONING
+    card renders identically to how it looked while the turn was live (plan :500)."""
+
+    @staticmethod
+    def _tool_row(id: int, at: datetime, name: str, ok: bool = True, code: str | None = None) -> Message:
+        result = {"ok": True} if ok else {"ok": False, "error": {"code": code, "message": "boom"}}
+        return _msg(
+            id,
+            Stage.revising_cv,
+            "tool",
+            json.dumps({"call_id": f"call_{id}", "name": name, "arguments": {}, "result": result}),
+            at,
+        )
+
+    def test_tool_rows_do_not_become_turns_of_their_own(self):
+        job = _job()
+        messages = [
+            _msg(1, Stage.revising_cv, "user", "Tighten the summary", BASE),
+            self._tool_row(2, BASE + timedelta(seconds=1), "get_cv"),
+            _msg(3, Stage.revising_cv, "assistant", '{"kind": "final"}', BASE + timedelta(seconds=2)),
+        ]
+        turns = build_transcript(job, messages, [], [], [])
+        assert all(t["role"] != "tool" for t in turns)
+        assert not any("get_cv" in (t["text"] or "") for t in turns)
+
+    def test_marks_attach_to_the_next_assistant_turn_in_persisted_call_order(self):
+        job = _job()
+        messages = [
+            _msg(1, Stage.revising_cv, "user", "Tighten the summary", BASE),
+            self._tool_row(2, BASE + timedelta(seconds=1), "get_cv"),
+            self._tool_row(3, BASE + timedelta(seconds=2), "replace_summary"),
+            self._tool_row(4, BASE + timedelta(seconds=3), "finalize"),
+            _msg(5, Stage.revising_cv, "assistant", '{"kind": "final"}', BASE + timedelta(seconds=4)),
+        ]
+        turns = build_transcript(job, messages, [], [], [])
+        assistant = [t for t in turns if t["role"] == "assistant" and t["kind"] == "plumbing"]
+        assert len(assistant) == 1
+        # Order is the persisted call order, and `at` is the index within the turn —
+        # tool mode never streams, so there is no reasoning buffer to anchor against and
+        # mergeToolSteps' trailing-append loop preserves exactly this order.
+        assert assistant[0]["tools"] == [
+            {"name": "get_cv", "detail": "get_cv", "ok": True, "at": 0},
+            {"name": "replace_summary", "detail": "replace_summary", "ok": True, "at": 1},
+            {"name": "finalize", "detail": "finalize", "ok": True, "at": 2},
+        ]
+
+    def test_failed_call_carries_the_error_code_in_detail_and_ok_false(self):
+        job = _job()
+        messages = [
+            self._tool_row(1, BASE, "replace_entry", ok=False, code="unknown_id"),
+            _msg(2, Stage.revising_cv, "assistant", '{"kind": "final"}', BASE + timedelta(seconds=1)),
+        ]
+        turns = build_transcript(job, messages, [], [], [])
+        tools = [t for t in turns if t["role"] == "assistant"][0]["tools"]
+        assert tools == [
+            {"name": "replace_entry", "detail": "replace_entry failed: unknown_id", "ok": False, "at": 0}
+        ]
+
+    def test_a_second_turns_marks_do_not_leak_into_the_first(self):
+        job = _job()
+        messages = [
+            self._tool_row(1, BASE, "get_cv"),
+            _msg(2, Stage.revising_cv, "assistant", '{"kind": "a"}', BASE + timedelta(seconds=1)),
+            self._tool_row(3, BASE + timedelta(seconds=2), "replace_summary"),
+            _msg(4, Stage.revising_cv, "assistant", '{"kind": "b"}', BASE + timedelta(seconds=3)),
+        ]
+        turns = build_transcript(job, messages, [], [], [])
+        assistants = sorted(
+            (t for t in turns if t["role"] == "assistant" and t["kind"] == "plumbing"),
+            key=lambda t: t["seq"],
+        )
+        assert [m["name"] for m in assistants[0]["tools"]] == ["get_cv"]
+        assert [m["name"] for m in assistants[1]["tools"]] == ["replace_summary"]
+        assert [m["at"] for m in assistants[1]["tools"]] == [0]
+
+    def test_turns_without_tool_rows_carry_tools_none(self):
+        """Every pre-existing turn keeps a null `tools` — the frontend treats
+        absent/null as "no tool rows" and renders exactly as it did before."""
+        job = _job(fit_reason="FIT: strong match")
+        messages = [_msg(1, Stage.cv_adjust, "assistant", "plain reply", BASE)]
+        fu = _fu(1, Stage.cv_adjust, "Which dates?", BASE + timedelta(seconds=1))
+        turns = build_transcript(job, messages, [fu], [_doc(1, Stage.cv_adjust, 1, BASE)], [])
+        assert turns, "expected turns"
+        assert all(t["tools"] is None for t in turns)
+
+    def test_malformed_tool_row_is_dropped_not_fatal(self):
+        job = _job()
+        messages = [
+            _msg(1, Stage.revising_cv, "tool", "not json at all", BASE),
+            _msg(2, Stage.revising_cv, "tool", json.dumps({"no_name": 1}), BASE + timedelta(seconds=1)),
+            self._tool_row(3, BASE + timedelta(seconds=2), "finalize"),
+            _msg(4, Stage.revising_cv, "assistant", '{"kind": "final"}', BASE + timedelta(seconds=3)),
+        ]
+        turns = build_transcript(job, messages, [], [], [])
+        tools = [t for t in turns if t["role"] == "assistant"][0]["tools"]
+        assert [m["name"] for m in tools] == ["finalize"]
+        assert tools[0]["at"] == 0

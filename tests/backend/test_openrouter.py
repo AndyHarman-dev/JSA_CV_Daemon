@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jsa.agents.base import AgentBackendUnavailable
+from jsa.agents._openai_compat import _ToolsRejected
+from jsa.agents.base import AgentBackendUnavailable, ToolsUnsupported
 from jsa.agents.openrouter import OpenRouterBackend
+from jsa.agents.tool_spec import tools_for
 from jsa.schema.turn_models import json_schema_for
 from jsa.db.models import Stage
 
@@ -216,3 +218,60 @@ class TestPromptCacheControl:
             with pytest.raises(AgentBackendUnavailable):
                 await backend.start_session("sys", "hi")
         assert mock_client.post.call_count == 1
+
+
+class TestRoutingGuardWithNativeTools:
+    """The mandatory `provider.require_parameters` guard (see TestRoutingGuard) now
+    also filters on TOOL support, which can empty the eligible-provider pool and
+    return a 4xx. That is EXPECTED, not a bug: it classifies as _ToolsRejected, so
+    tool_loop.py drops to the prompt rung on the SAME backend instead of BF-19
+    burning a whole backend hop over a tools-only rejection."""
+
+    async def test_routing_guard_present_on_tool_requests_too(self):
+        body = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "c1", "type": "function",
+                         "function": {"name": "get_cv", "arguments": "{}"}}
+                    ],
+                }
+            }]
+        }
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenRouterBackend()
+            handle = await backend.restore_session(
+                "sys", [], None, tools=tools_for(Stage.revising_cv)
+            )
+            reply = await backend.send_message(handle, "shorten it")
+        assert reply.kind == "tool_calls"
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["provider"] == {"require_parameters": True}
+        assert payload["tool_choice"] == "required"
+        assert "response_format" not in payload
+
+    async def test_4xx_with_tools_present_classifies_as_tools_rejected_not_unavailable(self):
+        mock_client = _make_mock_client(
+            {"error": {"message": "No endpoints found that support tool use",
+                       "type": "invalid_request_error"}},
+            status_code=400,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenRouterBackend()
+            handle = await backend.restore_session(
+                "sys", [], None, tools=tools_for(Stage.revising_cv)
+            )
+            with pytest.raises(ToolsUnsupported) as exc_info:
+                await backend.send_message(handle, "go")
+        assert isinstance(exc_info.value, _ToolsRejected)
+        # Must NOT engage BF-19 — that would advance the whole job to the next
+        # configured backend over a rejection the rung ladder can absorb locally.
+        assert not isinstance(exc_info.value, AgentBackendUnavailable)
+        # And unlike _CacheRejected/_ReasoningRejected (see TestPromptCacheControl),
+        # it is NOT retried once clean in-process: the rung ladder owns the retry.
+        assert mock_client.post.call_count == 1
+        assert backend._reasoning is True
+        assert backend._prompt_caching is True

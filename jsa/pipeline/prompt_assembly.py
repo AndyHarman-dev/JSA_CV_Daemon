@@ -204,11 +204,125 @@ def _current_date_directive(now: datetime) -> str:
     )
 
 
+# The six error codes every tool result can carry. Sourced from jsa/schema/patch.py's
+# result contract (unknown_id/stale_id/bad_argument/validation_failed) plus the two the
+# LOOP synthesizes rather than the applier (budget_exhausted/not_executed — see
+# jsa/pipeline/tool_loop.py). Pinned against docs/TOOLS.md by
+# tests/backend/test_tools_doc_sync.py, which asserts this tuple and the doc's
+# documented code set are equal — adding a code here without documenting it there
+# (or vice versa) fails that gate rather than drifting silently.
+_TOOL_ERROR_CODES = (
+    "unknown_id",
+    "stale_id",
+    "bad_argument",
+    "validation_failed",
+    "budget_exhausted",
+    "not_executed",
+)
+
+
+def _tool_contract(specs: tuple[Any, ...], *, native: bool) -> str:
+    """The runtime-assembled tool-use contract section (revision-tool-use plan, Phase 4).
+
+    **Both rungs get a contract — this is deliberately NOT "native = wire only, prompt =
+    prompt only".** A provider enforces the *shape* of a call but says nothing about
+    *when* to call ``get_cv`` versus ``finalize``, or that a question must precede any
+    edit (D8). This repo already paid for that lesson once: see this module's docstring
+    on the ``opencode-go``/``longcat-2.0`` job that emitted schema-valid JSON forever,
+    re-asking its opening question, because the contract explaining ``kind`` semantics
+    had been dropped from resumed turns while the provider kept enforcing the schema.
+
+    What differs between rungs is only where the schemas live and how a call is
+    signalled:
+
+    * ``native=True``  — schemas ride the wire in ``tools``; the model signals a call
+      through the provider-native channel. The prompt carries the SHORT contract:
+      semantics, id discipline, the budget, ask-before-editing.
+    * ``native=False`` — no wire channel exists, so the prompt carries the FULL
+      contract: all of the above **plus** each tool's inlined JSON schema **plus** the
+      ``<<<TOOL_CALLS>>>`` grammar.
+
+    Single-sourced from ``jsa/agents/tool_spec.py`` (the ``ToolSpec`` tuple this receives),
+    NOT from ``docs/TOOLS.md``. The plan's Phase 4 text says the contracts are "generated
+    from docs/TOOLS.md" — deliberately not implemented that way: making the runtime prompt
+    path read a markdown file means a missing or malformed doc breaks the pipeline. The
+    anti-drift guarantee the plan wanted comes instead from a doc-sync test,
+    ``tests/backend/test_tools_doc_sync.py``, which pins this module's
+    ``_TOOL_ERROR_CODES`` and the tool vocabulary against ``docs/TOOLS.md`` — so the
+    doc stays authoritative for humans while the runtime prompt stays independent of
+    it.
+    """
+    names = ", ".join(f"`{s.name}`" for s in specs)
+    lines = [
+        "\n\n## Revision tool contract",
+        "You are REVISING an existing document by patching it through tools. Do not "
+        "rewrite it, and do not reproduce it in your reply — the tools below read and "
+        "edit the stored document directly, and the server reconstructs the full "
+        "document from your edits.",
+        f"Available tools: {names}.",
+        "",
+        "Rules, in order of importance:",
+        "1. Read before you write. Call `get_cv`/`get_letter` first — it returns the "
+        "current document together with the ids you must address edits to. Ids are "
+        "issued by the server; never invent one.",
+        "2. If you need to ask the user anything, ask FIRST, before making any edit. "
+        "`ask_user` DISCARDS every edit made this turn — an edit followed by a question "
+        "is thrown away, and the user sees only the question.",
+        "3. Patch narrowly. Change only what the revision instruction asks for; leave "
+        "every other section, entry and paragraph untouched.",
+        "4. You have a hard budget of 10 tool calls for this turn. Calls beyond it "
+        "return `budget_exhausted` and the turn is abandoned.",
+        "5. End the turn with exactly one terminal tool: `finalize` when the revision is "
+        "complete, or `ask_user` when you cannot proceed without an answer. Any call "
+        "placed after a terminal tool in the same batch returns `not_executed`.",
+        "6. `finalize`'s `change_log` is a short summary FOR THE USER of what you "
+        "changed. It is never document content and is never inserted into the document.",
+        "",
+        "Every tool returns either `{\"ok\": true, ...}` or "
+        "`{\"ok\": false, \"error\": {\"code\": ..., \"message\": ..., \"hint\": ...}}`. "
+        f"Error codes: {', '.join('`' + c + '`' for c in _TOOL_ERROR_CODES)}. "
+        "An `unknown_id` or `stale_id` means your ids are out of date — call "
+        "`get_cv`/`get_letter` again to refresh them rather than guessing. A failed call "
+        "does not end the turn and does not consume your remaining budget beyond its own "
+        "one call: fix the arguments and try again.",
+    ]
+
+    if not native:
+        lines += [
+            "",
+            "### How to call a tool in this session",
+            "This session has no provider-native tool channel, so you signal tool calls "
+            "in the reply text. To call one or more tools, emit exactly one block:",
+            "",
+            "<<<TOOL_CALLS>>>",
+            '[{"name": "<tool name>", "arguments": {...}}]',
+            "<<<END>>>",
+            "",
+            "The block body must be a non-empty JSON array; each item must be an object "
+            "with a string `name` and an object `arguments`. Calls execute in array "
+            "order. This block SUPERSEDES the `<<<FINAL>>>`/`<<<NEED_INPUT>>>` "
+            "instructions elsewhere in this prompt — while you are revising, do not emit "
+            "either of those; use `finalize` and `ask_user` instead. Tool results come "
+            "back to you as an ordinary user message containing a JSON array of results "
+            "in the same order.",
+            "",
+            "### Tool schemas",
+        ]
+        for spec in specs:
+            lines.append(f"#### {spec.name}")
+            lines.append(spec.description)
+            lines.append(json.dumps(spec.parameters, indent=2))
+
+    return "\n".join(lines)
+
+
 def assemble_system_prompt(
     prompt_text: str,
     *,
     language: str,
     structured_model: dict[str, Any] | None = None,
+    tool_model: tuple[Any, ...] | None = None,
+    native_tools: bool = False,
     fit_verdict: bool = False,
     for_resume: bool = False,
     now: datetime | None = None,
@@ -239,7 +353,36 @@ def assemble_system_prompt(
     LAST, after everything else. Every real call site passes ``now=datetime.utcnow()``;
     only tests pass ``now=None`` to get the pre-date-directive output. See the module
     docstring's point 3 for the resend/day-granularity rationale.
+
+    ``tool_model``, when given, is the stage's ``ToolSpec`` tuple
+    (``jsa.agents.tool_spec.tools_for(stage)``) and appends the tool-use contract INSTEAD
+    of the structured one — the two are mutually exclusive and passing both raises.
+    ``native_tools`` selects the short (wire-schema) contract over the full (inlined
+    schemas + ``<<<TOOL_CALLS>>>`` grammar) one; it is a separate flag rather than being
+    folded into ``tool_model`` because the SPECS are identical on both rungs and only the
+    transport differs. ``for_resume``/``language`` are ignored on this path — see the
+    tool branch's comment.
+
+    ``structured_model=None, tool_model=None`` is the golden-parity path and must stay
+    byte-identical forever (``tests/backend/test_prompt_assembly.py`` against
+    ``fixtures/language_directive_golden.json``).
     """
+    if tool_model is not None:
+        if structured_model is not None:
+            # Phase 3's "tool mode and structured mode are mutually exclusive per
+            # request — assert it". The terminal tool's arguments ARE the structured
+            # output, so no configuration ever wants both; a caller computing them
+            # independently rather than from one destination-mode decision is a bug.
+            raise ValueError(
+                "structured_model and tool_model are mutually exclusive: a tool-mode "
+                "session sends no response_format/schema — finalize's arguments are the "
+                "structured output"
+            )
+        # No language directive on either rung: run_tool_loop only ever restores a
+        # session (revisions never start_session), so this is always the for_resume
+        # shape, and a resumed session already committed to its language.
+        return prompt_text + _tool_contract(tool_model, native=native_tools)
+
     if structured_model is not None:
         prompt = prompt_text + _structured_contract(structured_model, fit_verdict=fit_verdict)
         if not for_resume and language != "en":

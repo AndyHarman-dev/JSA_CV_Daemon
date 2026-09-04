@@ -79,6 +79,20 @@ export type WSEvent =
   // server-side (jsa/pipeline/streaming.py::ChunkAccumulator). Mirrors
   // jsa/events/schema.py::AgentChunkEvent exactly.
   | { type: "agent_chunk"; job_id: string; stage: string; kind: "content" | "reasoning"; text: string }
+  // One tool call's execution outcome, part of the revision-patching tool loop.
+  // Published AFTER execution, so `status` is already known. Mirrors
+  // jsa/events/schema.py::AgentToolEvent exactly.
+  | {
+      type: "agent_tool";
+      job_id: string;
+      stage: string;
+      seq: number;
+      call_id: string;
+      name: string;
+      summary: string;
+      status: "ok" | "error" | "not_executed" | "budget_exhausted";
+      detail: string;
+    }
   // Marks the end of one streamed turn. superseded=true means discard the buffer outright
   // (a retry/nudge/self-heal path replayed the whole turn). Mirrors
   // jsa/events/schema.py::AgentTurnEndEvent exactly.
@@ -161,4 +175,15 @@ export interface TranscriptTurn {
   follow_up_id: number | null;
   suggested_replies: string[] | null;
   reasoning: string | null;
+  // Persisted tool-call marks for this turn, same shape as the live `agent_tool` WS
+  // event once accumulated (see store.ts's streamBuffers). Populated by
+  // jsa/api/transcript.py, which folds a revision turn's role="tool" Message rows into
+  // the FOLLOWING assistant turn (always a `plumbing` turn — its text is the raw JSON
+  // envelope). Null on every other turn, and the REASONING card degrades gracefully
+  // (no tool rows) when it's absent.
+  //
+  // `at` is the mark's INDEX within its turn here, not a reasoning-buffer offset:
+  // tool mode never streams, so a settled tool turn has no buffer to anchor against
+  // and mergeToolSteps' trailing-append preserves exactly the persisted call order.
+  tools?: { name: string; detail: string; ok: boolean; at: number }[] | null;
 }

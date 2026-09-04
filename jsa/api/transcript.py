@@ -101,6 +101,7 @@ def _make_turn(
     follow_up_id: int | None = None,
     suggested_replies: list[str] | None = None,
     reasoning: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "kind": kind,
@@ -111,12 +112,59 @@ def _make_turn(
         "follow_up_id": follow_up_id,
         "suggested_replies": suggested_replies,
         "reasoning": reasoning,
+        "tools": tools,
         # sort-only fields — stripped before returning to the caller
         "_stage_index": _stage_index(stage),
         "_timestamp": created_at,
         "_kind_rank": _KIND_RANK[kind],
         "_source_id": source_id,
     }
+
+
+def _tool_mark(raw: str, index: int) -> dict[str, Any] | None:
+    """Project one persisted ``role="tool"`` Message row into the frontend's tool-mark
+    shape — the SAME shape store.ts accumulates from a live ``agent_tool`` WS event
+    (``{name, detail, ok, at}``), so a settled turn's REASONING card renders identically
+    to how it looked while the turn was live.
+
+    The persisted row is ``jsa/pipeline/tool_loop.py``'s execution-log entry, written by
+    ``stages.py`` as ``json.dumps({"call_id", "name", "arguments", "result"})``. ``detail``
+    reproduces the live path's ``AgentToolEvent.summary`` wording
+    (``tool_loop.py::_summarize``) rather than importing it — the pipeline layer is not
+    imported from here, and this projection must keep working against rows written by an
+    older build whose summary wording differed.
+
+    ``at`` is the row's INDEX within its turn, not a reasoning-buffer offset. Live marks
+    anchor at ``reasoning.length`` at arrival, but tool mode never streams (see
+    ``tool_loop.py``'s module docstring), so a settled tool turn has no reasoning buffer
+    to anchor against — every mark falls through ``mergeToolSteps``'s trailing-append
+    loop in ``at`` order, which the index makes exactly the persisted call order.
+    Fabricating spread-out offsets here would invent interleaving that was never
+    recorded.
+
+    Returns ``None`` for a row that isn't parseable as such an entry — a malformed or
+    foreign ``role="tool"`` row is dropped from the marks rather than failing the whole
+    transcript request.
+    """
+    try:
+        entry = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(entry, dict):
+        return None
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    result = entry.get("result")
+    result = result if isinstance(result, dict) else {}
+    ok = bool(result.get("ok"))
+    if ok:
+        detail = name
+    else:
+        error = result.get("error")
+        code = error.get("code", "error") if isinstance(error, dict) else "error"
+        detail = f"{name} failed: {code}"
+    return {"name": name, "detail": detail, "ok": ok, "at": index}
 
 
 def build_transcript(
@@ -226,8 +274,23 @@ def build_transcript(
     ]
 
     # --- plumbing (assistant rows + un-folded user rows) -----------------
+    #
+    # `role="tool"` rows are NOT turns of their own: they are the execution log of the
+    # assistant turn that follows them, and they are folded into that turn's `tools`
+    # field so the settled REASONING card matches the live one (the revision-tool-use
+    # plan's :500, "live and settled look identical"). `messages` arrives ordered by
+    # `Message.id` ascending (routes_jobs.py::get_transcript), and stages.py writes
+    # [user instruction, *tool rows, assistant reply] as ONE atomic
+    # `repo.checkpoint(messages=...)` list, so the tool rows always precede their
+    # assistant row and can never dangle past the end.
+    pending_tool_marks: list[dict[str, Any]] = []
     for msg in messages:
         if msg.role == "system":
+            continue
+        if msg.role == "tool":
+            mark = _tool_mark(msg.content, len(pending_tool_marks))
+            if mark is not None:
+                pending_tool_marks.append(mark)
             continue
         content_stripped = msg.content.strip()
 
@@ -285,8 +348,10 @@ def build_transcript(
                 created_at=msg.created_at,
                 source_id=msg.id,
                 reasoning=msg.reasoning,
+                tools=pending_tool_marks or None,
             )
         )
+        pending_tool_marks = []
 
     def _sort_key(turn: dict[str, Any]):
         # Timestamp is the primary key for EVERY turn, delivery or not — real events

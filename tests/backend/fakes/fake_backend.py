@@ -12,7 +12,9 @@ from jsa.agents.base import (
     OnChunk,
     OnRetry,
     SessionHandle,
+    ToolResult,
 )
+from jsa.agents.tool_spec import ToolSpec
 
 
 @dataclass
@@ -63,24 +65,42 @@ class FakeAgentBackend(AgentBackend):
         *,
         supports_structured_output: bool = False,
         supports_streaming: bool = False,
+        supports_native_tools: bool = False,
         scripted_chunks: list[list[AgentChunk]] | None = None,
     ) -> None:
-        """replies: scripted sequence. Each start_session and send_message pops the next.
+        """replies: scripted sequence. Each start_session, send_message, and
+        send_tool_results pops the next.
 
         ``scripted_chunks``, when given, is a parallel list of AgentChunk lists —
         one entry per start_session/send_message call — replayed through
         ``on_chunk`` (if the caller supplied one) before the corresponding reply
         is returned.
+
+        ``supports_native_tools`` (default ``False``) is an instance attribute
+        shadowing the ``AgentBackend`` ClassVar, mirroring
+        ``supports_structured_output`` above — this fake is on the ENFORCING side of
+        the revision-tool-use plan's "a backend that sets supports_native_tools=True
+        must accept `tools=` on start_session/restore_session and implement
+        send_tool_results" contract (see jsa/agents/base.py), not the CLI-backend
+        ignoring side.
         """
         self._replies: list[AgentReply] = list(replies)
         self.supports_structured_output = supports_structured_output
         self.supports_streaming = supports_streaming
+        self.supports_native_tools = supports_native_tools
         self._scripted_chunks: list[list[AgentChunk]] = list(scripted_chunks or [])
         # Recorded for structured-mode tests: the parity gate asserts the schema kwarg
         # actually arrived, and a fresh-session-retry test asserts start_session was
         # re-issued the expected number of times with identical args.
         self.received_schemas: list[dict[str, Any] | None] = []
         self.start_session_call_count = 0
+        # Recorded for tool-loop tests: what tools= was attached at restore_session
+        # time (None on a prompt-rung restore), and every send_tool_results payload.
+        self.received_tools: list[tuple[ToolSpec, ...] | None] = []
+        self.received_tool_results: list[list[ToolResult]] = []
+        # Every send_message text, in order — lets a test assert the prompt rung's
+        # tool-results-as-a-user-message transport without a bespoke subclass.
+        self.received_messages: list[str] = []
 
     def _pop_reply(self) -> AgentReply:
         if not self._replies:
@@ -120,9 +140,11 @@ class FakeAgentBackend(AgentBackend):
         history: list[HistoryTurn],
         external_id: str | None,
         structured_schema: dict[str, Any] | None = None,
+        tools: tuple[ToolSpec, ...] | None = None,
     ) -> FakeSessionHandle:
         """Return a new handle without consuming a reply (no-op resume)."""
         self.received_schemas.append(structured_schema)
+        self.received_tools.append(tools)
         return FakeSessionHandle(
             id=str(uuid4()),
             external_id=external_id,
@@ -138,8 +160,29 @@ class FakeAgentBackend(AgentBackend):
         on_chunk: OnChunk | None = None,
         on_retry: OnRetry | None = None,
     ) -> AgentReply:
-        """Consume and return the next scripted reply."""
+        """Consume and return the next scripted reply, recording ``text``."""
+        self.received_messages.append(text)
         await self._emit_scripted_chunks(on_chunk)
+        return self._pop_reply()
+
+    async def send_tool_results(
+        self, handle: SessionHandle, results: list[ToolResult]
+    ) -> AgentReply:
+        """Consume and return the next scripted reply, recording ``results`` for
+        assertions.
+
+        Raises ``NotImplementedError`` when ``supports_native_tools`` is False, exactly
+        as ``AgentBackend.send_tool_results``'s default does. Without this the fake
+        simulates a capability no real sentinel-only backend has, and a caller that
+        reaches here on the prompt rung (where the session was restored with no
+        ``tools=``) passes in the fake while hard-failing the job in production.
+        """
+        if not self.supports_native_tools:
+            raise NotImplementedError(
+                "FakeAgentBackend does not support native tool calling "
+                "(supports_native_tools is False)"
+            )
+        self.received_tool_results.append(results)
         return self._pop_reply()
 
     async def end_session(self, handle: SessionHandle) -> None:

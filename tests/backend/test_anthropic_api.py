@@ -14,9 +14,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jsa.agents.anthropic_api import AnthropicAPIBackend, AnthropicSessionHandle
-from jsa.agents.base import AgentLimitReached, AgentTimeout, HistoryTurn
+from jsa.agents.anthropic_api import (
+    AnthropicAPIBackend,
+    AnthropicSessionHandle,
+    _ToolsRejected,
+)
+from jsa.agents.base import (
+    AgentBackendUnavailable,
+    AgentLimitReached,
+    AgentTimeout,
+    HistoryTurn,
+    SessionHandle,
+    ToolResult,
+    ToolsUnsupported,
+)
 from jsa.agents.protocol import ProtocolError
+from jsa.agents.tool_spec import to_anthropic_tools, tools_for
 from jsa.db.models import Stage
 from jsa.schema.cv import CVDocument
 from jsa.schema.turn_models import json_schema_for
@@ -1019,3 +1032,427 @@ class TestCachedTokenObservability:
             backend = AnthropicAPIBackend()
             handle, reply = await backend.start_session("sys", "hi")
         assert reply.kind == "final"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 / E1 — native tool mode (revision-tool-use plan)
+#
+# Sentinel/structured coverage above is untouched; everything below exercises the
+# third channel: a session established with `tools=` (tool_loop.py's native rung).
+# ---------------------------------------------------------------------------
+
+REV_SPECS = tools_for(Stage.revising_cv)
+REV_CL_SPECS = tools_for(Stage.revising_cl)
+
+
+def _tool_use_block(call_id: str, name: str, tool_input: dict) -> MagicMock:
+    block = MagicMock()
+    block.type = "tool_use"
+    block.id = call_id
+    block.name = name
+    block.input = tool_input
+    return block
+
+
+def _bad_request_error() -> Exception:
+    import anthropic
+
+    response = MagicMock()
+    response.status_code = 400
+    return anthropic.BadRequestError(
+        message="tools: unsupported", response=response, body={}
+    )
+
+
+async def _tool_session(backend: AnthropicAPIBackend, specs=REV_SPECS):
+    """A restored native-tool session — the shape tool_loop.py's native rung builds."""
+    return await backend.restore_session(
+        "tool contract system prompt",
+        [HistoryTurn(role="user", content="original revision request")],
+        None,
+        tools=specs,
+    )
+
+
+class TestSupportsNativeTools:
+    def test_class_flag_is_true(self):
+        assert AnthropicAPIBackend.supports_native_tools is True
+
+    def test_registry_instance_flag_is_true(self):
+        from jsa.agents.registry import backend_for
+        assert backend_for("anthropic").supports_native_tools is True
+
+
+class TestNativeToolRequestShape:
+    async def test_tools_rendered_by_to_anthropic_tools_and_tool_choice_any(self):
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_01", "get_cv", {})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            await backend.send_message(handle, "make it shorter")
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["tools"] == to_anthropic_tools(REV_SPECS)
+        assert call_kwargs["tool_choice"] == {"type": "any"}
+
+    async def test_no_structured_respond_tool_in_tool_mode(self):
+        """The terminal tool's arguments ARE the structured output — no `respond`."""
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_01", "get_cv", {})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            await backend.send_message(handle, "make it shorter")
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert all(tool["name"] != "respond" for tool in call_kwargs["tools"])
+        assert call_kwargs["tool_choice"] != {"type": "tool", "name": "respond"}
+        assert "response_format" not in call_kwargs
+
+    async def test_restore_session_stamps_tools_on_handle(self):
+        backend = AnthropicAPIBackend()
+        handle = await _tool_session(backend)
+        assert handle.tools == REV_SPECS
+        assert handle.structured_schema is None
+
+    async def test_tools_and_schema_together_rejected(self):
+        backend = AnthropicAPIBackend()
+        with pytest.raises(ValueError):
+            await backend.restore_session(
+                "sys", [], None, structured_schema=CV_SCHEMA, tools=REV_SPECS
+            )
+
+    async def test_send_message_rejects_schema_on_a_tool_session(self):
+        backend = AnthropicAPIBackend()
+        handle = await _tool_session(backend)
+        with pytest.raises(ValueError):
+            await backend.send_message(handle, "hi", structured_schema=CV_SCHEMA)
+
+    async def test_cl_stage_vocabulary_rendered_too(self):
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_01", "get_letter", {})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend, REV_CL_SPECS)
+            await backend.send_message(handle, "tighten it")
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["tools"] == to_anthropic_tools(REV_CL_SPECS)
+
+    async def test_prompt_caching_still_one_system_breakpoint(self):
+        """Render order is tools -> system -> messages, so the existing system
+        breakpoint covers the tool definitions; no second cache_control appears."""
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_01", "get_cv", {})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            await backend.send_message(handle, "go")
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["system"] == [
+            {
+                "type": "text",
+                "text": "tool contract system prompt",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        assert all("cache_control" not in tool for tool in call_kwargs["tools"])
+
+    async def test_tool_mode_never_streams(self):
+        """on_chunk is dropped on the tool path (plan Phase 2 finding #1)."""
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_01", "get_cv", {})]
+        )
+        mock_client.messages.stream = MagicMock(
+            side_effect=AssertionError("tool mode must not stream")
+        )
+        chunks = []
+
+        async def on_chunk(chunk):
+            chunks.append(chunk)
+
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            reply = await backend.send_message(handle, "go", on_chunk=on_chunk)
+        assert reply.kind == "tool_calls"
+        assert chunks == []
+
+
+class TestNativeToolCallExtraction:
+    async def test_all_tool_use_blocks_returned_in_order(self):
+        mock_client = _make_mock_block_client(
+            [
+                _text_block("Here goes."),
+                _tool_use_block("toolu_a", "edit_entry_bullets",
+                                {"entry_id": "e1", "bullets": ["one"]}),
+                _tool_use_block("toolu_b", "replace_summary", {"text": "Shorter."}),
+                _tool_use_block("toolu_c", "finalize", {"change_log": "done"}),
+            ]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            reply = await backend.send_message(handle, "go")
+        assert reply.kind == "tool_calls"
+        assert [c.name for c in reply.tool_calls] == [
+            "edit_entry_bullets", "replace_summary", "finalize"
+        ]
+        assert [c.id for c in reply.tool_calls] == ["toolu_a", "toolu_b", "toolu_c"]
+        assert reply.tool_calls[0].arguments == {"entry_id": "e1", "bullets": ["one"]}
+
+    async def test_raw_and_content_are_the_text_blocks_not_the_envelope(self):
+        mock_client = _make_mock_block_client(
+            [_text_block("Thinking out loud."),
+             _tool_use_block("toolu_a", "get_cv", {})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            reply = await backend.send_message(handle, "go")
+        assert reply.raw == "Thinking out loud."
+        assert reply.content == "Thinking out loud."
+        assert "tool_use" not in reply.raw
+
+    async def test_max_tokens_stop_reason_raises_protocol_error(self):
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_a", "get_cv", {})], stop_reason="max_tokens"
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            with pytest.raises(ProtocolError):
+                await backend.send_message(handle, "go")
+
+    async def test_truncated_reply_not_appended_to_handle(self):
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_a", "get_cv", {})], stop_reason="max_tokens"
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            before = list(handle.messages)
+            with pytest.raises(ProtocolError):
+                await backend.send_message(handle, "go")
+        assert handle.messages == before
+
+    async def test_no_tool_use_block_returns_non_tool_calls_reply(self):
+        """The loop's _no_parseable_call case — a reply, never a raised error."""
+        mock_client = _make_mock_block_client(
+            [_text_block("I would rather just explain myself.")], stop_reason="end_turn"
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            reply = await backend.send_message(handle, "go")
+        assert reply.kind != "tool_calls"
+        assert reply.tool_calls is None
+        assert reply.content == "I would rather just explain myself."
+
+    async def test_assistant_tool_use_turn_appended_to_handle(self):
+        mock_client = _make_mock_block_client(
+            [_tool_use_block("toolu_a", "get_cv", {})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            await backend.send_message(handle, "go")
+        assert handle.messages[-2] == {"role": "user", "content": "go"}
+        assert handle.messages[-1] == {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "toolu_a", "name": "get_cv", "input": {}}
+            ],
+        }
+
+
+class TestSendToolResults:
+    async def test_tool_result_blocks_echo_the_call_ids(self):
+        first = _make_mock_block_client(
+            [_tool_use_block("toolu_a", "get_cv", {}),
+             _tool_use_block("toolu_b", "replace_summary", {"text": "Hi."})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=first):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            reply = await backend.send_message(handle, "go")
+
+        second = _make_mock_block_client(
+            [_tool_use_block("toolu_c", "finalize", {"change_log": "ok"})]
+        )
+        results = [
+            ToolResult(call_id=c.id, name=c.name, ok=True, content={"ok": True})
+            for c in reply.tool_calls
+        ]
+        with patch("anthropic.AsyncAnthropic", return_value=second):
+            follow_up = await backend.send_tool_results(handle, results)
+
+        sent = second.messages.create.call_args.kwargs["messages"]
+        result_turn = sent[-1]
+        assert result_turn["role"] == "user"
+        assert [b["tool_use_id"] for b in result_turn["content"]] == ["toolu_a", "toolu_b"]
+        assert all(b["type"] == "tool_result" for b in result_turn["content"])
+        assert json.loads(result_turn["content"][0]["content"]) == {"ok": True}
+        assert follow_up.kind == "tool_calls"
+        assert follow_up.tool_calls[0].name == "finalize"
+
+    async def test_tools_still_attached_on_the_follow_up_call(self):
+        first = _make_mock_block_client([_tool_use_block("toolu_a", "get_cv", {})])
+        with patch("anthropic.AsyncAnthropic", return_value=first):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            reply = await backend.send_message(handle, "go")
+
+        second = _make_mock_block_client(
+            [_tool_use_block("toolu_b", "finalize", {"change_log": "ok"})]
+        )
+        with patch("anthropic.AsyncAnthropic", return_value=second):
+            await backend.send_tool_results(
+                handle,
+                [ToolResult(call_id="toolu_a", name="get_cv", ok=True, content={"ok": True})],
+            )
+        call_kwargs = second.messages.create.call_args.kwargs
+        assert call_kwargs["tools"] == to_anthropic_tools(REV_SPECS)
+        assert call_kwargs["tool_choice"] == {"type": "any"}
+
+    async def test_assistant_tool_use_turn_precedes_the_results(self):
+        first = _make_mock_block_client([_tool_use_block("toolu_a", "get_cv", {})])
+        with patch("anthropic.AsyncAnthropic", return_value=first):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            await backend.send_message(handle, "go")
+
+        second = _make_mock_block_client([_text_block("no more tools")])
+        with patch("anthropic.AsyncAnthropic", return_value=second):
+            await backend.send_tool_results(
+                handle,
+                [ToolResult(call_id="toolu_a", name="get_cv", ok=True, content={"ok": True})],
+            )
+        sent = second.messages.create.call_args.kwargs["messages"]
+        assert sent[-2]["role"] == "assistant"
+        assert sent[-2]["content"][0]["type"] == "tool_use"
+        assert sent[-1]["role"] == "user"
+        assert sent[-1]["content"][0]["type"] == "tool_result"
+
+    async def test_wrong_handle_type_raises_type_error(self):
+        backend = AnthropicAPIBackend()
+        with pytest.raises(TypeError):
+            await backend.send_tool_results(SessionHandle(id="x"), [])
+
+    async def test_handle_not_mutated_when_the_call_fails(self):
+        first = _make_mock_block_client([_tool_use_block("toolu_a", "get_cv", {})])
+        with patch("anthropic.AsyncAnthropic", return_value=first):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            await backend.send_message(handle, "go")
+        before = list(handle.messages)
+
+        failing = MagicMock()
+        failing.messages.create = AsyncMock(side_effect=_bad_request_error())
+        failing.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=failing):
+            with pytest.raises(ToolsUnsupported):
+                await backend.send_tool_results(
+                    handle,
+                    [ToolResult(call_id="toolu_a", name="get_cv", ok=True, content={"ok": True})],
+                )
+        assert handle.messages == before
+
+
+class TestToolsRejectedClassification:
+    async def test_bad_request_with_native_tools_raises_tools_rejected(self):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=_bad_request_error())
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            with pytest.raises(_ToolsRejected):
+                await backend.send_message(handle, "go")
+
+    def test_tools_rejected_is_a_tools_unsupported(self):
+        assert issubclass(_ToolsRejected, ToolsUnsupported)
+
+    def test_tools_rejected_is_not_a_backend_unavailable(self):
+        """Subclassing AgentBackendUnavailable would make BF-19 advance the whole job
+        to the next backend over a tools-only degrade — the loss the rung ladder
+        exists to prevent (see the class docstring)."""
+        assert not issubclass(_ToolsRejected, AgentBackendUnavailable)
+
+    async def test_tool_loop_catches_it_as_tools_unsupported(self):
+        """The contract that matters: tool_loop.py's `except ToolsUnsupported`."""
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=_bad_request_error())
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            caught = False
+            try:
+                await backend.send_message(handle, "go")
+            except ToolsUnsupported:
+                caught = True
+            assert caught
+
+    async def test_bad_request_in_structured_mode_is_backend_unavailable(self):
+        """Structured mode also sends tools/tool_choice, but has no rung ladder to
+        catch a ToolsUnsupported — it must stay BF-19-recognized."""
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=_bad_request_error())
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentBackendUnavailable) as excinfo:
+                await backend.start_session("sys", "msg", structured_schema=CV_SCHEMA)
+        assert not isinstance(excinfo.value, ToolsUnsupported)
+
+    async def test_bad_request_with_no_tools_at_all_is_backend_unavailable(self):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=_bad_request_error())
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentBackendUnavailable) as excinfo:
+                await backend.start_session("sys", "msg")
+        assert not isinstance(excinfo.value, ToolsUnsupported)
+
+    async def test_rate_limit_still_wins_over_bad_request_in_tool_mode(self):
+        import anthropic
+
+        rate_limit_error = anthropic.RateLimitError(
+            message="Rate limit exceeded", response=MagicMock(), body={}
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=rate_limit_error)
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            handle = await _tool_session(backend)
+            with pytest.raises(AgentLimitReached):
+                await backend.send_message(handle, "go")
+
+    async def test_timeout_still_wins_in_tool_mode(self):
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(999)
+
+        mock_client = MagicMock()
+        mock_client.messages.create = hang
+        mock_client.close = AsyncMock()
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend(timeout=0.01)
+            handle = await _tool_session(backend)
+            with pytest.raises(AgentTimeout):
+                await backend.send_message(handle, "go")
+
+    async def test_send_tool_results_on_a_non_tool_session_is_a_caller_error(self):
+        """Not a _ToolsRejected: a tool-less handle is a caller bug, and misreporting
+        it as a provider tools rejection would silently downgrade the rung."""
+        backend = AnthropicAPIBackend()
+        handle = await backend.restore_session("sys", [], None)
+        with pytest.raises(ValueError):
+            await backend.send_tool_results(
+                handle,
+                [ToolResult(call_id="toolu_a", name="get_cv", ok=True, content={"ok": True})],
+            )

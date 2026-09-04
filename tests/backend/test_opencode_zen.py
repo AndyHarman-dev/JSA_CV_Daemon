@@ -22,9 +22,16 @@ from jsa.agents.base import (
     AgentLimitReached,
     AgentTimeout,
     HistoryTurn,
+    ToolResult,
+    ToolsUnsupported,
 )
-from jsa.agents.opencode_zen import OpenCodeZenBackend, OpenCodeZenSessionHandle
+from jsa.agents.opencode_zen import (
+    OpenCodeZenBackend,
+    OpenCodeZenSessionHandle,
+    _ToolsRejected,
+)
 from jsa.agents.protocol import ProtocolError
+from jsa.agents.tool_spec import to_openai_tools, tools_for
 from jsa.db.models import Stage
 from jsa.schema.turn_models import json_schema_for
 
@@ -1041,3 +1048,339 @@ class TestStreamingBehavior:
             backend = OpenCodeZenBackend()
             await backend._call_api("sys", [{"role": "user", "content": "hi"}], CV_SCHEMA, None)
         mock_client.post.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Native tool calling (revision-tool-use plan, Phase 3 / E3). This backend keeps
+# its own independent copy of the /chat/completions machinery (see the module
+# docstring and CLAUDE.md), so it needs its own tool coverage rather than
+# relying on test_openai_compat.py's shared-base tests.
+# ---------------------------------------------------------------------------
+
+CV_TOOLS = tools_for(Stage.revising_cv)
+
+
+def _wire_call(call_id: str, name: str, arguments: str) -> dict:
+    """One OpenAI-shape `message.tool_calls` entry — `arguments` is a JSON STRING
+    on this wire shape, which is exactly what the backend has to decode."""
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+def _tool_call_body(wire_calls: list[dict]) -> dict:
+    """A completion whose message carries tool calls and `content: null` — the shape
+    every provider returns for a forced tool call, and the one the pre-tools
+    null-content transient check would have misclassified."""
+    return {
+        "choices": [
+            {"message": {"role": "assistant", "content": None, "tool_calls": wire_calls}}
+        ]
+    }
+
+
+class TestSupportsNativeTools:
+    def test_flag_is_true(self):
+        assert OpenCodeZenBackend.supports_native_tools is True
+
+
+class TestNativeToolRequestShape:
+    async def test_tools_and_tool_choice_required_are_sent(self):
+        mock_client = _make_mock_client(
+            _tool_call_body([_wire_call("call_abc", "get_cv", "{}")])
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            await backend.send_message(handle, "tighten the summary")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["tools"] == to_openai_tools(CV_TOOLS)
+        assert payload["tool_choice"] == "required"
+
+    async def test_no_response_format_when_tools_active(self):
+        """Tool mode and structured mode are mutually exclusive per request — the
+        terminal tool's arguments ARE the structured output."""
+        mock_client = _make_mock_client(
+            _tool_call_body([_wire_call("call_abc", "get_cv", "{}")])
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            await backend.send_message(handle, "tighten the summary")
+        assert "response_format" not in mock_client.post.call_args.kwargs["json"]
+
+    async def test_no_tools_key_when_tools_none(self):
+        """A non-tool session's payload is byte-identical to its pre-tools shape —
+        asserted on EVERY POST of the session, not just the last one, so a regression
+        leaking tools into a mid-session call can't hide behind the final payload."""
+        mock_client = _make_mock_client_sequence([FINAL_RAW, FINAL_RAW])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle, _ = await backend.start_session("sys", "msg")
+            await backend.send_message(handle, "follow-up")
+        assert mock_client.post.call_count == 2
+        for call in mock_client.post.call_args_list:
+            assert "tools" not in call.kwargs["json"]
+            assert "tool_choice" not in call.kwargs["json"]
+
+    async def test_tools_with_structured_schema_is_rejected(self):
+        backend = OpenCodeZenBackend()
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            await backend.restore_session(
+                "sys", [], None, structured_schema=CV_SCHEMA, tools=CV_TOOLS
+            )
+
+
+class TestNativeToolReplyExtraction:
+    async def test_null_content_with_tool_calls_is_success_not_transient(self):
+        """THE trap: a forced tool call comes back with `content: null`, which the
+        pre-tools null-content check treats as a retryable transient failure. It must
+        be extracted BEFORE that check — one HTTP attempt, no retry."""
+        mock_client = _make_mock_client(
+            _tool_call_body([_wire_call("call_abc", "get_cv", "{}")])
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            reply = await backend.send_message(handle, "revise")
+        assert reply.kind == "tool_calls"
+        assert mock_client.post.call_count == 1
+
+    async def test_multiple_calls_returned_in_order_with_provider_ids(self):
+        wire = [
+            _wire_call("call_zen_1", "get_cv", "{}"),
+            _wire_call(
+                "call_zen_2",
+                "edit_entry_bullets",
+                json.dumps({"entry_id": "e1", "bullets": ["a", "b"]}),
+            ),
+            _wire_call("call_zen_3", "finalize", json.dumps({"change_log": "tightened"})),
+        ]
+        mock_client = _make_mock_client(_tool_call_body(wire))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            reply = await backend.send_message(handle, "revise")
+        assert [c.name for c in reply.tool_calls] == [
+            "get_cv", "edit_entry_bullets", "finalize",
+        ]
+        assert [c.id for c in reply.tool_calls] == [
+            "call_zen_1", "call_zen_2", "call_zen_3",
+        ]
+        # arguments is always a plain dict — never a string awaiting a second parse
+        assert reply.tool_calls[1].arguments == {"entry_id": "e1", "bullets": ["a", "b"]}
+        assert reply.tool_calls[0].arguments == {}
+
+    async def test_malformed_arguments_json_raises_protocol_error(self):
+        mock_client = _make_mock_client(
+            _tool_call_body([_wire_call("call_abc", "get_cv", "{not json")])
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(ProtocolError, match="not valid JSON"):
+                await backend.send_message(handle, "revise")
+
+    async def test_tools_sent_but_null_content_and_no_calls_still_retries(self):
+        """The mirror of the trap above: tools were sent but the model returned
+        neither calls nor content. That is still the genuine transient null-content
+        failure the pre-tools check exists for — it must keep retrying."""
+        body = {"choices": [{"message": {"role": "assistant", "content": None}}]}
+        mock_client = _make_mock_client_response_sequence([(200, body, None)] * 3)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(AgentBackendUnavailable, match="null"):
+                await backend.send_message(handle, "revise")
+        assert mock_client.post.call_count == 3
+
+    async def test_empty_tool_calls_list_with_null_content_still_retries(self):
+        body = {
+            "choices": [{"message": {"role": "assistant", "content": None, "tool_calls": []}}]
+        }
+        mock_client = _make_mock_client_response_sequence([(200, body, None)] * 3)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(AgentBackendUnavailable, match="null"):
+                await backend.send_message(handle, "revise")
+        assert mock_client.post.call_count == 3
+
+
+class TestSendToolResults:
+    async def test_one_tool_message_per_result_with_matching_ids(self):
+        first = _tool_call_body([
+            _wire_call("call_zen_1", "get_cv", "{}"),
+            _wire_call("call_zen_2", "remove_entry", json.dumps({"entry_id": "e9"})),
+        ])
+        second = _tool_call_body([
+            _wire_call("call_zen_3", "finalize", json.dumps({"change_log": "done"}))
+        ])
+        mock_client = _make_mock_client_response_sequence([(200, first, None), (200, second, None)])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            await backend.send_message(handle, "revise")
+            reply = await backend.send_tool_results(
+                handle,
+                [
+                    ToolResult(call_id="call_zen_1", name="get_cv", ok=True, content={"sections": []}),
+                    ToolResult(
+                        call_id="call_zen_2", name="remove_entry", ok=False,
+                        content={"ok": False, "error": {"code": "bad_argument"}},
+                    ),
+                ],
+            )
+        sent = mock_client.post.call_args_list[1].kwargs["json"]["messages"]
+        tool_rows = [m for m in sent if m["role"] == "tool"]
+        assert [m["tool_call_id"] for m in tool_rows] == ["call_zen_1", "call_zen_2"]
+        assert json.loads(tool_rows[0]["content"]) == {"sections": []}
+        # The assistant turn carrying tool_calls precedes them on the wire
+        assistant_rows = [m for m in sent if m["role"] == "assistant"]
+        assert assistant_rows[-1]["tool_calls"][0]["id"] == "call_zen_1"
+        assert sent.index(assistant_rows[-1]) < sent.index(tool_rows[0])
+        assert reply.kind == "tool_calls"
+        assert reply.tool_calls[0].name == "finalize"
+
+    async def test_tools_still_attached_on_the_follow_up_post(self):
+        first = _tool_call_body([_wire_call("call_zen_1", "get_cv", "{}")])
+        second = _tool_call_body([
+            _wire_call("call_zen_2", "finalize", json.dumps({"change_log": "done"}))
+        ])
+        mock_client = _make_mock_client_response_sequence([(200, first, None), (200, second, None)])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            await backend.send_message(handle, "revise")
+            await backend.send_tool_results(
+                handle, [ToolResult(call_id="call_zen_1", name="get_cv", ok=True, content={})]
+            )
+        follow_up = mock_client.post.call_args_list[1].kwargs["json"]
+        assert follow_up["tools"] == to_openai_tools(CV_TOOLS)
+        assert follow_up["tool_choice"] == "required"
+
+    async def test_wrong_handle_type_raises_type_error(self):
+        backend = OpenCodeZenBackend()
+        with pytest.raises(TypeError):
+            await backend.send_tool_results(object(), [])  # type: ignore[arg-type]
+
+    async def test_session_without_tools_raises_rather_than_posting(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None)
+            with pytest.raises(RuntimeError, match="not opened with tools"):
+                await backend.send_tool_results(
+                    handle, [ToolResult(call_id="c1", name="get_cv", ok=True, content={})]
+                )
+        assert mock_client.post.call_count == 0
+
+    async def test_no_preceding_tool_call_turn_raises_rather_than_posting(self):
+        """`role: "tool"` rows are only legal right after an assistant turn carrying
+        the matching ids. tool_loop.py can't violate this, but a violation must fail
+        loudly rather than as a proxy 400 misread as a tools rejection."""
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(RuntimeError, match="preceding assistant turn"):
+                await backend.send_tool_results(
+                    handle, [ToolResult(call_id="c1", name="get_cv", ok=True, content={})]
+                )
+        assert mock_client.post.call_count == 0
+
+
+class TestToolsRejectedClassification:
+    async def test_permanent_4xx_with_tools_raises_tools_rejected_unretried(self):
+        body = {"type": "error", "error": {"type": "invalid_request_error", "message": "tools unsupported"}}
+        mock_client = _make_mock_client(body, status_code=400)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(_ToolsRejected) as exc_info:
+                await backend.send_message(handle, "revise")
+        # It must reach tool_loop.py's rung ladder, NOT BF-19's backend advance
+        assert isinstance(exc_info.value, ToolsUnsupported)
+        assert not isinstance(exc_info.value, AgentBackendUnavailable)
+        assert mock_client.post.call_count == 1
+
+    async def test_non_json_4xx_with_tools_raises_tools_rejected_unretried(self):
+        mock_client = _make_mock_client_response_sequence([(404, None, "Not Found")])
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(ToolsUnsupported):
+                await backend.send_message(handle, "revise")
+        assert mock_client.post.call_count == 1
+
+    async def test_permanent_4xx_without_tools_still_raises_backend_unavailable(self):
+        """BF-19 is unchanged for every non-tool turn — the gate is the payload
+        actually sent, never the capability flag."""
+        body = {"type": "error", "error": {"type": "invalid_request_error", "message": "Model x is not supported"}}
+        mock_client = _make_mock_client(body, status_code=400)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            with pytest.raises(AgentBackendUnavailable, match="not supported") as exc_info:
+                await backend.start_session("sys", "msg")
+        assert not isinstance(exc_info.value, ToolsUnsupported)
+        assert mock_client.post.call_count == 1
+
+    async def test_transient_failure_with_tools_still_retries_three_times(self):
+        """Branch 2 (transient) must be untouched by the tools path."""
+        mock_client = _make_mock_client_response_sequence([(500, {"detail": "boom"}, None)] * 3)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(AgentBackendUnavailable, match="3 attempts"):
+                await backend.send_message(handle, "revise")
+        assert mock_client.post.call_count == 3
+
+    async def test_retry_attempts_keep_sending_tools(self):
+        responses = [
+            (500, {"detail": "boom"}, None),
+            (200, _tool_call_body([_wire_call("call_1", "get_cv", "{}")]), None),
+        ]
+        mock_client = _make_mock_client_response_sequence(responses)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            reply = await backend.send_message(handle, "revise")
+        assert reply.kind == "tool_calls"
+        for call in mock_client.post.call_args_list:
+            assert "tools" in call.kwargs["json"]
+
+    async def test_rate_limit_with_tools_still_raises_limit_reached(self):
+        """Branch 1 (quota/rate) must be untouched too — a 429 is an account-scoped
+        signal, not a statement about tool support."""
+        mock_client = _make_mock_client({}, status_code=429)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            with pytest.raises(AgentLimitReached):
+                await backend.send_message(handle, "revise")
+        assert mock_client.post.call_count == 1
+
+
+class TestToolModeDoesNotTouchStructuredOrNudge:
+    async def test_restore_with_tools_leaves_structured_mode_off(self):
+        backend = OpenCodeZenBackend()
+        handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+        assert handle.tools == CV_TOOLS
+        assert handle.structured_schema is None
+        assert handle.structured_enabled is False
+
+    async def test_prose_reply_in_tool_mode_never_nudges(self):
+        """A tool-mode session was never given the sentinel contract, so a reply with
+        no tool calls must NOT go through _parse_with_nudge — exactly one POST, and
+        the structured downgrade flag is never touched."""
+        mock_client = _make_mock_client(_completion_body(NO_SENTINEL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeZenBackend()
+            handle = await backend.restore_session("sys", [], None, tools=CV_TOOLS)
+            reply = await backend.send_message(handle, "revise")
+        assert mock_client.post.call_count == 1
+        assert reply.kind != "tool_calls"
+        assert reply.raw == NO_SENTINEL_RAW
+        assert handle.structured_enabled is False

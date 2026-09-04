@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useStore } from "../store";
 import type { TranscriptTurn } from "../types";
@@ -133,6 +133,13 @@ function TurnBubble({ turn }: { turn: TranscriptTurn }) {
   const t = useT();
   const isUser = turn.role === "user";
   const reasoning = !isUser && turn.reasoning ? turn.reasoning.trim() : "";
+  // Persisted tool rows (see types.ts's TranscriptTurn.tools) — same shape as the live
+  // streamBuffers entry, so this turn's settled card renders identically to how it
+  // looked while live. In practice the backend attaches these to `plumbing` turns, which
+  // render through the hoisted card in AgentThread's map, not through TurnBubble; this
+  // stays wired so a question turn (ask_user's park) also shows them. Nullable — defaults
+  // to no tool rows rather than erroring.
+  const tools = !isUser && turn.tools ? turn.tools : [];
   return (
     <div
       style={{
@@ -145,7 +152,9 @@ function TurnBubble({ turn }: { turn: TranscriptTurn }) {
     >
       {avatarFor(turn.role, t)}
       <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: "82%", width: "100%" }}>
-        {reasoning.length > 0 && <ReasoningCard reasoning={reasoning} running={false} />}
+        {(reasoning.length > 0 || tools.length > 0) && (
+          <ReasoningCard reasoning={reasoning} running={false} tools={tools} />
+        )}
         <div
           style={{
             display: "flex",
@@ -218,16 +227,27 @@ function NoticeLine({ turn }: { turn: TranscriptTurn }) {
 //
 // The card itself (both its running and settled states, the step chunking, and the
 // live step window that stops a long trace from inflating it) lives in ReasoningCard.
-function LiveBubble({ content, reasoning }: { content: string; reasoning: string }) {
+function LiveBubble({
+  content,
+  reasoning,
+  tools,
+}: {
+  content: string;
+  reasoning: string;
+  tools: { name: string; detail: string; ok: boolean; at: number }[];
+}) {
   const t = useT();
   const hasReasoning = reasoning.trim().length > 0;
   const hasContent = content.trim().length > 0;
-  const showReasoningCard = hasReasoning || !hasContent;
+  // A tool call is live-feedback-worthy on its own, even before any reasoning text has
+  // streamed — the same "there must always be SOME live affordance" rule that keeps the
+  // card up for a pre-content "Thinking…" placeholder.
+  const showReasoningCard = hasReasoning || tools.length > 0 || !hasContent;
   return (
     <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, width: "100%" }}>
       {avatarFor("assistant", t)}
       <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: "82%", width: "100%" }}>
-        {showReasoningCard && <ReasoningCard reasoning={reasoning} running />}
+        {showReasoningCard && <ReasoningCard reasoning={reasoning} running tools={tools} />}
         {hasContent && (
           <div
             style={{
@@ -329,7 +349,7 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
   // depended on at least one chunk having streamed, which is exactly the case
   // it's meant to cover when there is none.
   const isJobRunning = useStore((s) => s.jobs[jobId]?.state === "running");
-  const liveBuffer = streamBuffer ?? (isJobRunning ? { stage: "", content: "", reasoning: "" } : undefined);
+  const liveBuffer = streamBuffer ?? (isJobRunning ? { stage: "", content: "", reasoning: "", tools: [] } : undefined);
   const [loading, setLoading] = useState(transcript === undefined);
   const [error, setError] = useState<string | null>(null);
   const [showInternals, setShowInternals] = useState(false);
@@ -445,14 +465,40 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
           !error &&
           turns.map((turn) => {
             if (turn.kind === "plumbing") {
-              return showInternals ? <PlumbingLine key={turn.seq} turn={turn} /> : null;
+              // A plumbing turn carrying persisted tool rows renders its REASONING card
+              // ALWAYS, outside the showInternals gate — that card is the settled twin of
+              // the LiveBubble card the same turn showed while it was streaming, and
+              // hiding it behind "show internals" would mean tool activity vanished on
+              // reload (the revision-tool-use plan's :500, "live and settled look
+              // identical"). The raw machine text stays gated, as it always was.
+              //
+              // Asymmetry worth knowing about: `turn.reasoning` is only ever attached to
+              // plumbing turns (jsa/api/transcript.py), so this branch is the ONLY place
+              // a settled turn's reasoning becomes visible — a non-tool turn's reasoning
+              // is still not rendered anywhere. That is a pre-existing gap in the
+              // reasoning-step-chunking work, deliberately not widened here.
+              const toolMarks = turn.role !== "user" && turn.tools ? turn.tools : [];
+              return (
+                <Fragment key={turn.seq}>
+                  {toolMarks.length > 0 && (
+                    <ReasoningCard
+                      reasoning={turn.reasoning ? turn.reasoning.trim() : ""}
+                      running={false}
+                      tools={toolMarks}
+                    />
+                  )}
+                  {showInternals && <PlumbingLine turn={turn} />}
+                </Fragment>
+              );
             }
             if (turn.kind === "verdict" || turn.kind === "delivery") {
               return <NoticeLine key={turn.seq} turn={turn} />;
             }
             return <TurnBubble key={turn.seq} turn={turn} />;
           })}
-        {liveBuffer && <LiveBubble content={liveBuffer.content} reasoning={liveBuffer.reasoning} />}
+        {liveBuffer && (
+          <LiveBubble content={liveBuffer.content} reasoning={liveBuffer.reasoning} tools={liveBuffer.tools} />
+        )}
         <div ref={bottomRef} />
       </div>
 

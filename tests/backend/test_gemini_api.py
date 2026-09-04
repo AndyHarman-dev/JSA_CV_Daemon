@@ -15,10 +15,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jsa.agents._openai_compat import OpenAICompatSessionHandle
-from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentTimeout, HistoryTurn
+from jsa.agents._openai_compat import OpenAICompatSessionHandle, _ToolsRejected
+from jsa.agents.base import (
+    AgentBackendUnavailable,
+    AgentLimitReached,
+    AgentTimeout,
+    HistoryTurn,
+    ToolResult,
+    ToolsUnsupported,
+)
 from jsa.agents.gemini_api import GeminiBackend
 from jsa.agents.protocol import ProtocolError
+from jsa.agents.tool_spec import tools_for
 from jsa.db.models import Stage
 from jsa.schema.turn_models import json_schema_for
 
@@ -678,3 +686,441 @@ class TestGeminiThinkingConfig:
             await backend.start_session("sys", "hi")
         config = mock_client.post.call_args.kwargs["json"]["generationConfig"]
         assert "thinkingConfig" not in config
+
+
+# ---------------------------------------------------------------------------
+# Native tool calling (revision-tool-use plan, E4)
+#
+# Gemini's wire shape for tools is `tools: [{"functionDeclarations": [...]}]` +
+# `toolConfig.functionCallingConfig.mode = "ANY"`, and its replies carry
+# `functionCall` parts with NO text part at all — the trap the plan names as
+# finding #3, since `_call_api_once`'s `if not text` raise sits right where such a
+# reply lands. Everything else (session handling, parsing, the rung ladder) is
+# inherited from OpenAICompatBackend and covered in test_openai_compat.py.
+# ---------------------------------------------------------------------------
+
+
+def _cv_specs() -> tuple:
+    return tools_for(Stage.revising_cv)
+
+
+def _function_call_part(name: str, args: dict | None) -> dict:
+    part: dict = {"functionCall": {"name": name}}
+    if args is not None:
+        part["functionCall"]["args"] = args
+    return part
+
+
+def _function_call_body(*parts: dict, finish_reason: str = "STOP") -> dict:
+    """A Gemini reply carrying only functionCall parts — no text part whatsoever,
+    which is exactly what a real forced tool call looks like on this API."""
+    return {"candidates": [{"content": {"parts": list(parts)}, "finishReason": finish_reason}]}
+
+
+def _4xx_response(message: str = "Invalid argument") -> MagicMock:
+    return MagicMock(
+        status_code=400,
+        json=MagicMock(return_value={
+            "error": {"code": 400, "message": message, "status": "INVALID_ARGUMENT"}
+        }),
+        text="bad request",
+    )
+
+
+class TestSupportsNativeTools:
+    def test_flag_is_inherited_true_from_the_shared_base(self):
+        assert GeminiBackend.supports_native_tools is True
+
+    def test_flag_is_true_on_an_instance(self):
+        assert GeminiBackend().supports_native_tools is True
+
+
+class TestGeminiToolRequestShape:
+    async def test_function_declarations_and_any_mode_sent(self):
+        mock_client = _make_mock_client(_function_call_body(_function_call_part("get_cv", {})))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session(
+                "sys", [HistoryTurn(role="user", content="hi")], None, tools=_cv_specs()
+            )
+            await backend.send_message(handle, "shorten the summary")
+        payload = mock_client.post.call_args.kwargs["json"]
+        declarations = payload["tools"][0]["functionDeclarations"]
+        names = [d["name"] for d in declarations]
+        assert "get_cv" in names and "finalize" in names
+        assert all("parameters" in d and "description" in d for d in declarations)
+        assert payload["toolConfig"] == {"functionCallingConfig": {"mode": "ANY"}}
+
+    async def test_no_response_schema_when_tools_active(self):
+        """Tool mode and structured mode are mutually exclusive per request — the
+        terminal tool's arguments ARE the structured output."""
+        mock_client = _make_mock_client(_function_call_body(_function_call_part("get_cv", {})))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+        config = mock_client.post.call_args.kwargs["json"]["generationConfig"]
+        assert "responseSchema" not in config
+        assert "responseMimeType" not in config
+
+    async def test_declarations_carry_no_additional_properties_or_refs(self):
+        """Gemini's restricted OpenAPI-subset schema rejects all three. The renderer
+        strips additionalProperties and the specs are hand-written $ref-free — assert
+        it here rather than trusting the docstring, so a future tool_spec.py edit that
+        reintroduces a $ref fails loudly instead of silently 400ing on the wire."""
+        mock_client = _make_mock_client(_function_call_body(_function_call_part("get_cv", {})))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+        declarations = mock_client.post.call_args.kwargs["json"]["tools"]
+        assert not _has_key_anywhere(declarations, "additionalProperties")
+        assert not _has_key_anywhere(declarations, "$ref")
+        assert not _has_key_anywhere(declarations, "$defs")
+
+    async def test_both_tools_and_schema_on_one_request_is_an_assertion_error(self):
+        """The mutual exclusion is asserted, not merely arranged for by the callers."""
+        backend = GeminiBackend()
+        with pytest.raises(AssertionError, match="mutually exclusive"):
+            await backend._call_api_once(
+                "sys",
+                [{"role": "user", "content": "hi"}],
+                structured_schema=json_schema_for(Stage.cv_adjust),
+                tools=_cv_specs(),
+            )
+
+    async def test_no_tools_keys_when_tools_absent(self):
+        mock_client = _make_mock_client(_gemini_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            await backend.start_session("sys", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert "tools" not in payload and "toolConfig" not in payload
+
+    async def test_tool_mode_never_streams(self):
+        """Plan finding #1: an on_chunk-carrying call still goes down the buffered
+        generateContent path once tools are attached — which is what makes
+        _consume_gemini_sse's lack of functionCall handling correct, not a gap."""
+        mock_client = _make_mock_client(_function_call_body(_function_call_part("get_cv", {})))
+        mock_client.stream = MagicMock()
+
+        async def _on_chunk(_chunk):
+            return None
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go", on_chunk=_on_chunk)
+        mock_client.stream.assert_not_called()
+        assert reply.kind == "tool_calls"
+        assert mock_client.post.call_args.args[0].endswith(":generateContent")
+
+
+class TestGeminiToolReplyExtraction:
+    async def test_function_call_only_reply_is_not_a_transient_empty_reply(self):
+        """The sharpest trap in E4 (plan finding #3): a functionCall-only reply has NO
+        text part, so `if not text: raise TransientBackendError` would fire first,
+        burn every retry attempt and end as AgentBackendUnavailable — dropping the
+        backend out of BF-19 over a perfectly good tool call."""
+        mock_client = _make_mock_client(_function_call_body(_function_call_part("get_cv", {})))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert reply.kind == "tool_calls"
+        assert mock_client.post.await_count == 1  # exactly one HTTP attempt, no retries
+
+    async def test_all_function_calls_returned_in_order_with_positional_ids(self):
+        """Gemini issues no call ids, and a turn can carry several parallel calls —
+        returning only the first is a named bug class in the plan (finding #5)."""
+        mock_client = _make_mock_client(
+            _function_call_body(
+                _function_call_part("get_cv", {}),
+                _function_call_part("edit_entry_bullets", {"entry_id": "e1", "bullets": ["one"]}),
+                _function_call_part("finalize", {"change_log": "tightened"}),
+            )
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert [c.name for c in reply.tool_calls] == ["get_cv", "edit_entry_bullets", "finalize"]
+        assert [c.id for c in reply.tool_calls] == ["call_0", "call_1", "call_2"]
+        assert reply.tool_calls[1].arguments == {"entry_id": "e1", "bullets": ["one"]}
+        assert all(isinstance(c.arguments, dict) for c in reply.tool_calls)
+
+    async def test_ids_are_keyed_on_block_position_not_call_count(self):
+        """Mirrors anthropic_api.py's identical choice: keying on the block index means
+        two calls can never collide on one id even when other parts are interleaved."""
+        mock_client = _make_mock_client(
+            _function_call_body(
+                {"text": "let me look first"},
+                _function_call_part("get_cv", {}),
+            )
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert [c.id for c in reply.tool_calls] == ["call_1"]
+
+    async def test_missing_args_becomes_an_empty_dict(self):
+        """A zero-parameter tool (get_cv) legitimately comes back with no `args` key."""
+        mock_client = _make_mock_client(_function_call_body(_function_call_part("get_cv", None)))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert reply.tool_calls[0].arguments == {}
+
+    async def test_text_reply_in_tool_mode_is_not_sentinel_nudged(self):
+        """mode "ANY" should prevent this, but a model answering prose anyway must not
+        trigger the sentinel nudge (a tool session was never given that contract) —
+        one attempt, handed back for tool_loop.py's rung 3."""
+        mock_client = _make_mock_client(_gemini_body(NO_SENTINEL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert reply.kind == "final"
+        assert mock_client.post.await_count == 1  # no nudge replay
+
+    async def test_function_call_part_is_ignored_when_no_tools_were_attached(self):
+        """Extraction is gated on `tools`: ungated, a stray functionCall in a non-tool
+        session would hand run_stage a kind="tool_calls" reply for a cv_adjust turn."""
+        mock_client = _make_mock_client(_function_call_body(_function_call_part("get_cv", {})))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.start_session("sys", "hi")
+        assert mock_client.post.await_count == 3  # unchanged empty-reply transient path
+
+
+class TestGeminiSendToolResults:
+    @staticmethod
+    def _two_round_client(second_body: dict) -> MagicMock:
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=200, text="x", json=MagicMock(return_value=_function_call_body(
+                    _function_call_part("get_cv", {}),
+                    _function_call_part("remove_entry", {"entry_id": "e9"}),
+                ))),
+                MagicMock(status_code=200, text="y", json=MagicMock(return_value=second_body)),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        return mock_client
+
+    @staticmethod
+    def _results() -> list:
+        return [
+            ToolResult(call_id="call_0", name="get_cv", ok=True, content={"ok": True, "cv": {}}),
+            ToolResult(call_id="call_1", name="remove_entry", ok=False,
+                       content={"ok": False, "error": {"code": "bad_argument"}}),
+        ]
+
+    async def test_function_response_parts_follow_the_function_call_turn_in_order(self):
+        mock_client = self._two_round_client(
+            _function_call_body(_function_call_part("finalize", {"change_log": "done"}))
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            first = await backend.send_message(handle, "go")
+            second = await backend.send_tool_results(handle, self._results())
+        assert first.kind == "tool_calls" and second.kind == "tool_calls"
+        contents = mock_client.post.call_args.kwargs["json"]["contents"]
+        assert [c["role"] for c in contents] == ["user", "model", "user"]
+        # The model turn replays the calls it made, as functionCall parts.
+        assert [p["functionCall"]["name"] for p in contents[1]["parts"]] == ["get_cv", "remove_entry"]
+        assert contents[1]["parts"][1]["functionCall"]["args"] == {"entry_id": "e9"}
+        # The results come back as functionResponse parts on a USER turn (there is no
+        # "tool"/"function" role on this API), one per result, in the same order.
+        responses = [p["functionResponse"] for p in contents[2]["parts"]]
+        assert [r["name"] for r in responses] == ["get_cv", "remove_entry"]
+        assert responses[0]["response"] == {"ok": True, "cv": {}}
+        assert responses[1]["response"] == {"ok": False, "error": {"code": "bad_argument"}}
+
+    async def test_tools_still_attached_on_the_follow_up_request(self):
+        mock_client = self._two_round_client(
+            _function_call_body(_function_call_part("finalize", {"change_log": "done"}))
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            await backend.send_tool_results(handle, self._results())
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["tools"][0]["functionDeclarations"]
+        assert payload["toolConfig"] == {"functionCallingConfig": {"mode": "ANY"}}
+        assert "responseSchema" not in payload["generationConfig"]
+
+    async def test_text_reply_to_results_ends_tool_mode_and_clears_pending(self):
+        mock_client = self._two_round_client(_gemini_body(NO_SENTINEL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            reply = await backend.send_tool_results(handle, self._results())
+        assert reply.kind == "final"
+        assert handle.pending_tool_calls is None
+        assert mock_client.post.await_count == 2  # no nudge replay
+        assert [m["role"] for m in handle.messages] == ["user", "assistant", "user", "assistant"]
+
+    async def test_non_dict_result_content_is_wrapped_in_an_object(self):
+        """functionResponse.response must be a JSON object on this wire shape."""
+        mock_client = self._two_round_client(
+            _function_call_body(_function_call_part("finalize", {"change_log": "d"}))
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            await backend.send_tool_results(
+                handle, [ToolResult(call_id="call_0", name="get_cv", ok=True, content="plain text")]
+            )
+        contents = mock_client.post.call_args.kwargs["json"]["contents"]
+        assert contents[-1]["parts"][0]["functionResponse"]["response"] == {"result": "plain text"}
+
+    async def test_handle_is_not_mutated_when_the_follow_up_call_fails(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=200, text="x", json=MagicMock(return_value=_function_call_body(
+                    _function_call_part("get_cv", {})))),
+                *[MagicMock(status_code=500, text="boom", json=MagicMock(return_value={})) for _ in range(3)],
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            before = list(handle.messages)
+            pending_before = handle.pending_tool_calls
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.send_tool_results(
+                    handle, [ToolResult(call_id="call_0", name="get_cv", ok=True, content={"ok": True})]
+                )
+        assert handle.messages == before
+        assert handle.pending_tool_calls == pending_before
+
+    async def test_wrong_handle_type_raises(self):
+        backend = GeminiBackend()
+        with pytest.raises(TypeError):
+            await backend.send_tool_results(object(), [])  # type: ignore[arg-type]
+
+    async def test_handle_without_tools_raises_value_error(self):
+        """A caller bug must fail loudly here rather than 400ing on the wire, where it
+        would be misread as a provider rejection and cost the turn its native rung."""
+        backend = GeminiBackend()
+        handle = await backend.restore_session("sys", [], None)
+        with pytest.raises(ValueError, match="native tool session"):
+            await backend.send_tool_results(
+                handle, [ToolResult(call_id="call_0", name="get_cv", ok=True, content={"ok": True})]
+            )
+
+    async def test_tools_rejected_mid_loop_is_a_tools_unsupported(self):
+        """tool_loop.py wraps this exact call in `except ToolsUnsupported`, so
+        send_tool_results really has to be able to produce one — not just send_message."""
+        mock_client = self._two_round_client({})
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=200, text="x", json=MagicMock(return_value=_function_call_body(
+                    _function_call_part("get_cv", {})))),
+                _4xx_response("Function calling is not supported for this model"),
+            ]
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            with pytest.raises(ToolsUnsupported) as exc_info:
+                await backend.send_tool_results(
+                    handle, [ToolResult(call_id="call_0", name="get_cv", ok=True, content={"ok": True})]
+                )
+        assert isinstance(exc_info.value, _ToolsRejected)
+        assert not isinstance(exc_info.value, AgentBackendUnavailable)
+        assert mock_client.post.await_count == 2  # no in-backend retry-clean
+
+
+class TestGeminiToolsRejectedDegrade:
+    """A permanent 4xx with declarations on the wire is a TOOLS rejection, not a dead
+    backend: tool_loop.py's native->prompt rung ladder owns the recovery, so this
+    backend must neither retry clean in-process (as the reasoning/schema degrades do)
+    nor tell BF-19 to advance the whole job."""
+
+    async def test_permanent_4xx_with_tools_raises_tools_unsupported(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=_4xx_response("Unsupported field: tools"))
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(ToolsUnsupported) as exc_info:
+                await backend.send_message(handle, "go")
+        assert isinstance(exc_info.value, _ToolsRejected)
+        # NOT an AgentBackendUnavailable — an escaped instance must never be read as a
+        # BF-19 signal (jsa/agents/base.py::ToolsUnsupported).
+        assert not isinstance(exc_info.value, AgentBackendUnavailable)
+        assert mock_client.post.await_count == 1  # one attempt: no retry, no degrade loop
+
+    async def test_tools_shed_before_reasoning(self):
+        """Degrade precedence is tools -> reasoning -> caching -> fail. thinkingConfig
+        is on by default, so this pins that tools shed FIRST rather than the request
+        being retried once clean without thinking."""
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=_4xx_response())
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            assert backend._reasoning is True
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(_ToolsRejected):
+                await backend.send_message(handle, "go")
+        assert mock_client.post.await_count == 1
+        assert backend._reasoning is True  # the reasoning degrade never fired
+
+    async def test_permanent_4xx_without_tools_is_unchanged_schema_rejection(self):
+        """The pre-existing behavior must be untouched for a non-tools call: a
+        structured-mode 4xx is still _SchemaRejected (an AgentBackendUnavailable that
+        start_session/send_message downgrade), never a ToolsUnsupported."""
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=_4xx_response("Invalid responseSchema"))
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            backend._reasoning = False  # isolate from the reasoning degrade
+            with pytest.raises(AgentBackendUnavailable) as exc_info:
+                await backend._call_api_once(
+                    "sys",
+                    [{"role": "user", "content": "hi"}],
+                    structured_schema=json_schema_for(Stage.cv_adjust),
+                )
+        assert not isinstance(exc_info.value, ToolsUnsupported)
+
+    async def test_permanent_4xx_without_tools_in_sentinel_mode_is_still_bf19(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(return_value=_4xx_response())
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            backend._reasoning = False
+            with pytest.raises(AgentBackendUnavailable) as exc_info:
+                await backend.start_session("sys", "hi")
+        assert not isinstance(exc_info.value, ToolsUnsupported)
+        assert mock_client.post.await_count == 1
+
+    async def test_429_with_tools_present_is_still_a_limit_signal(self):
+        """Quota is an account-scoped constraint — it must reach BF-19 as
+        AgentLimitReached, not be misread as a tools rejection."""
+        mock_client = _make_mock_client(
+            {"error": {"code": 429, "message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}},
+            status_code=429,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(AgentLimitReached):
+                await backend.send_message(handle, "go")

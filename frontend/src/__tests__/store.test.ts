@@ -351,3 +351,103 @@ describe("setLanguage", () => {
     expect(useStore.getState().language).toBe("en");
   });
 });
+
+describe("applyEvent - agent_tool event", () => {
+  beforeEach(() => {
+    useStore.setState({ streamBuffers: {} });
+  });
+
+  it("appends a tool mark anchored at the reasoning buffer's current length", () => {
+    useStore.setState({
+      streamBuffers: {
+        job1: { stage: "cv_adjust", content: "", reasoning: "Reading the JD.", tools: [] },
+      },
+    });
+
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cv_adjust",
+      seq: 1,
+      call_id: "call_1",
+      name: "read_file",
+      summary: "~/.jsa/cv_structure.json",
+      status: "ok",
+      detail: "",
+    });
+
+    expect(useStore.getState().streamBuffers.job1.tools).toEqual([
+      { name: "read_file", detail: "~/.jsa/cv_structure.json", ok: true, at: "Reading the JD.".length },
+    ]);
+    // content/reasoning are untouched by an agent_tool event.
+    expect(useStore.getState().streamBuffers.job1.reasoning).toBe("Reading the JD.");
+  });
+
+  it("falls back to `detail` when `summary` is empty, and records ok:false on a failed call", () => {
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cv_adjust",
+      seq: 1,
+      call_id: "call_1",
+      name: "run_patch",
+      summary: "",
+      status: "error",
+      detail: "patch rejected: hunk mismatch",
+    });
+
+    expect(useStore.getState().streamBuffers.job1.tools).toEqual([
+      { name: "run_patch", detail: "patch rejected: hunk mismatch", ok: false, at: 0 },
+    ]);
+  });
+
+  it("resets the buffer (and its tools) when the event's stage differs from the existing one", () => {
+    useStore.setState({
+      streamBuffers: {
+        job1: { stage: "cv_adjust", content: "", reasoning: "stale", tools: [{ name: "old", detail: "", ok: true, at: 0 }] },
+      },
+    });
+
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cover_letter",
+      seq: 1,
+      call_id: "call_2",
+      name: "web_search",
+      summary: "query",
+      status: "ok",
+      detail: "",
+    });
+
+    const buf = useStore.getState().streamBuffers.job1;
+    expect(buf.stage).toBe("cover_letter");
+    expect(buf.reasoning).toBe("");
+    expect(buf.tools).toEqual([{ name: "web_search", detail: "query", ok: true, at: 0 }]);
+  });
+
+  it("preserves accumulated tools across a subsequent agent_chunk event", () => {
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cv_adjust",
+      seq: 1,
+      call_id: "call_1",
+      name: "read_file",
+      summary: "cv_structure.json",
+      status: "ok",
+      detail: "",
+    });
+    useStore.getState().applyEvent({
+      type: "agent_chunk",
+      job_id: "job1",
+      stage: "cv_adjust",
+      kind: "reasoning",
+      text: "more thinking",
+    });
+
+    const buf = useStore.getState().streamBuffers.job1;
+    expect(buf.reasoning).toBe("more thinking");
+    expect(buf.tools).toEqual([{ name: "read_file", detail: "cv_structure.json", ok: true, at: 0 }]);
+  });
+});
