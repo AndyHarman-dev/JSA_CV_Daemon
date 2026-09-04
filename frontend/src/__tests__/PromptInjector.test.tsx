@@ -124,6 +124,37 @@ describe("store.openInjector clamp", () => {
     useStore.getState().openInjector("job1", 0, 0);
     expect(useStore.getState().injectorPos).toEqual({ x: 12, y: 12 });
   });
+
+  // Regression: the horizontal clamp used to be Math.min(Math.max(margin, x), upper).
+  // When the viewport is narrower than the panel + both margins (424px), `upper` is
+  // BELOW `margin`, so Math.min picked the negative upper bound and slid the panel —
+  // and its PRE-FIX PROMPT field — off the left edge.
+  it("does not push the panel off-screen when the viewport is narrower than the panel", () => {
+    const realWidth = window.innerWidth;
+    try {
+      Object.defineProperty(window, "innerWidth", { value: 380, configurable: true });
+      useStore.getState().openInjector("job1", 200, 100);
+      expect(useStore.getState().injectorPos.x).toBe(12);
+    } finally {
+      Object.defineProperty(window, "innerWidth", { value: realWidth, configurable: true });
+    }
+  });
+
+  // Regression: the reserved height must track the panel's real CSS cap (maxHeight: 80vh),
+  // not a flat 560px. On viewports taller than 700px a full panel renders taller than 560,
+  // so reserving 560 puts the SAVE / CANCEL footer below the fold.
+  it("reserves the panel's real 80vh cap on tall viewports, not a flat 560px", () => {
+    const realHeight = window.innerHeight;
+    try {
+      Object.defineProperty(window, "innerHeight", { value: 1000, configurable: true });
+      expect(injectorPanelHeight(1000)).toBe(800);
+      useStore.getState().openInjector("job1", 100, 990);
+      const { y } = useStore.getState().injectorPos;
+      expect(y + injectorPanelHeight(1000)).toBeLessThanOrEqual(1000 - 12);
+    } finally {
+      Object.defineProperty(window, "innerHeight", { value: realHeight, configurable: true });
+    }
+  });
 });
 
 describe("PromptInjector panel", () => {

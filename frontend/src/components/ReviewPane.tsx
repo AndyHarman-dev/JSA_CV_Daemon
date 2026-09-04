@@ -29,6 +29,18 @@ interface DocPaths {
 
 const emptyPaths: DocPaths = { pdfUrl: null, docxUrl: null, version: 1 };
 
+/** The CSV `link` column is free text, never validated as a URL — guard against a
+ * `javascript:`/`data:` etc. scheme executing in the app's origin on click. Only
+ * http(s) (and a bare protocol-relative or path-relative link) render as a real link. */
+function isSafeJobLink(link: string): boolean {
+  try {
+    const url = new URL(link, window.location.origin);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /** Convert an absolute filesystem path stored in the DB to a /api/files/<relpath> URL. */
 function toFileUrl(absPath: string | null | undefined): string | null {
   if (!absPath) return null;
@@ -177,7 +189,7 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
             "copy link address". The CSV `link` column is free text and is never
             validated as a URL, so an empty one must render nothing at all rather
             than an <a href=""> that quietly navigates to the app's own root. */}
-        {jobLink?.trim() && (
+        {jobLink?.trim() && isSafeJobLink(jobLink.trim()) && (
           <a
             href={jobLink}
             target="_blank"

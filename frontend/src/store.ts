@@ -108,7 +108,10 @@ interface Store {
 const INJECTOR_W = 400;
 const INJECTOR_MARGIN = 12;
 export function injectorPanelHeight(viewportHeight: number): number {
-  return Math.min(560, viewportHeight - 24);
+  // Must track the panel's actual CSS cap (`maxHeight: "80vh"` in PromptInjector.tsx) —
+  // a flat 560px cap under-reserves on viewports taller than 700px, where a panel full of
+  // saved presets can render taller than 560px and push the footer buttons below the fold.
+  return Math.min(viewportHeight * 0.8, viewportHeight - 24);
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -416,7 +419,7 @@ export const useStore = create<Store>((set, get) => ({
     set({
       injectorJobId: jobId,
       injectorPos: {
-        x: Math.min(Math.max(INJECTOR_MARGIN, x), vw - INJECTOR_W - INJECTOR_MARGIN),
+        x: Math.max(INJECTOR_MARGIN, Math.min(x, vw - INJECTOR_W - INJECTOR_MARGIN)),
         y: Math.max(INJECTOR_MARGIN, Math.min(y, vh - panelH - INJECTOR_MARGIN)),
       },
     });

@@ -301,6 +301,33 @@ describe("ReviewPane", () => {
       expect(screen.queryByText(/job posting/i)).not.toBeInTheDocument();
     });
 
+    // The CSV `link` column is free text; a `javascript:` URI there would otherwise
+    // execute in the app's own origin on click. rel="noopener noreferrer" does not
+    // stop that — only a scheme check does.
+    it("does not render a javascript: link", async () => {
+      useStore.setState({
+        jobs: { job1: makeJob({ link: "javascript:alert(1)" }) },
+        selectedId: "job1",
+      });
+
+      render(<ReviewPane jobId="job1" />);
+
+      await screen.findByRole("button", { name: /approve & export/i });
+      expect(screen.queryByText(/job posting/i)).not.toBeInTheDocument();
+    });
+
+    it("still renders an ordinary https link", async () => {
+      useStore.setState({
+        jobs: { job1: makeJob({ link: "https://ok.example.com/x" }) },
+        selectedId: "job1",
+      });
+
+      render(<ReviewPane jobId="job1" />);
+
+      const link = await screen.findByRole("link", { name: /job posting/i });
+      expect(link).toHaveAttribute("href", "https://ok.example.com/x");
+    });
+
     it("does not render when the link is only whitespace", async () => {
       useStore.setState({ jobs: { job1: makeJob({ link: "   " }) }, selectedId: "job1" });
 
