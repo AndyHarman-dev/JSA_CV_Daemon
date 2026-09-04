@@ -1,13 +1,19 @@
 """HTTP routes for the standalone base-CV ``CVDocument`` JSON (the CV Structure Editor).
 
-These endpoints are **job-less**: they read/write the single canonical structure file via
-``jsa.store.cv_structure`` and never touch a Job, document row, or job state. The structure is
-the source of truth the editor edits and the ``cv_adjust`` stage later consumes.
+The GET/PUT pair here are now thin **default-deck aliases** over ``jsa.store.cv_decks`` —
+kept so pre-decks callers (and ``tests/backend/test_cv_source_of_truth.py``) keep working
+unchanged (plan decision 3). They are still job-less: they read/write the *default* deck
+and never touch a Job, document row, or job state.
 
-  GET  /api/cv-structure         → the stored CVDocument (404 if never saved → editor empty state)
-  PUT  /api/cv-structure         → validate + persist an edited CVDocument (422 on schema fail)
+  GET  /api/cv-structure         → the default deck's CVDocument (404 if there is no default
+                                    deck yet, or it has no CV saved → editor empty state)
+  PUT  /api/cv-structure         → validate + persist into the default deck (422 on schema
+                                    fail); creates a deck first if the index is empty, so a
+                                    fresh install's first PUT still works
   POST /api/cv-structure/infer   → infer a CVDocument from an uploaded CV (multipart); streams
-                                    5 `infer_progress` events and returns the result (unsaved)
+                                    5 `infer_progress` events and returns the result (unsaved).
+                                    Deck-agnostic and UNCHANGED — the editor PUTs the result
+                                    into whichever deck is active.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from pydantic import BaseModel, ValidationError
 from jsa.events.bus import bus
 from jsa.pipeline.infer_structure import InferError, _concise_reason, run_infer
 from jsa.schema import CVDocument
-from jsa.store import cv_structure
+from jsa.store import cv_decks
 
 router = APIRouter()
 
@@ -38,8 +44,11 @@ def _settings(request: Request):
 
 @router.get("/api/cv-structure")
 async def get_cv_structure(request: Request) -> dict:
-    """Return the stored base CV. 404 if it has never been saved (drives the empty state)."""
-    cv = await cv_structure.load(_settings(request))
+    """Return the default deck's base CV. 404 when there is no default deck yet, or it has
+    no CV saved (drives the editor's empty state)."""
+    settings = _settings(request)
+    index = await cv_decks.load_index(settings)
+    cv = await cv_decks.load_deck(settings, index.default_id) if index.default_id else None
     if cv is None:
         raise HTTPException(status_code=404, detail="No CV structure saved yet")
     return {"structured": cv.model_dump()}
@@ -48,12 +57,21 @@ async def get_cv_structure(request: Request) -> dict:
 @router.put("/api/cv-structure")
 async def put_cv_structure(request: Request, body: CvStructureBody) -> dict:
     """Validate against the CVDocument schema (422 on the hard gates — contact name, ≥1
-    renderable section, not-a-cover-letter) and persist. Returns the canonical stored form."""
+    renderable section, not-a-cover-letter) and persist into the default deck, creating one
+    first if the index is empty (keeps a fresh-install PUT working). Returns the canonical
+    stored form."""
+    settings = _settings(request)
     try:
         cv = CVDocument.model_validate(body.structured)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=_concise_reason(exc)) from exc
-    await cv_structure.save(_settings(request), cv)
+
+    index = await cv_decks.load_index(settings)
+    default_id = index.default_id
+    if default_id is None:
+        meta = await cv_decks.create_deck(settings)
+        default_id = meta.id
+    await cv_decks.save_deck(settings, default_id, cv)
     # Unblock the orchestrator's "no CV structure" gate without requiring a restart.
     request.app.state.orchestrator.kick()
     return {"structured": cv.model_dump()}

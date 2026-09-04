@@ -26,6 +26,7 @@ from jsa.events.schema import (
 )
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
+from jsa.store import cv_decks
 from jsa.store import preferences as preferences_store
 from jsa.util import slugify as _slugify
 
@@ -104,6 +105,7 @@ def _job_to_dict(
         "backend_name": job.backend_name,
         "model_name": job.model_name,
         "effective_model": effective_model,
+        "base_cv_id": job.base_cv_id,
         "language": job.language,
         "fit_reason": job.fit_reason,
         "error": job.error,
@@ -144,6 +146,10 @@ class ReviseBody(BaseModel):
 
 class ExportBody(BaseModel):
     format: str  # "pdf" | "docx"
+
+
+class BaseCvBody(BaseModel):
+    deck_id: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +561,51 @@ async def ignore_fit(request: Request, job_id: str):
     request.app.state.orchestrator.kick()
 
     return job_dict
+
+
+@router.put("/api/jobs/{job_id}/base-cv")
+async def set_job_base_cv(request: Request, job_id: str, body: BaseCvBody):
+    """Assign or clear the job's base-CV deck (pre-launch only).
+
+    404 unknown job. 409 unless `job.state == queued` -- assigning after launch would
+    silently not take effect for stages already replayed (CLAUDE.md's `queued` is the
+    hand-off's "pending: fresh ingest, parked until LAUNCH"). 422 when `deck_id` is not
+    `None` and either no such deck exists in the index or that deck has `has_cv=False`
+    (an empty, never-saved slot must not be assignable -- otherwise
+    `cv_decks.resolve_path` finds no file at stage time and silently falls back to the
+    default deck, i.e. the user picks deck B and the model gets deck A, with only a log
+    line to show it). Emits nothing on the event bus -- the frontend patches its own
+    store optimistically, same as other job mutations.
+    """
+    sf = _session_factory(request)
+    settings = request.app.state.settings
+
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.queued:
+            raise HTTPException(
+                status_code=409,
+                detail="base CV can only be assigned before launch",
+            )
+
+        if body.deck_id is not None:
+            index = await cv_decks.load_index(settings)
+            meta = next((m for m in index.decks if m.id == body.deck_id), None)
+            if meta is None or not meta.has_cv:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"deck {body.deck_id!r} is not assignable (unknown, or has no saved CV yet)",
+                )
+
+        await repo.set_job_base_cv(session, job, body.deck_id)
+
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        return _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
 
 @router.post("/api/jobs/{job_id}/launch")

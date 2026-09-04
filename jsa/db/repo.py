@@ -665,3 +665,40 @@ async def answer_follow_up(
     await session.commit()
     await session.refresh(fu)
     return fu
+
+
+async def set_job_base_cv(session: AsyncSession, job: Job, deck_id: str | None) -> None:
+    """Assign (or clear, with `deck_id=None`) the job's base-CV deck reference.
+
+    A plain field write + commit -- not a `Job.state`/`current_stage` transition, so
+    this does not go through `jsa.pipeline.state_machine.transition` or `checkpoint()`
+    (CLAUDE.md's checkpoint rule covers state-changing writes; `base_cv_id` is an
+    auxiliary field the caller (`PUT /api/jobs/{id}/base-cv`) has already gated to
+    `state == queued` before calling this). Callers must never write raw SQL for this --
+    that rule is why this helper exists instead of an inline UPDATE in the route.
+    """
+    job.base_cv_id = deck_id
+    job.updated_at = datetime.utcnow()
+    session.add(job)
+    await session.commit()
+
+
+async def clear_base_cv_assignments(session: AsyncSession, deck_id: str) -> int:
+    """Clear `base_cv_id` on undispatched jobs that reference `deck_id`. Returns the count.
+
+    Scoped to `state IN (queued, pending)` -- deliberately narrow. A job already past
+    those states (running, awaiting_input, fit_done, cv_review, cv_done, cl_done, review,
+    approved, failed) keeps its `base_cv_id` untouched as a record of which base CV it
+    was actually built from; only a job that hasn't been dispatched yet has that
+    assignment silently invalidated by the deck's deletion. Called by
+    `DELETE /api/cv-decks/{id}` (owned by a different phase/agent -- not wired here, see
+    the Phase 3 task notes). Uses a bulk ORM `update()`, never raw text SQL.
+    """
+    stmt = (
+        update(Job)
+        .where(Job.base_cv_id == deck_id, Job.state.in_([JobState.queued, JobState.pending]))
+        .values(base_cv_id=None)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    return result.rowcount
