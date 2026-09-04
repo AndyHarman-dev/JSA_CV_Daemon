@@ -8,7 +8,7 @@ import logging
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -112,6 +112,14 @@ def _wrap_factory(backend_factory: Callable) -> Callable[[str, str | None], Agen
     return lambda name, model=None: backend_factory(name)
 
 
+# A job's ``base_cv_id`` (``None`` for an unassigned job, and for the dispatch gate's
+# "is any deck usable" question) -> the base-CV file to read, or ``None`` when no deck on
+# disk can serve it. Injected rather than imported: this module cannot import ``Settings``
+# (server.py imports the orchestrator, so the reverse is circular) -- same reason
+# ``model_resolver`` is a callable. ``server.make_base_cv_resolver`` is the production one.
+BaseCvResolver = Callable[[str | None], Awaitable[Path | None]]
+
+
 class Orchestrator:
     """Dispatcher loop that manages concurrent pipeline stages.
 
@@ -144,6 +152,7 @@ class Orchestrator:
         fit_backend_factory: Callable | None = None,
         output_dir: Path | None = None,
         cv_structure_path: Path | None = None,
+        base_cv_resolver: BaseCvResolver | None = None,
         preferences_path: Path | None = None,
         max_parallel_per_backend: int = 0,
         dispatch_stagger_seconds: float = 0.0,
@@ -170,7 +179,20 @@ class Orchestrator:
         )
         self._backends = backends if backends is not None else ["claude-cli"]
         self._output_dir = output_dir
-        self._cv_structure_path = cv_structure_path
+        # One internal code path for base-CV resolution. A caller that passes only the
+        # legacy `cv_structure_path` (every existing test, and any pre-decks caller) is
+        # wrapped into a resolver that ignores the deck id and always returns that one
+        # path -- byte-for-byte today's behaviour, so `cv_structure_path=` needs no
+        # branch of its own in the gate or at the dispatch site. Passing neither leaves
+        # the resolver `None`, which keeps the gate inert exactly as before.
+        if base_cv_resolver is None and cv_structure_path is not None:
+
+            async def base_cv_resolver(  # noqa: ARG001
+                _deck_id: str | None, _path: Path = cv_structure_path
+            ) -> Path | None:
+                return _path
+
+        self._base_cv_resolver = base_cv_resolver
         self._preferences_path = preferences_path
         # Model-first fallback ladder (Phase 4 of the model-fallback-ladder plan). Both
         # default to None -> ladder disabled, which is what every existing test/caller
@@ -279,14 +301,18 @@ class Orchestrator:
             # until some unrelated event kicks the loop again.
             self.wakeup.clear()
 
-            # Gate: cv_structure is the single source of truth for CV content. Inert
-            # when _cv_structure_path is None (tests / legacy callers) — production
-            # always passes it (see server.py). Checks loadability, not just existence,
-            # so a present-but-corrupt file (bad hand-edit, or a save that raced a crash)
-            # blocks dispatch the same as a missing one — jobs stay pending, never failed.
-            # The editor's PUT calls kick() on save so this unblocks without a restart.
-            if self._cv_structure_path is not None and (
-                await stages._read_base_structure(self._cv_structure_path)
+            # Gate: a base CV is the single source of truth for CV content. Asks the
+            # resolver for the *default* deck (deck_id=None), i.e. "is any deck usable" —
+            # a per-job assignment can only narrow that, never widen it, so a job whose
+            # own deck is missing still falls back through resolve_path at dispatch.
+            # Inert when _base_cv_resolver is None (tests passing neither a path nor a
+            # resolver) — production always passes one (see server.py). Checks
+            # loadability, not just existence, so a present-but-corrupt file (bad
+            # hand-edit, or a save that raced a crash) blocks dispatch the same as a
+            # missing one — jobs stay pending, never failed. The editor's PUT calls
+            # kick() on save so this unblocks without a restart.
+            if self._base_cv_resolver is not None and (
+                await stages._read_base_structure(await self._base_cv_resolver(None))
             ) is None:
                 if not cv_gate_blocked_announced:
                     cv_gate_blocked_announced = True
@@ -470,7 +496,11 @@ class Orchestrator:
                     job, backend, stage, session,
                     fit_backend=fit_backend,
                     output_dir=self._output_dir,
-                    cv_structure_path=self._cv_structure_path,
+                    cv_structure_path=(
+                        await self._base_cv_resolver(job.base_cv_id)
+                        if self._base_cv_resolver is not None
+                        else None
+                    ),
                     preferences_path=self._preferences_path,
                 )
 

@@ -24,7 +24,7 @@ from jsa.db.repo import recovery_sweep, upsert_job
 from jsa.ingest.csv_loader import load_csv
 from jsa.pipeline.infer_structure import InferError, run_infer
 from jsa.server import create_app, make_backend_factory
-from jsa.store import cv_structure
+from jsa.store import cv_decks
 
 # Dump a per-thread Python traceback to stderr on native crashes (e.g. a
 # SIGSEGV inside a C extension like WeasyPrint's fontconfig/pango stack)
@@ -92,8 +92,8 @@ def main(
         None,
         "--cv",
         help=(
-            "CV file (.pdf or .docx) — used once to seed the CV structure "
-            "(~/.jsa/cv_structure.json) if none exists yet; ignored afterwards. "
+            "CV file (.pdf or .docx) — used once to seed your first base CV "
+            "(~/.jsa/cv_decks/) if none exists yet; ignored afterwards. "
             "The CV Structure Editor is the source of truth from then on."
         ),
         exists=True,
@@ -217,23 +217,29 @@ def main(
 
 
 async def _bootstrap_cv_structure(settings: Settings, cv_path: Optional[Path]) -> None:
-    """Seed ``cv_structure.json`` from ``--cv`` exactly once, if it doesn't exist yet.
+    """Seed a first base-CV deck from ``--cv`` exactly once, if none exists yet.
 
     The CV Structure Editor is the single source of truth for CV content from then on:
-    - structure already exists + ``--cv`` given → note that ``--cv`` is ignored.
-    - structure missing + ``--cv`` given        → infer + save it (one LLM call).
-    - structure missing + no ``--cv``           → proceed; jobs stay pending until the
-      user sets up their CV in the editor (see Orchestrator.run()'s gate).
+    - a usable base CV already exists + ``--cv`` given → note that ``--cv`` is ignored.
+    - none + ``--cv`` given                           → infer + save it (one LLM call).
+    - none + no ``--cv``                              → proceed; jobs stay pending until
+      the user sets up their CV in the editor (see Orchestrator.run()'s gate).
+
+    "Already exists" is asked of ``cv_decks.resolve_path``, not of the legacy
+    ``cv_structure.json``: on a pre-decks install that read migrates the legacy file into
+    a deck and answers yes, so an existing user is never re-seeded; on a fresh install it
+    is ``None`` and the seed writes into a brand-new deck. The legacy file is never
+    written here again -- a second source of truth is what decks removed.
 
     Factored out of ``_preflight`` so it can be exercised directly with a
     ``FakeAgentBackend`` in tests.
     """
-    structure_exists = await asyncio.to_thread(settings.cv_structure_path.exists)
+    existing = await cv_decks.resolve_path(settings, None)
 
-    if structure_exists:
+    if existing is not None:
         if cv_path is not None:
             typer.echo(
-                f"Note: CV structure already exists at {settings.cv_structure_path}; "
+                f"Note: a base CV already exists at {existing}; "
                 "--cv is ignored. Edit your CV in the app's Structure Editor."
             )
         return
@@ -268,7 +274,8 @@ async def _bootstrap_cv_structure(settings: Settings, cv_path: Optional[Path]) -
             err=True,
         )
         raise typer.Exit(code=1)
-    await cv_structure.save(settings, cv)
+    deck = await cv_decks.create_deck(settings)
+    await cv_decks.save_deck(settings, deck.id, cv)
 
 
 async def _preflight(settings: Settings, csv_path: Path, cv_path: Optional[Path]) -> None:

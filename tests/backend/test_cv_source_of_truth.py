@@ -31,7 +31,7 @@ from jsa.pipeline.infer_structure import InferError
 from jsa.pipeline.orchestrator import Orchestrator
 from jsa.schema import CVDocument
 from jsa.server import create_app
-from jsa.store import cv_structure
+from jsa.store import cv_decks, cv_structure
 from tests.backend.fakes.fake_backend import FakeAgentBackend
 
 _VALID_CV = {
@@ -262,10 +262,25 @@ class TestBootstrapCvStructure:
 
         await _bootstrap_cv_structure(settings, cv_path)
 
-        assert settings.cv_structure_path.exists()
-        saved = await cv_structure.load(settings)
+        # Seeds a *deck*, not the legacy single file. Rewritten deliberately when decks
+        # landed: the assertion below used to be `settings.cv_structure_path.exists()`.
+        # Do not "fix" a future failure here by having the bootstrap also write the legacy
+        # file — that resurrects the second source of truth decks exist to remove, and the
+        # legacy path is now only ever *read* (once, by migrate_legacy).
+        index = await cv_decks.load_index(settings)
+        assert len(index.decks) == 1
+        deck_id = index.decks[0].id
+        assert index.default_id == deck_id
+        assert cv_decks.deck_path(settings, deck_id).exists()
+
+        saved = await cv_decks.load_deck(settings, deck_id)
         assert saved is not None
         assert saved.contact.name == "Jane Doe"
+        assert index.decks[0].has_cv is True
+
+        assert not settings.cv_structure_path.exists(), (
+            "the bootstrap must not dual-write the legacy cv_structure.json"
+        )
 
     async def test_ignores_cv_when_structure_already_exists(self, tmp_path, monkeypatch, capsys):
         settings = Settings(db_path=tmp_path / "test.sqlite")
