@@ -54,6 +54,15 @@ async def load(settings: Settings) -> CVDocument | None:
     return await read(structure_path(settings))
 
 
+async def write(path: Path, cv: CVDocument) -> None:
+    """Path-based writer — persist ``cv`` at ``path``.
+
+    Used by the ``cv_decks`` store (which holds a path per deck, not a single ``Settings``-
+    derived location) so both stores share one on-disk write implementation.
+    """
+    await asyncio.to_thread(_save_sync, path, cv)
+
+
 async def save(settings: Settings, cv: CVDocument) -> None:
     """Validate-then-write the base CV. Callers pass an already-validated ``CVDocument``."""
-    await asyncio.to_thread(_save_sync, structure_path(settings), cv)
+    await write(structure_path(settings), cv)
