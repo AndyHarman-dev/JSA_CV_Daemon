@@ -195,3 +195,39 @@ describe("error handling", () => {
     await expect(api.getJob("xyz")).rejects.toThrow("job not found");
   });
 });
+
+describe("deleteCvDeck — 204 No Content", () => {
+  // Regression: apiFetch used to call response.json() unconditionally. DELETE
+  // /api/cv-decks/{id} answers 204 with an empty body, so a *successful* delete rejected
+  // with a SyntaxError and every step after the await in editorStore.deleteDeck was
+  // skipped — the rail kept a row for the deleted deck, activeDeckId was never re-homed,
+  // and the user saw "Could not delete this base CV" for an operation that had worked.
+  function empty204(): Response {
+    return {
+      ok: true,
+      status: 204,
+      json: async () => {
+        throw new SyntaxError("Unexpected end of JSON input");
+      },
+      text: async () => "",
+    } as unknown as Response;
+  }
+
+  it("resolves instead of throwing when the server returns 204 with no body", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(empty204());
+
+    await expect(api.deleteCvDeck("a".repeat(32))).resolves.toBeUndefined();
+    expect(global.fetch).toHaveBeenCalledWith(
+      `/api/cv-decks/${"a".repeat(32)}`,
+      { method: "DELETE" }
+    );
+  });
+
+  it("still surfaces a real failure as a thrown HTTP error", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      makeResponse("nope", { ok: false, status: 400 })
+    );
+
+    await expect(api.deleteCvDeck("bad")).rejects.toThrow(/HTTP 400/);
+  });
+});

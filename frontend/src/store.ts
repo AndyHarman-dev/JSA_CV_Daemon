@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import type { JobDTO, TranscriptTurn, WSEvent } from "./types";
+import type { CvDeckDTO, JobDTO, TranscriptTurn, WSEvent } from "./types";
 import { api } from "./api";
-import { useEditorStore } from "./editorStore";
+import { useEditorStore, detailOf } from "./editorStore";
 
 interface BackendSwitchEvent {
   job_id: string;
@@ -17,9 +17,13 @@ export interface ToastItem {
   id: string;
   jobId: string;
   jobLabel: string; // "{company} — {role}", or jobId if the job isn't in the local map
-  kind: "backend" | "model";
+  kind: "backend" | "model" | "error";
   from: string;
   to: string;
+  // Set only for kind === "error" — a server-detail-or-fallback string (see
+  // editorStore.detailOf), shown verbatim rather than through a translated template since
+  // it's the server's own text, not app copy (same convention as job.error/fit_reason).
+  message?: string;
 }
 
 interface Store {
@@ -70,6 +74,13 @@ interface Store {
     string,
     { stage: string; content: string; reasoning: string; tools: { name: string; detail: string; ok: boolean; at: number }[] }
   >;
+  // Phase 6 (CV Decks) — the job-row base-CV picker. `cvDecks`/`cvDecksDefaultId` mirror
+  // GET /api/cv-decks (every deck, empty slots included; filtering has_cv is the picker's
+  // job, not the store's). `cvPickerJobId` null means the popover is closed.
+  cvDecks: CvDeckDTO[];
+  cvDecksDefaultId: string | null;
+  cvPickerJobId: string | null;
+  cvPickerPos: { x: number; y: number };
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setViewedStage(stage: Store["viewedStage"]): void;
@@ -89,6 +100,13 @@ interface Store {
   // --- Manual job launch (jobs are parked as `queued` until explicitly launched) ---
   launchJob(id: string): Promise<void>;
   launchAll(): Promise<void>;
+  // --- Base-CV picker (Phase 6) ---
+  hydrateCvDecks(): Promise<void>;
+  // `e` is duck-typed (not React.MouseEvent) so store.ts doesn't need a React import just
+  // for this type. No-op unless `job.state === "queued"` — the picker is pre-launch only.
+  openCvPicker(job: JobDTO, e: { clientX: number; clientY: number }): void;
+  closeCvPicker(): void;
+  assignBaseCv(jobId: string, deckId: string | null): Promise<void>;
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -108,6 +126,10 @@ export const useStore = create<Store>((set, get) => ({
   viewedStage: null,
   transcripts: {},
   streamBuffers: {},
+  cvDecks: [],
+  cvDecksDefaultId: null,
+  cvPickerJobId: null,
+  cvPickerPos: { x: 0, y: 0 },
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -129,6 +151,14 @@ export const useStore = create<Store>((set, get) => ({
 
   setEditorOpen(open: boolean) {
     set({ editorOpen: open });
+    // The editor is the only place decks are created/renamed/deleted — reload the picker's
+    // list every time it closes so a newly-created deck (or a rename/delete) is reflected
+    // without a page reload. Not on open: nothing about the picker's data changes then.
+    if (!open) {
+      get().hydrateCvDecks().catch((err: unknown) => {
+        console.error("hydrateCvDecks failed:", err);
+      });
+    }
   },
 
   setCvStructureExists(exists: boolean) {
@@ -399,6 +429,56 @@ export const useStore = create<Store>((set, get) => ({
       await get().refetchAll();
     } catch (err) {
       console.error("launchAll failed:", err);
+    }
+  },
+
+  async hydrateCvDecks() {
+    try {
+      const { decks, default_id } = await api.listCvDecks();
+      set({ cvDecks: decks, cvDecksDefaultId: default_id });
+    } catch (err) {
+      console.error("hydrateCvDecks failed:", err);
+    }
+  },
+
+  openCvPicker(job: JobDTO, e: { clientX: number; clientY: number }) {
+    if (job.state !== "queued") return;
+    // Same clamp-from-click-point math as ChatBox's MentionDropdown, sized for this
+    // popover's fixed 280x360 footprint.
+    const w = 280;
+    const maxH = 360;
+    const x = Math.min(Math.max(8, e.clientX), window.innerWidth - w - 8);
+    const y = Math.min(Math.max(8, e.clientY + 14), window.innerHeight - maxH - 8);
+    set({ cvPickerJobId: job.id, cvPickerPos: { x, y } });
+  },
+
+  closeCvPicker() {
+    set({ cvPickerJobId: null });
+  },
+
+  async assignBaseCv(jobId: string, deckId: string | null) {
+    try {
+      const job = await api.putJobBaseCv(jobId, deckId);
+      get().upsertJob(job);
+    } catch (err) {
+      console.error("assignBaseCv failed:", err);
+      const store = get();
+      set({
+        toasts: [
+          ...store.toasts,
+          {
+            id: `basecv-${jobId}-${Date.now()}`,
+            jobId,
+            jobLabel: store.jobLabelFor(jobId),
+            kind: "error" as const,
+            from: "",
+            to: "",
+            message: detailOf(err, "Could not assign base CV"),
+          },
+        ].slice(-5),
+      });
+    } finally {
+      get().closeCvPicker();
     }
   },
 }));

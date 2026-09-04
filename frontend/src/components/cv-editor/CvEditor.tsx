@@ -6,7 +6,6 @@
 // — dark chamfered panels, red accent (EDITOR_THEME), cyan "system/live" signals. The
 // Document/Split paper preview is intentionally NOT reskinned (see PaperSheet.tsx).
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { api } from "../../api";
 import { useEditorStore, type EditorView } from "../../editorStore";
 import { useStore } from "../../store";
 import { useT } from "../../i18n/useT";
@@ -18,6 +17,7 @@ import { DocumentView } from "./PaperSheet";
 import { JsonDrawer } from "./JsonDrawer";
 import { LanguagePill } from "./LanguagePill";
 import { SplitView } from "./SplitView";
+import { DeckRail } from "./DeckRail";
 
 const T = EDITOR_THEME;
 
@@ -298,18 +298,12 @@ export function CvEditor() {
     return () => clearInterval(id);
   }, []);
 
-  // Load the saved structure once when the editor opens.
+  // Load the deck index + the active deck's CV once when the editor opens. hydrateDecks
+  // replaces the pre-decks single getCvStructure() fetch and handles its own failures
+  // (falling back to the empty state), so there is nothing to catch here.
   useEffect(() => {
     let alive = true;
-    api
-      .getCvStructure()
-      .then((saved) => {
-        if (!alive) return;
-        if (saved) st.load(saved);
-        else st.reset(); // 404 → empty state
-      })
-      .catch(() => alive && st.reset())
-      .finally(() => alive && setLoading(false));
+    st.hydrateDecks().finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
@@ -524,6 +518,7 @@ export function CvEditor() {
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative", zIndex: 1 }}>
+        <DeckRail />
         <main style={{ flex: 1, minWidth: 0, overflow: "auto", position: "relative" }}>
           {loading ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: T.ink3, fontSize: 13 }}>

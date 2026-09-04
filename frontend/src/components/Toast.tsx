@@ -19,11 +19,16 @@ function ToastCard({ toast }: { toast: ToastItem }) {
     return () => clearTimeout(timer);
   }, [toast.id, dismissToast]);
 
-  const message = t(toast.kind === "backend" ? "toast.backendSwitched" : "toast.modelSwitched", {
-    job: toast.jobLabel,
-    from: toast.from,
-    to: toast.to,
-  });
+  // "error" toasts (e.g. a failed base-CV assignment) carry the server's own detail text
+  // verbatim rather than an interpolated template — same convention as job.error/fit_reason.
+  const message =
+    toast.kind === "error"
+      ? (toast.message ?? "")
+      : t(toast.kind === "backend" ? "toast.backendSwitched" : "toast.modelSwitched", {
+          job: toast.jobLabel,
+          from: toast.from,
+          to: toast.to,
+        });
 
   return (
     <div

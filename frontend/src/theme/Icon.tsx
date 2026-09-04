@@ -7,7 +7,8 @@ export type IconName =
   | "x" | "plus" | "minus" | "check" | "trash" | "refresh" | "send" | "download" | "chevron"
   | "alert" | "mail" | "phone" | "pin" | "bolt" | "server" | "inbox" | "doc" | "work"
   | "link" | "back" | "up" | "down" | "undo" | "redo" | "braces" | "spark" | "eye"
-  | "copy" | "text" | "list" | "tag" | "cap" | "blocks" | "cols" | "globe" | "search" | "play";
+  | "copy" | "text" | "list" | "tag" | "cap" | "blocks" | "cols" | "globe" | "search" | "play"
+  | "pencil" | "star";
 
 interface IconProps {
   name: IconName;
@@ -54,6 +55,8 @@ const PATHS: Record<IconName, string[]> = {
   globe: ["M1.8 8h12.4", "M8 1.8c-2.2 1.8-2.2 10.6 0 12.4", "M8 1.8c2.2 1.8 2.2 10.6 0 12.4"],
   search: ["M11.2 11.2L14 14"],
   play: [],
+  pencil: ["M10.6 2.8a1.6 1.6 0 0 1 2.3 2.3L5.6 12.4l-3.1.8.8-3.1z", "M9.4 4l2.3 2.3"],
+  star: ["M8 2.2l1.8 3.7 4.1.6-3 2.9.7 4.1L8 11.6l-3.6 1.9.7-4.1-3-2.9 4.1-.6z"],
 };
 
 // Icons that mix paths with non-path primitives (rects/circles/lines) — rendered explicitly

@@ -18,6 +18,7 @@ Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vi
 - Revision loop: request edits on generated CV or cover letter; new document version written without re-running the whole pipeline
 - Browser UI with live pipeline progress, PDF document preview, and PDF/DOCX export
 - Standalone CV Structure Editor: infer a structured JSON representation of your base CV and edit it directly — this JSON is what `cv_adjust` tailors per job
+- Multiple base CVs ("decks"): keep one deck per profile (backend, data, management…), switch between them in the editor's deck rail, and assign a specific deck to an individual job before launch — that deck is what `fit_assessment` and `cv_adjust` actually read
 - Multi-language output and UI: one global preference drives the pipeline's output language (CV/cover-letter JSON, clarifying questions, change-log, fit-assessment reasons) *and* the frontend's own chrome, picked from a 20-language catalog
 - Eight AI backends: Claude CLI, Google `agy` CLI, Anthropic REST API, OpenCode Zen, Mistral, OpenRouter, Google Gemini REST API, OpenCode-GO — configurable as an ordered fallback chain, each with a runtime-selectable model (no restart) via the header's backend dropdown
 - All data stored locally in SQLite (`~/.jsa/jsa.sqlite`)
@@ -140,7 +141,8 @@ Backends implement a common `AgentBackend` ABC (`jsa/agents/base.py`) and are tr
 |------|--------|
 | Jobs | `GET /api/jobs`, `GET /api/jobs/{id}`, `POST /api/jobs/{id}/answer`, `POST /api/jobs/{id}/approve`, `POST /api/jobs/{id}/revise`, `POST /api/jobs/{id}/dismiss`, `POST /api/jobs/{id}/ignore-fit`, `POST /api/jobs/{id}/cancel`, `DELETE /api/jobs/{id}`, `POST /api/jobs/{id}/reset`, `GET /api/jobs/{id}/document/{stage}`, `POST /api/jobs/{id}/export` |
 | Files | `GET /api/files/{relpath}` — serves rendered PDF/DOCX with `Content-Disposition: inline` |
-| CV Structure Editor | `GET /api/cv-structure`, `PUT /api/cv-structure`, `POST /api/cv-structure/infer` |
+| CV Structure Editor | `GET /api/cv-structure`, `PUT /api/cv-structure` (both aliases for the default deck), `POST /api/cv-structure/infer` |
+| Base CVs (decks) | `GET /api/cv-decks`, `POST /api/cv-decks`, `GET /api/cv-decks/{id}`, `PUT /api/cv-decks/{id}`, `PATCH /api/cv-decks/{id}` (rename / set default), `POST /api/cv-decks/{id}/duplicate`, `DELETE /api/cv-decks/{id}`, `PUT /api/jobs/{id}/base-cv` (assign a deck to a job; pre-launch only) |
 | Preferences | `GET /api/preferences`, `PUT /api/preferences` — global output/UI language, `{"language": "es"}` |
 | Meta | `GET /api/health`, `GET /api/config` |
 | Realtime | `WS /ws` — pushes `status_changed`, `stage_complete`, `approved`, `log`, and `infer_progress` events to the React store |
@@ -212,7 +214,7 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | Flag | Default | Environment variable | Description |
 |------|---------|----------------------|-------------|
 | `--csv` | required | — | Path to the jobs CSV file |
-| `--cv` | optional | — | Path to a CV (`.pdf` or `.docx`) — used **once**, to seed the CV Structure Editor's `cv_structure.json` if it doesn't exist yet. Ignored (with a printed note) once a structure exists. The editor is the source of truth from then on — see [CV Structure Editor](#cv-structure-editor) |
+| `--cv` | optional | — | Path to a CV (`.pdf` or `.docx`) — used **once**, to seed your **first base CV deck** if none exists yet. Ignored (with a printed note) once any deck has a CV. The editor is the source of truth from then on — see [CV Structure Editor](#cv-structure-editor) |
 | `--out` | `output/` | `JSA_OUTPUT_DIR` | Directory where rendered PDF/DOCX files are written |
 | `--backend` | `claude-cli` | `JSA_BACKEND` | AI backend (single), backward-compat alias for `--backends`: `claude-cli` \| `google-cli` \| `anthropic` \| `opencode-zen` \| `mistral` \| `openrouter` \| `gemini` \| `opencode-go` |
 | `--backends` | `claude-cli` | `JSA_BACKENDS` | Comma-separated ordered backend fallback chain, e.g. `claude-cli,google-cli,mistral` |
@@ -357,9 +359,15 @@ New backends register in `jsa/agents/registry.py` by adding an entry to `_REGIST
 
 ## CV Structure Editor
 
-Separate from the per-job pipeline, JSA maintains one canonical, job-less **base CV** as structured JSON (`CVDocument`, `jsa/schema/cv.py`) — this is the **single source of truth** for CV content: both `fit_assessment` and `cv_adjust` read it, and nothing else feeds them CV text. You edit it at `/api/cv-structure` (`jsa/store/cv_structure.py`, `jsa/api/routes_cv_structure.py`), either by hand-building it or by running inference against an uploaded PDF/DOCX resume. `--cv` on the command line only seeds this structure once, on first run — see [CLI flags](#cli-flags).
+Separate from the per-job pipeline, JSA maintains job-less **base CVs** as structured JSON (`CVDocument`, `jsa/schema/cv.py`) — these are the **single source of truth** for CV content: both `fit_assessment` and `cv_adjust` read one of them, and nothing else feeds them CV text. You edit them at `/api/cv-decks` (`jsa/store/cv_decks.py`, `jsa/api/routes_cv_decks.py`), either by hand-building or by running inference against an uploaded PDF/DOCX resume. `--cv` on the command line only seeds your first deck, on first run — see [CLI flags](#cli-flags).
 
-**Jobs stay pending until a structure exists.** If you start JSA without `--cv` and never open the editor, launched jobs sit in `pending` — the dashboard shows a banner pointing at the editor. Saving a structure (inferred or hand-built) unblocks them immediately, no restart needed.
+**Many base CVs, one per profile.** A hover-out rail on the left of the editor lists every deck; each is independently editable and persists to its own file under `~/.jsa/cv_decks/`. From the rail you can switch, rename, duplicate, delete, star one as the **default**, or start a new one. One deck is always the default — it is what any job that hasn't been given a specific deck will use.
+
+**Per-job assignment.** Before you launch a job, the doc icon on its row opens a picker listing every deck that has a CV saved; the one you choose is exactly what gets injected into that job's `fit_assessment` and `cv_adjust` prompts. Assignment is **pre-launch only** (`PUT /api/jobs/{id}/base-cv` returns `409` afterwards), and the job's deck is re-resolved at every stage — so editing a deck mid-run feeds the newer content into later stages. A deck that a job is still working with **cannot be deleted** — the rail greys out its trash icon and says how many jobs hold it, and the API answers `409`. Approving, dismissing or deleting those jobs releases it. Editing a held deck is always allowed: a job that has already started has its CV baked into its conversation, so edits can't disturb it mid-flight. Deleting an unheld deck clears the assignment on jobs that were never launched.
+
+**Upgrading from a single `cv_structure.json`.** The first time JSA starts after this change, an existing `~/.jsa/cv_structure.json` is **copied** into a deck and becomes your default. The original file is never deleted or rewritten — it stays on disk as an inert backup.
+
+**Jobs stay pending until some deck has a CV.** If you start JSA without `--cv` and never open the editor, launched jobs sit in `pending` — the dashboard shows a banner pointing at the editor. Saving a deck (inferred or hand-built) unblocks them immediately, no restart needed.
 
 Before anything is saved, the editor shows an empty state offering to run inference or start from a blank structure:
 
@@ -377,7 +385,7 @@ Once a structure exists (inferred or hand-built), three synchronized views edit 
 </tr>
 </table>
 
-`PUT /api/cv-structure` validates against the `CVDocument` schema's hard gates (a contact name, at least one renderable section, and a check that the content isn't actually a cover letter) and returns `422` with a concise reason on failure. `POST /api/cv-structure/infer` runs one-shot inference against an uploaded file, broadcasting `infer_progress` events over the WebSocket as each step activates, and returns the result **unsaved** — the editor persists it via `PUT` when you click Done.
+`PUT /api/cv-decks/{id}` (and its single-deck alias `PUT /api/cv-structure`) validates against the `CVDocument` schema's hard gates (a contact name, at least one renderable section, and a check that the content isn't actually a cover letter) and returns `422` with a concise reason on failure. `POST /api/cv-structure/infer` runs one-shot inference against an uploaded file, broadcasting `infer_progress` events over the WebSocket as each step activates, and returns the result **unsaved** — the editor persists it via `PUT` when you click Done.
 
 ---
 
@@ -560,9 +568,9 @@ jsa/                   Python package
   pipeline/              Orchestrator, stage runners (stages.py), state machine, CV structure inference
   render/                PDF (WeasyPrint) and DOCX (python-docx) renderers
   events/                In-process pub/sub bus + WS event schema
-  api/                   FastAPI route handlers (jobs, cv-structure, preferences, meta, websocket)
+  api/                   FastAPI route handlers (jobs, cv-structure, cv-decks, preferences, meta, websocket)
   schema/                Structured CV/cover-letter Pydantic schemas
-  store/                 CV Structure Editor + preferences persistence (canonical base-CV JSON, language)
+  store/                 Base-CV deck store + preferences persistence (base-CV JSON per deck, language)
   i18n/                   Language catalog (languages.py) + translation helper (translate.py)
   dev/                   Dev-only helpers (auto-answer NEED_INPUT gates)
 frontend/               React + Vite + TypeScript UI

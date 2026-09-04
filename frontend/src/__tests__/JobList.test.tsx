@@ -3,6 +3,9 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { useStore } from "../store";
 import { JobList } from "../components/JobList";
 import type { JobDTO } from "../types";
+import { SHELL_THEME } from "../theme/tokens";
+
+const T = SHELL_THEME;
 
 function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   return {
@@ -17,6 +20,7 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     error: null,
     updated_at: "2026-01-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
+    base_cv_id: null,
     ...overrides,
   };
 }
@@ -51,6 +55,8 @@ beforeEach(() => {
     selectedId: undefined,
     wsStatus: "connecting",
     cvStructureExists: null,
+    cvPickerJobId: null,
+    cvPickerPos: { x: 0, y: 0 },
   });
 });
 
@@ -468,5 +474,61 @@ describe("JobList", () => {
 
     fireEvent.click(screen.getByText("Open CV editor"));
     expect(useStore.getState().editorOpen).toBe(true);
+  });
+});
+
+describe("JobList — base-CV trigger (Phase 6)", () => {
+  it("renders the base-CV trigger on a queued row", () => {
+    const job = makeJob({ id: "j1", state: "queued" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.getByTitle("Assign base CV")).toBeInTheDocument();
+  });
+
+  it("does not render the base-CV trigger on non-queued rows", () => {
+    for (const state of ["pending", "running", "review", "approved"] as const) {
+      const job = makeJob({ id: `j-${state}`, state });
+      useStore.setState({ jobs: { [`j-${state}`]: job } });
+
+      const { unmount } = render(<JobList />);
+      expect(screen.queryByTitle("Assign base CV")).toBeNull();
+      expect(screen.queryByTitle("Change base CV")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("shows 'Change base CV' and accent styling once a deck is assigned", () => {
+    const job = makeJob({ id: "j1", state: "queued", base_cv_id: "deck-1" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    const trigger = screen.getByTitle("Change base CV");
+    expect(trigger).toBeInTheDocument();
+    expect(screen.queryByTitle("Assign base CV")).toBeNull();
+    expect(trigger).toHaveStyle({ color: T.a });
+  });
+
+  it("shows no accent styling when unassigned", () => {
+    const job = makeJob({ id: "j1", state: "queued", base_cv_id: null });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.getByTitle("Assign base CV")).toHaveStyle({ color: T.ink3 });
+  });
+
+  it("clicking the trigger opens the picker for that job without selecting the row", () => {
+    const job = makeJob({ id: "j1", state: "queued" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    fireEvent.click(screen.getByTitle("Assign base CV"));
+
+    expect(useStore.getState().cvPickerJobId).toBe("j1");
+    expect(useStore.getState().selectedId).toBeUndefined();
   });
 });

@@ -29,6 +29,7 @@ vi.mock("../api", () => ({
   api: {
     config: vi.fn().mockReturnValue(new Promise(() => {})), // never resolves — avoids act warnings
     getBackendModels: vi.fn().mockReturnValue(new Promise(() => {})), // ditto
+    listCvDecks: vi.fn().mockReturnValue(new Promise(() => {})), // ditto
     getJobs: vi.fn().mockResolvedValue([]),
     getJob: vi.fn().mockResolvedValue(null),
     getDocument: vi.fn().mockResolvedValue({ markdown: "# Doc", version: 1 }),

@@ -8,6 +8,7 @@ import { CvEditor } from "./components/cv-editor/CvEditor";
 import { ScratchBuffer } from "./components/ScratchBuffer";
 import { BootGate } from "./components/BootGate";
 import { Toast } from "./components/Toast";
+import { BaseCvPicker } from "./components/BaseCvPicker";
 import { SHELL_THEME } from "./theme/tokens";
 import { Ambient } from "./theme/Ambient";
 
@@ -16,6 +17,7 @@ const T = SHELL_THEME;
 function App() {
   const refetchAll = useStore((s) => s.refetchAll);
   const hydrateLanguage = useStore((s) => s.hydrateLanguage);
+  const hydrateCvDecks = useStore((s) => s.hydrateCvDecks);
   const selectedId = useStore((s) => s.selectedId);
   const editorOpen = useStore((s) => s.editorOpen);
   const configReady = useStore((s) => s.configReady);
@@ -27,8 +29,11 @@ function App() {
     hydrateLanguage().catch((err: unknown) => {
       console.error("Initial hydrateLanguage failed:", err);
     });
+    hydrateCvDecks().catch((err: unknown) => {
+      console.error("Initial hydrateCvDecks failed:", err);
+    });
     connectWS();
-  }, [refetchAll, hydrateLanguage]);
+  }, [refetchAll, hydrateLanguage, hydrateCvDecks]);
 
   return (
     <div
@@ -46,6 +51,7 @@ function App() {
           {editorOpen && <CvEditor />}
           <ScratchBuffer />
           <Toast />
+          <BaseCvPicker />
           <Ambient T={T} label="JSA_DAEMON" />
           <Header />
           <div className="flex flex-1 overflow-hidden" style={{ position: "relative", zIndex: 1 }}>

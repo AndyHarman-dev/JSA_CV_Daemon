@@ -1,0 +1,29 @@
+COMPANY: Acme
+ROLE: Engineer
+
+CV:
+# Jane Doe
+jane.doe@example.com | +1-555-867-5309 | Berlin, DE
+
+---
+## Summary
+Backend engineer with a decade on distributed systems.
+
+---
+## Experience
+**Senior Engineer** — Acme
+*2019-present*
+- Built a distributed payment pipeline
+- Cut p95 checkout latency by 40%
+
+---
+## Open Source Leadership
+Maintainer of Foo
+
+---
+## Skills
+Python, Go, PostgreSQL
+
+
+JOB DESCRIPTION:
+Job description text
