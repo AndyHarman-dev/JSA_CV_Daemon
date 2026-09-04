@@ -786,10 +786,11 @@ prompt_assembly.py`) builds the system prompt from only the on-disk prompt file,
 the language code, the stage's JSON schema, and (see "Current-date directive" below)
 the calendar day — **no per-job bytes** (JD, company, role, CV structure, research
 brief) ever land in it; those go into the initial user message
-(`_build_initial_user_msg`/`_build_fit_user_msg`). So every job at a given (stage,
-language, structured-mode) dispatched on the same calendar day sends a
-**byte-identical system prefix**, which is what makes prompt caching worth doing
-here: cache the system prompt, not the message tail. `tests/backend/
+(`_build_initial_user_msg`/`_build_fit_user_msg`) — **with exactly one opt-in
+exception, the per-job prompt injection described below.** So every job at a given
+(stage, language, structured-mode) dispatched on the same calendar day **and carrying
+no injection** sends a **byte-identical system prefix**, which is what makes prompt
+caching worth doing here: cache the system prompt, not the message tail. `tests/backend/
 test_prompt_prefix_stability.py` pins this two ways — same-input determinism
 (including across `PYTHONHASHSEED` values, since schema generation must never
 iterate a `set`) and cross-job identity (two jobs with different JD/company/role
@@ -799,6 +800,42 @@ day the tests happen to run on. Do not add a message-tail cache breakpoint — t
 is separated by human answer latency (`awaiting_input` → user answers), so it's
 usually cold, and it would collide with `adapt_history`/`_parse_with_nudge` rewriting
 message content.
+
+**What a per-job injection costs the prefix — narrowed, not abandoned.** Caching here
+is a pure prefix match with **exactly one breakpoint**, at the end of the system block
+(see the per-backend table below), so the cost is much narrower than "injection breaks
+prompt caching":
+
+| Reuse | Effect |
+|---|---|
+| **Intra-job** — a job's turn 1 → its turns 2, 3, 4… | **Unaffected.** The injection is frozen pre-launch (`queued`-only) and never edited, so an injected job's system prompt is byte-stable across its own turns: turn 1 writes an entry, later turns read it. |
+| **Cross-job, uninjected → uninjected** | **Unaffected.** `injection=None` — and an all-blank triple, which `normalized()` collapses **to** `None` — is byte-identical to the pre-feature output, so uninjected jobs keep sharing one entry exactly as before. An injected job running between two uninjected ones does **not** evict it: entries are keyed by prefix, not by a single slot. |
+| **Cross-job, into an injected job** | **Forfeited, deliberately.** An injected job cannot read the shared entry and writes its own instead. |
+
+Only the third row is a real loss: ~4.4k tokens (`cv_adjust`) or ~2.9k
+(`cover_letter`) at full price for turn 1 instead of a 0.1× cached read, plus the
+1.25× write premium on the entry it creates, once per injected job. (`fit_assessment`
+at ~1.4k is already under every provider's minimum cacheable size — see "Known
+non-caching cases" — so it never cached either way.) This is why the blank-normalizes-
+to-`None` rule in `PromptInjection.normalized()` is load-bearing and **must not be
+"simplified" into storing empty strings**: without it, a user who types one space into
+one box silently drops that job out of the shared cache for the rest of its life.
+`tests/backend/test_prompt_prefix_stability.py` still gates the uninjected path with
+its existing cases unedited — that is the proof the invariant was narrowed rather than
+broken.
+
+**Rejected alternative — the two-block system split.** Even a postfix-only injection
+loses the shared read, because the single breakpoint sits at the *end* of the system
+block, so any difference inside it diverges there. Splitting the system into
+`[shared prompt + runtime sections, cache_control]` + `[per-job injection, no
+cache_control]` would recover the shared hit for postfix-only injections. Rejected on
+three counts: it works only on `anthropic`, `openrouter` and `opencode-go`'s `/chat`
+(block-shaped system) — Mistral's mechanism is a top-level `prompt_cache_key` hash and
+Gemini's is implicit whole-`systemInstruction` matching, so neither benefits; a
+**pre**-fix sits at position 0 by definition, so no breakpoint placement can save it;
+and it would force the postfix *after* the structured contract, the position the
+assembly order deliberately reserves for machine-authored sections. Do not re-derive
+this as a "fix".
 
 **Current-date directive.** `assemble_system_prompt`'s `now` kwarg (every real call
 site in `stages.py` passes `now=datetime.utcnow()`) appends a day-granularity
@@ -955,6 +992,66 @@ deliberately out of scope (undocumented caching API, pre-existing backend, keeps
 own independent payload-builder copy per `_openai_compat.py`'s module docstring).
 CLI backends (`claude-cli`, `google-cli`) manage their own caching and are not
 applicable here.
+
+---
+
+## Per-job prompt injection
+
+A job may carry an optional per-job override of the system prompt and the first user
+message, set from the UI's syringe/"vial" panel before launch. The whole feature is
+opt-in and inert when unused: a job with no injection produces byte-identical output
+to the pre-feature pipeline.
+
+**Storage is one nullable JSON column, not three.** `jobs.injection`
+(`jsa/db/models.py`) holds either SQL `NULL` or `{"prefix", "postfix", "first_msg"}`.
+The domain shape is "absent, or all three together" — three separate columns would let
+a half-written triple exist. `jsa/schema/injection.py::PromptInjection.normalized()`
+strips each field and returns **`None` when nothing survives**, and `parse_injection`
+is the only reader. Do not "simplify" blank handling into storing empty strings: an
+all-blank injection must be indistinguishable from no injection, or a stray space
+silently costs that job the shared prompt cache forever (see "Prompt caching" above).
+
+**`queued`-only, enforced server-side.** `PUT /api/jobs/{id}/injection`
+(`jsa/api/routes_jobs.py`) 400s unless `job.state == JobState.queued` — the state that
+renders the LAUNCH control, **not** `pending`. The injection is frozen at launch, so a
+running job's prompt can never change under it mid-flight. The frontend hides the
+trigger off `queued` as well, but that is convenience; the 400 is the actual gate. This
+is also what makes the intra-job caching row above true.
+
+**Assembly order is `prefix + prompt_text + postfix`, and the machine sections keep
+final position.** `assemble_system_prompt` (`jsa/pipeline/prompt_assembly.py`) composes
+`base` first, then every branch — structured contract, sentinel, and the `for_resume`
+early return — builds from `base`, never from the raw `prompt_text`. The structured
+contract and the current-date directive are appended **after** the postfix, deliberately:
+they are machine-authored sections whose precedence rules (schema, sentinel-vs-JSON
+ordering) must not be overridable by user text. Do not move the postfix after them.
+
+**`for_resume=True` returns `base`, not `prompt_text`.** A resumed session must resend
+the same wrapper the fresh session was built with; returning `prompt_text` there would
+silently drop the injection on every resume after the first follow-up answer, which is
+exactly the shape of the bug this line exists to prevent.
+
+**Single resolution, all call sites.** `stages.py::run_stage` calls `parse_injection`
+**once** (one site) and threads the resulting object to all three assembly call sites —
+resume, fresh, and fit. Never add a second `parse_injection()` downstream: two parses
+can disagree if the row changes between them, and the single-resolution property is what
+guarantees one job's turns share a byte-stable prefix.
+
+**Fit-gate carve-out: system yes, `first_msg` no.** `_run_fit_assessment` gets the
+prefix/postfix wrapper like every other stage, but `_build_fit_user_msg` is deliberately
+**not** given `first_msg`. The fit gate is a cheap one-shot FIT/UNFIT pre-check whose
+reply is parsed by first-line verdict matching; letting arbitrary user instructions into
+its user message invites a reply that no longer starts with `FIT`/`UNFIT`, and
+`_parse_fit_verdict` fails **closed** to the `unfit` modal — so a stray instruction there
+would park the user's job as "not a fit" over a formatting accident. Only
+`_build_initial_user_msg` appends `first_msg`, under an `ADDITIONAL INSTRUCTIONS FROM THE
+USER` header.
+
+**Preset ("dose") ids are not unique.** The global preset library is a flat list
+persisted server-side; nothing enforces `id` uniqueness across entries. Any client-side
+delete must therefore key off the **array index**, never the id — `PromptInjector.tsx`
+does, and a regression test seeds two presets sharing one id to pin it. Using the id as a
+React key *and* a delete handle deletes the wrong chip.
 
 ---
 
