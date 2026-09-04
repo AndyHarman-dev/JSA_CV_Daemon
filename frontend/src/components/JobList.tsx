@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useStore } from "../store";
 import { StatusBadge } from "./StatusBadge";
 import { LaunchButton } from "./LaunchButton";
+import { InjectTrigger } from "./PromptInjector";
 import type { JobDTO, JobState } from "../types";
 import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
@@ -111,7 +112,15 @@ function JobRow({
         {job.role}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        {job.state === "queued" ? <LaunchButton jobId={job.id} /> : <StatusBadge state={job.state} />}
+        {job.state === "queued" ? (
+          // Span, not div — this whole row is a <button>, whose content model is phrasing.
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <InjectTrigger job={job} />
+            <LaunchButton jobId={job.id} />
+          </span>
+        ) : (
+          <StatusBadge state={job.state} />
+        )}
         {job.effective_model && (
           <span
             title={`${t("jobList.modelTitle")}: ${job.effective_model}`}

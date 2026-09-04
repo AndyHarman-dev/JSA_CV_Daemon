@@ -8,6 +8,7 @@ import { CvEditor } from "./components/cv-editor/CvEditor";
 import { ScratchBuffer } from "./components/ScratchBuffer";
 import { BootGate } from "./components/BootGate";
 import { Toast } from "./components/Toast";
+import { PromptInjector } from "./components/PromptInjector";
 import { SHELL_THEME } from "./theme/tokens";
 import { Ambient } from "./theme/Ambient";
 
@@ -19,6 +20,7 @@ function App() {
   const selectedId = useStore((s) => s.selectedId);
   const editorOpen = useStore((s) => s.editorOpen);
   const configReady = useStore((s) => s.configReady);
+  const hydrateInjectionPresets = useStore((s) => s.hydrateInjectionPresets);
 
   useEffect(() => {
     refetchAll().catch((err: unknown) => {
@@ -27,8 +29,14 @@ function App() {
     hydrateLanguage().catch((err: unknown) => {
       console.error("Initial hydrateLanguage failed:", err);
     });
+    // Deliberately NOT folded into hydrateLanguage's timed /api/config race — the preset
+    // library is a convenience the boot path must never wait on (see CLAUDE.md's note on
+    // keeping listing fetches off the config round-trip).
+    hydrateInjectionPresets().catch((err: unknown) => {
+      console.error("Initial hydrateInjectionPresets failed:", err);
+    });
     connectWS();
-  }, [refetchAll, hydrateLanguage]);
+  }, [refetchAll, hydrateLanguage, hydrateInjectionPresets]);
 
   return (
     <div
@@ -46,6 +54,7 @@ function App() {
           {editorOpen && <CvEditor />}
           <ScratchBuffer />
           <Toast />
+          <PromptInjector />
           <Ambient T={T} label="JSA_DAEMON" />
           <Header />
           <div className="flex flex-1 overflow-hidden" style={{ position: "relative", zIndex: 1 }}>

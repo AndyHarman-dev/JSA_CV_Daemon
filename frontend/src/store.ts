@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { JobDTO, TranscriptTurn, WSEvent } from "./types";
+import type { InjectionPresetDTO, JobDTO, PromptInjectionDTO, TranscriptTurn, WSEvent } from "./types";
 import { api } from "./api";
 import { useEditorStore } from "./editorStore";
 
@@ -67,6 +67,14 @@ interface Store {
   // Not persisted anywhere — a page reload loses an in-flight stream, same as today's
   // "loading" state until the next transcript fetch lands.
   streamBuffers: Record<string, { stage: string; content: string; reasoning: string }>;
+  // PROMPT_INJECTOR — which job's vial panel is open (null = closed), and where to pin it.
+  // Open state lives here rather than in JobList because the panel is rendered as an
+  // App.tsx sibling: the job row sits inside an `overflow-y: auto` aside, where a
+  // position:fixed child would be clipped by the scroll container.
+  injectorJobId: string | null;
+  injectorPos: { x: number; y: number };
+  // Global "dose" library (GET/PUT /api/injection-presets). Hydrated once on boot.
+  injectionPresets: InjectionPresetDTO[];
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setViewedStage(stage: Store["viewedStage"]): void;
@@ -86,6 +94,21 @@ interface Store {
   // --- Manual job launch (jobs are parked as `queued` until explicitly launched) ---
   launchJob(id: string): Promise<void>;
   launchAll(): Promise<void>;
+  // --- Per-job prompt injection (pre-launch only; the API 400s off `queued`) ---
+  openInjector(jobId: string, x: number, y: number): void;
+  closeInjector(): void;
+  saveInjection(jobId: string, draft: PromptInjectionDTO): Promise<void>;
+  hydrateInjectionPresets(): Promise<void>;
+  saveInjectionPresets(presets: InjectionPresetDTO[]): Promise<void>;
+}
+
+// Panel geometry, needed here (not in the component) because the clamp below runs at open
+// time against the live viewport. `w` is 400 for a 380px panel — the extra 20px is the
+// design's intentional right margin; keep it.
+const INJECTOR_W = 400;
+const INJECTOR_MARGIN = 12;
+export function injectorPanelHeight(viewportHeight: number): number {
+  return Math.min(560, viewportHeight - 24);
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -105,6 +128,9 @@ export const useStore = create<Store>((set, get) => ({
   viewedStage: null,
   transcripts: {},
   streamBuffers: {},
+  injectorJobId: null,
+  injectorPos: { x: 0, y: 0 },
+  injectionPresets: [],
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -377,6 +403,62 @@ export const useStore = create<Store>((set, get) => ({
       await get().refetchAll();
     } catch (err) {
       console.error("launchAll failed:", err);
+    }
+  },
+
+  openInjector(jobId: string, x: number, y: number) {
+    // Clamp ported verbatim from the design handoff. Reserving a flat margin from the
+    // bottom is NOT enough — the panel's *actual* height has to be subtracted, or a click
+    // near the bottom edge renders the footer buttons off-screen and unreachable.
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const panelH = injectorPanelHeight(vh);
+    set({
+      injectorJobId: jobId,
+      injectorPos: {
+        x: Math.min(Math.max(INJECTOR_MARGIN, x), vw - INJECTOR_W - INJECTOR_MARGIN),
+        y: Math.max(INJECTOR_MARGIN, Math.min(y, vh - panelH - INJECTOR_MARGIN)),
+      },
+    });
+  },
+
+  closeInjector() {
+    set({ injectorJobId: null });
+  },
+
+  async saveInjection(jobId: string, draft: PromptInjectionDTO) {
+    try {
+      // The PUT returns the full, server-normalized job row — no optimistic write; that
+      // response is what lights (or unlights) the trigger. An all-blank draft normalizes
+      // to null server-side, which is how "clear this job's injection" is expressed.
+      const job = await api.putJobInjection(jobId, draft);
+      get().upsertJob(job);
+      get().closeInjector();
+    } catch (err) {
+      // Leave the panel open with the draft intact so the edit isn't silently lost.
+      console.error("saveInjection failed:", err);
+    }
+  },
+
+  async hydrateInjectionPresets() {
+    try {
+      const { presets } = await api.getInjectionPresets();
+      set({ injectionPresets: presets });
+    } catch (err) {
+      // Presets are a convenience — a failed load must never block the boot path.
+      console.error("hydrateInjectionPresets failed:", err);
+    }
+  },
+
+  async saveInjectionPresets(presets: InjectionPresetDTO[]) {
+    const previous = get().injectionPresets;
+    set({ injectionPresets: presets });
+    try {
+      // Whole-list replace: add, delete and reorder are all just a new array.
+      await api.putInjectionPresets(presets);
+    } catch (err) {
+      console.error("saveInjectionPresets failed, reverting:", err);
+      set({ injectionPresets: previous });
     }
   },
 }));
