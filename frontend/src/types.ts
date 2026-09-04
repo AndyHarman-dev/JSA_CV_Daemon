@@ -176,8 +176,14 @@ export interface TranscriptTurn {
   suggested_replies: string[] | null;
   reasoning: string | null;
   // Persisted tool-call marks for this turn, same shape as the live `agent_tool` WS
-  // event once accumulated (see store.ts's streamBuffers). Optional/nullable because
-  // the backend does not populate this yet — every existing turn omits it, and the
-  // REASONING card degrades gracefully (no tool rows) when it's absent.
+  // event once accumulated (see store.ts's streamBuffers). Populated by
+  // jsa/api/transcript.py, which folds a revision turn's role="tool" Message rows into
+  // the FOLLOWING assistant turn (always a `plumbing` turn — its text is the raw JSON
+  // envelope). Null on every other turn, and the REASONING card degrades gracefully
+  // (no tool rows) when it's absent.
+  //
+  // `at` is the mark's INDEX within its turn here, not a reasoning-buffer offset:
+  // tool mode never streams, so a settled tool turn has no buffer to anchor against
+  // and mergeToolSteps' trailing-append preserves exactly the persisted call order.
   tools?: { name: string; detail: string; ok: boolean; at: number }[] | null;
 }

@@ -396,6 +396,80 @@ describe("AgentThread", () => {
     expect(screen.getByText('"Acme Corp engineering culture"')).toBeInTheDocument();
   });
 
+  it("shows a plumbing turn's persisted tool rows even with internals hidden", async () => {
+    // This is the shape the backend actually produces: jsa/api/transcript.py folds
+    // role="tool" Message rows into the FOLLOWING assistant turn, and that turn is a
+    // `plumbing` turn (its text is the raw JSON envelope). Plumbing is hidden behind the
+    // "show internals" toggle, so the card is hoisted OUT of that gate — otherwise a
+    // revision's tool activity would vanish on reload even though it was visible live.
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        seq: 1,
+        kind: "plumbing",
+        role: "assistant",
+        stage: "revising_cv",
+        text: '{"kind":"final","payload":{}}',
+        created_at: "2026-09-04T10:00:00Z",
+        follow_up_id: null,
+        suggested_replies: null,
+        reasoning: null,
+        tools: [
+          { name: "get_cv", detail: "get_cv", ok: true, at: 0 },
+          { name: "replace_summary", detail: "replace_summary", ok: true, at: 1 },
+          { name: "finalize", detail: "finalize", ok: true, at: 2 },
+        ],
+      },
+    ]);
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("REASONING")).toBeInTheDocument();
+    });
+
+    // The raw plumbing text stays gated — only the card was hoisted.
+    expect(screen.queryByText('{"kind":"final","payload":{}}')).not.toBeInTheDocument();
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: /REASONING/ }));
+
+    // All three rows, in the persisted call order.
+    const rows = screen.getAllByTestId("reasoning-tool-step");
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining("get_cv"),
+      expect.stringContaining("replace_summary"),
+      expect.stringContaining("finalize"),
+    ]);
+  });
+
+  it("renders no card for a plumbing turn with no tool rows", async () => {
+    // Every pre-existing plumbing turn carries tools: null and must keep behaving
+    // exactly as before — gated, no card.
+    (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        seq: 1,
+        kind: "plumbing",
+        role: "assistant",
+        stage: "cv_adjust",
+        text: "machine plumbing text",
+        created_at: "2026-09-04T10:00:00Z",
+        follow_up_id: null,
+        suggested_replies: null,
+        reasoning: null,
+        tools: null,
+      },
+    ]);
+
+    render(<AgentThread jobId="job1" mode="none" />);
+
+    await waitFor(() => {
+      expect(api.getTranscript).toHaveBeenCalled();
+    });
+    expect(screen.queryByText("REASONING")).not.toBeInTheDocument();
+    expect(screen.queryByText("machine plumbing text")).not.toBeInTheDocument();
+  });
+
   it("hides the REASONING card once content has started arriving with no reasoning captured", async () => {
     (api.getTranscript as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     useStore.setState({

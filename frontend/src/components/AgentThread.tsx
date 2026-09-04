@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useStore } from "../store";
 import type { TranscriptTurn } from "../types";
@@ -135,8 +135,10 @@ function TurnBubble({ turn }: { turn: TranscriptTurn }) {
   const reasoning = !isUser && turn.reasoning ? turn.reasoning.trim() : "";
   // Persisted tool rows (see types.ts's TranscriptTurn.tools) — same shape as the live
   // streamBuffers entry, so this turn's settled card renders identically to how it
-  // looked while live. Nullable/absent today (the backend doesn't persist these yet);
-  // defaults to no tool rows rather than erroring.
+  // looked while live. In practice the backend attaches these to `plumbing` turns, which
+  // render through the hoisted card in AgentThread's map, not through TurnBubble; this
+  // stays wired so a question turn (ask_user's park) also shows them. Nullable — defaults
+  // to no tool rows rather than erroring.
   const tools = !isUser && turn.tools ? turn.tools : [];
   return (
     <div
@@ -463,7 +465,31 @@ export function AgentThread({ jobId, mode, fixedTarget }: Props) {
           !error &&
           turns.map((turn) => {
             if (turn.kind === "plumbing") {
-              return showInternals ? <PlumbingLine key={turn.seq} turn={turn} /> : null;
+              // A plumbing turn carrying persisted tool rows renders its REASONING card
+              // ALWAYS, outside the showInternals gate — that card is the settled twin of
+              // the LiveBubble card the same turn showed while it was streaming, and
+              // hiding it behind "show internals" would mean tool activity vanished on
+              // reload (the revision-tool-use plan's :500, "live and settled look
+              // identical"). The raw machine text stays gated, as it always was.
+              //
+              // Asymmetry worth knowing about: `turn.reasoning` is only ever attached to
+              // plumbing turns (jsa/api/transcript.py), so this branch is the ONLY place
+              // a settled turn's reasoning becomes visible — a non-tool turn's reasoning
+              // is still not rendered anywhere. That is a pre-existing gap in the
+              // reasoning-step-chunking work, deliberately not widened here.
+              const toolMarks = turn.role !== "user" && turn.tools ? turn.tools : [];
+              return (
+                <Fragment key={turn.seq}>
+                  {toolMarks.length > 0 && (
+                    <ReasoningCard
+                      reasoning={turn.reasoning ? turn.reasoning.trim() : ""}
+                      running={false}
+                      tools={toolMarks}
+                    />
+                  )}
+                  {showInternals && <PlumbingLine turn={turn} />}
+                </Fragment>
+              );
             }
             if (turn.kind === "verdict" || turn.kind === "delivery") {
               return <NoticeLine key={turn.seq} turn={turn} />;

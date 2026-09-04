@@ -850,9 +850,17 @@ async def run_stage(
             # one per attempted call (including not_executed/budget_exhausted entries)
             # — jsa/pipeline/tool_loop.py's own docstring names this as this phase's
             # job. `_load_history`'s role.in_(["user", "assistant"]) filter already
-            # excludes "tool" rows from every future replay with zero changes there;
-            # jsa/api/transcript.py's skip list only skips "system", so these still
-            # render in the transcript. Do NOT widen either.
+            # excludes "tool" rows from every future replay with zero changes there —
+            # do NOT widen that one.
+            #
+            # jsa/api/transcript.py does NOT render these as turns of their own: it
+            # folds them into the FOLLOWING assistant turn's `tools` field
+            # (`_tool_mark`), which is what makes a settled REASONING card show the
+            # same rows the live one did. That fold relies on this list's ORDER —
+            # [user instruction, *tool rows, assistant reply], written as one atomic
+            # repo.checkpoint — so a tool row always precedes the assistant row it
+            # belongs to and can never dangle past the end of the transcript. Keep
+            # the assistant row last here.
             tool_rows = [
                 {"role": "tool", "content": json.dumps(call, sort_keys=True)}
                 for call in tool_result.tool_calls
