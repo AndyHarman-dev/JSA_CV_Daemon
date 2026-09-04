@@ -282,6 +282,54 @@ class TestBootstrapCvStructure:
             "the bootstrap must not dual-write the legacy cv_structure.json"
         )
 
+    async def test_seeds_into_an_existing_empty_default_deck(self, tmp_path, monkeypatch):
+        """A deck slot created in the editor but never saved leaves `resolve_path` None, so
+        the bootstrap still seeds — but it must seed into that *default* slot rather than
+        minting a second deck beside it. Otherwise `GET /api/cv-structure` (which reads the
+        default deck) 404s straight after a successful `--cv` seed and the editor shows its
+        empty state with the CV nowhere in sight."""
+        settings = Settings(db_path=tmp_path / "test.sqlite")
+        slot = await cv_decks.create_deck(settings, name="my slot")
+        cv_path = tmp_path / "resume.pdf"
+        cv_path.write_bytes(b"%PDF-1.4")
+
+        monkeypatch.setattr(
+            "jsa.cli.make_backend_factory",
+            lambda s: (lambda name: FakeAgentBackend([_final(json.dumps(_VALID_CV))])),
+        )
+        monkeypatch.setattr("jsa.pipeline.infer_structure.load_cv", lambda path: "raw cv text")
+
+        await _bootstrap_cv_structure(settings, cv_path)
+
+        index = await cv_decks.load_index(settings)
+        assert [m.id for m in index.decks] == [slot.id], "a second deck was minted"
+        assert index.default_id == slot.id
+        assert index.decks[0].has_cv is True
+        assert index.decks[0].name == "my slot", "the user's own deck name was clobbered"
+        seeded = await cv_decks.load_deck(settings, slot.id)
+        assert seeded is not None and seeded.contact.name == "Jane Doe"
+
+    async def test_corrupt_deck_index_exits_cleanly_instead_of_crashing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """`resolve_path` replaced a bare `.exists()` check, so it can now raise. A
+        truncated cv_decks.json must not make `jsa` unbootable with a raw traceback."""
+        settings = Settings(db_path=tmp_path / "test.sqlite")
+        settings.cv_decks_path.parent.mkdir(parents=True, exist_ok=True)
+        settings.cv_decks_path.write_text('{"decks": [{"id": "aaa', encoding="utf-8")
+        cv_path = tmp_path / "resume.pdf"
+        cv_path.write_bytes(b"%PDF-1.4")
+
+        monkeypatch.setattr(
+            "jsa.cli.make_backend_factory",
+            lambda s: (lambda name: FakeAgentBackend([])),
+        )
+
+        with pytest.raises(typer.Exit) as exc:
+            await _bootstrap_cv_structure(settings, cv_path)
+        assert exc.value.exit_code == 1
+        assert "unreadable" in capsys.readouterr().err.lower()
+
     async def test_ignores_cv_when_structure_already_exists(self, tmp_path, monkeypatch, capsys):
         settings = Settings(db_path=tmp_path / "test.sqlite")
         await cv_structure.save(settings, CVDocument.model_validate(_VALID_CV))

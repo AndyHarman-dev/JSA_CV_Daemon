@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from pathlib import Path
@@ -160,8 +161,27 @@ def _load_index_sync(path: Path) -> DeckIndex:
 
 
 def _save_index_sync(path: Path, index: DeckIndex) -> None:
+    """Write the index **atomically** -- temp file in the same directory, then ``os.replace``.
+
+    A plain ``write_text`` truncates first, so a reader running concurrently in another
+    ``asyncio.to_thread`` worker (the orchestrator's dispatch gate, ``GET /api/cv-decks``)
+    can observe a half-written file and blow up in ``json.loads``. The "index" lock below
+    only serializes *writers*; readers never take it, so atomicity is what makes a torn
+    read impossible rather than merely unlikely. ``os.replace`` is atomic only within one
+    filesystem, hence the temp file next to the target rather than in the system tmpdir.
+
+    The temp name is **fixed**, not unique, and that is only safe because two writes can
+    never overlap: every index mutator holds the "index" lock across its whole
+    load-mutate-write, and ``migrate_legacy`` -- the one writer outside that lock -- writes
+    at most once ever, guarded by re-checking the index file's existence inside
+    ``_lock("migrate")``. A seventh mutator added *outside* the "index" lock would break
+    that argument and two writers would interleave into the same temp file, so add one
+    inside the lock or give this a unique name.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(index.model_dump_json(indent=2), encoding="utf-8")
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(index.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 async def read_index(path: Path) -> DeckIndex:
@@ -338,7 +358,11 @@ async def resolve_path(
             wanted = deck_id if deck_id is not None else index.default_id
             if wanted is not None and candidate != wanted:
                 logger.warning(
-                    "cv_decks.resolve_path: requested deck %r has no usable CV yet, "
+                    # "requested" is wrong for the deck_id=None case (nothing was
+                    # requested; `wanted` is the index's own default), so the wording
+                    # covers both. The "falling back to deck" substring is asserted on by
+                    # tests/backend/test_cv_decks_pipeline.py -- keep it.
+                    "cv_decks.resolve_path: deck %r has no usable CV yet, "
                     "falling back to deck %r",
                     wanted,
                     candidate,

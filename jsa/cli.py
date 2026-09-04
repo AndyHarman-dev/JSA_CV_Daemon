@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import faulthandler
+import json
 import logging
 import re
 import shutil
@@ -234,7 +235,23 @@ async def _bootstrap_cv_structure(settings: Settings, cv_path: Optional[Path]) -
     Factored out of ``_preflight`` so it can be exercised directly with a
     ``FakeAgentBackend`` in tests.
     """
-    existing = await cv_decks.resolve_path(settings, None)
+    try:
+        existing = await cv_decks.resolve_path(settings, None)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        # `resolve_path` reads the deck index with a plain `json.loads`, where the check it
+        # replaced (`cv_structure_path.exists()`) could not raise at all. A crash-truncated
+        # or hand-broken cv_decks.json would otherwise make `jsa` unbootable with a raw
+        # traceback. Bailing out is deliberate: every seeding path below goes through
+        # `load_index` too, so "proceed anyway" would only crash a few lines later -- and a
+        # store-level "treat corrupt as empty" would let create_deck overwrite the user's
+        # real deck list.
+        typer.echo(
+            f"Error: your CV deck index at {cv_decks.index_path(settings)} is unreadable "
+            f"({exc}).\nRepair or remove that file and re-run — removing it re-seeds from "
+            f"{settings.cv_structure_path} if that legacy file is still present.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     if existing is not None:
         if cv_path is not None:
@@ -274,8 +291,16 @@ async def _bootstrap_cv_structure(settings: Settings, cv_path: Optional[Path]) -
             err=True,
         )
         raise typer.Exit(code=1)
-    deck = await cv_decks.create_deck(settings)
-    await cv_decks.save_deck(settings, deck.id, cv)
+    # Reuse the existing default deck rather than always minting a new one, mirroring
+    # `routes_cv_structure.put_cv_structure`'s idiom. Safe by construction: `existing` is
+    # None above, which means no deck in `{default_id} u decks` has a file on disk, so a
+    # set `default_id` here is guaranteed empty and nothing can be overwritten. Always
+    # creating instead would leave the seeded CV in a NON-default deck whenever the user
+    # had already made an empty slot in the editor -- `GET /api/cv-structure` reads the
+    # default deck, so the editor would show its empty state right after a successful seed.
+    index = await cv_decks.load_index(settings)
+    deck_id = index.default_id or (await cv_decks.create_deck(settings)).id
+    await cv_decks.save_deck(settings, deck_id, cv)
 
 
 async def _preflight(settings: Settings, csv_path: Path, cv_path: Optional[Path]) -> None:

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import random
 from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.agents import model_catalog, model_costs
@@ -273,6 +275,41 @@ class Orchestrator:
             return True
         return False
 
+    async def _base_cv_for_gate(self) -> tuple[Path | None, bool]:
+        """Resolve the default base CV for the dispatch gate below.
+
+        Returns ``(path, index_unreadable)``. **Gate-only on purpose — do not reuse this at
+        the dispatch site.** The resolver reads the deck index (``cv_decks.json``) with a
+        plain ``json.loads``, so a torn write (the editor's save runs in a ``to_thread``
+        worker while this loop reads) or a crash-truncated / hand-broken index raises
+        ``JSONDecodeError``/``ValidationError`` straight out of ``run()``'s un-wrapped loop
+        body. That kills the dispatch task silently for the whole process lifetime — the
+        server keeps serving HTTP and never picks up another job. The legacy single-file
+        gate could not do this: it went through ``stages._read_base_structure``, which
+        catches exactly these two and is documented to keep jobs ``pending``, never failed.
+
+        Only those two are caught — a permissions/OS error must still surface rather than
+        be silently logged as data corruption (same taxonomy as ``cv_decks.migrate_legacy``).
+
+        The fix deliberately lives here and NOT in ``cv_decks.load_index``: making that
+        return an empty ``DeckIndex()`` on a corrupt read would let the next ``create_deck``
+        write a fresh index straight over the user's real deck list.
+
+        The dispatch site keeps raising: returning ``None`` there would hand ``run_stage``
+        no base CV at all, and the stage would quietly tailor a CV against nothing — worse
+        than the visible ``mark_failed`` its generic handler produces.
+        """
+        assert self._base_cv_resolver is not None
+        try:
+            return await self._base_cv_resolver(None), False
+        except (json.JSONDecodeError, ValidationError) as exc:
+            logger.warning(
+                "base-CV deck index is unreadable (%s: %s) — holding every job pending",
+                type(exc).__name__,
+                exc,
+            )
+            return None, True
+
     async def run(self) -> None:
         """Main dispatch loop.
 
@@ -311,25 +348,26 @@ class Orchestrator:
             # hand-edit, or a save that raced a crash) blocks dispatch the same as a
             # missing one — jobs stay pending, never failed. The editor's PUT calls
             # kick() on save so this unblocks without a restart.
-            if self._base_cv_resolver is not None and (
-                await stages._read_base_structure(await self._base_cv_resolver(None))
-            ) is None:
-                if not cv_gate_blocked_announced:
-                    cv_gate_blocked_announced = True
-                    await bus.publish(
-                        event_to_dict(
-                            LogEvent(
-                                job_id="",
-                                level="info",
-                                text=(
-                                    "No usable CV structure — jobs stay pending until you set "
-                                    "up your CV in the Structure Editor."
-                                ),
-                            )
+            if self._base_cv_resolver is not None:
+                gate_path, index_unreadable = await self._base_cv_for_gate()
+                if await stages._read_base_structure(gate_path) is None:
+                    if not cv_gate_blocked_announced:
+                        cv_gate_blocked_announced = True
+                        # A corrupt index gets its own text: telling a user who *has* set
+                        # up their CV to go set it up is the one message guaranteed not
+                        # to help.
+                        text = (
+                            "Your CV deck index (cv_decks.json) is unreadable — jobs stay "
+                            "pending until it is repaired or removed."
+                            if index_unreadable
+                            else "No usable CV structure — jobs stay pending until you set "
+                            "up your CV in the Structure Editor."
                         )
-                    )
-                await self.wakeup.wait()
-                continue
+                        await bus.publish(
+                            event_to_dict(LogEvent(job_id="", level="info", text=text))
+                        )
+                    await self.wakeup.wait()
+                    continue
             cv_gate_blocked_announced = False
 
             async with self._db_session_factory() as session:

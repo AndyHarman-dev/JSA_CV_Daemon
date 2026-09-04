@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import pathlib
 from typing import Any
 from uuid import uuid4
 
@@ -299,3 +300,154 @@ class TestGateAcrossTheEditorSeam:
             assert after.json()["cv_structure_exists"] is True
             assert after.json()["cv_deck_count"] == 1
             assert await resolver(None) is not None
+
+
+class TestCorruptIndexDoesNotKillTheDispatchLoop:
+    """A torn or corrupt `cv_decks.json` must gate jobs `pending`, exactly like a corrupt
+    legacy `cv_structure.json` always did — never kill `Orchestrator.run()`.
+
+    `run()`'s while-body has no try/except, and the task is spawned with a bare
+    `asyncio.create_task` in server.py, so an exception escaping the gate ends dispatch for
+    the entire process lifetime with nothing but a "Task exception was never retrieved"
+    at GC time. The gate reaches `json.loads` now (via the resolver -> `load_index`), which
+    the pre-decks gate never did — it only went through `stages._read_base_structure`,
+    which catches JSONDecodeError/ValidationError by design.
+    """
+
+    async def test_corrupt_index_keeps_jobs_pending_and_the_loop_alive(
+        self, settings, session_factory
+    ):
+        job = await _insert_job(session_factory)
+        settings.cv_decks_path.parent.mkdir(parents=True, exist_ok=True)
+        # Exactly what a truncated write leaves behind.
+        settings.cv_decks_path.write_text('{"decks": [{"id": "aaa', encoding="utf-8")
+
+        sink: list[str] = []
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: CapturingBackend([_final("FIT")], sink),
+            base_cv_resolver=make_base_cv_resolver(settings),
+        )
+        task = asyncio.create_task(orch.run())
+        try:
+            await asyncio.sleep(0.1)
+            orch.kick()
+            await asyncio.sleep(0.2)
+
+            assert not task.done(), (
+                "the dispatch loop died on a corrupt cv_decks.json: "
+                f"{task.exception() if task.done() else ''}"
+            )
+            async with session_factory() as s:
+                refreshed = await repo.get_job(s, job.id)
+            assert refreshed.state == JobState.pending
+            assert sink == [], "no job may be dispatched while the index is unreadable"
+        finally:
+            orch._stopping = True
+            orch.kick()
+            await asyncio.wait_for(task, timeout=5.0)
+
+    async def test_a_permissions_error_still_surfaces(self, settings, session_factory):
+        """Only JSONDecodeError/ValidationError are swallowed — an OS error must still
+        propagate rather than be silently logged as data corruption (same taxonomy as
+        `cv_decks.migrate_legacy`)."""
+        await _insert_job(session_factory)
+
+        async def _boom(_deck_id):
+            raise PermissionError("cv_decks.json is not readable")
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: FakeAgentBackend([_final("FIT")]),
+            base_cv_resolver=_boom,
+        )
+        with pytest.raises(PermissionError):
+            await orch.run()
+
+
+class TestAtomicIndexWrite:
+    """`_save_index_sync` replaces the file atomically, so a concurrent reader (the gate,
+    `GET /api/cv-decks`) can never observe a truncated index."""
+
+    async def test_a_write_that_dies_midway_leaves_the_old_index_intact(
+        self, settings, monkeypatch
+    ):
+        """The falsifiable half. A write interrupted partway (crash, full disk, SIGKILL)
+        must leave the *previous* index readable, because the partial bytes land on the
+        temp file and `os.replace` never runs.
+
+        Written this way deliberately: the obvious "no temp litter + final file parses"
+        assertion passes just as happily with a plain `write_text`, so it pins nothing.
+        Verified by mutation — reverting `_save_index_sync` to `path.write_text` makes
+        this test fail and that one still pass.
+        """
+        deck = await cv_decks.create_deck(settings, name="a")
+        good = settings.cv_decks_path.read_text(encoding="utf-8")
+
+        real_write_text = pathlib.Path.write_text
+
+        def _die_midway(self, data, *args, **kwargs):
+            if self.name.startswith("cv_decks.json"):
+                real_write_text(self, data[: len(data) // 2], *args, **kwargs)
+                raise OSError(28, "No space left on device")
+            return real_write_text(self, data, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "write_text", _die_midway)
+        with pytest.raises(OSError):
+            await cv_decks.create_deck(settings, name="b")
+        monkeypatch.undo()
+
+        assert settings.cv_decks_path.read_text(encoding="utf-8") == good
+        index = await cv_decks.read_index(cv_decks.index_path(settings))
+        assert [m.id for m in index.decks] == [deck.id]
+
+    async def test_a_successful_write_leaves_no_temp_litter(self, settings):
+        deck = await cv_decks.create_deck(settings, name="a")
+        await cv_decks.save_deck(settings, deck.id, CVDocument.model_validate(_cv("Alice")))
+
+        assert json.loads(settings.cv_decks_path.read_text(encoding="utf-8"))["decks"]
+        siblings = list(settings.cv_decks_path.parent.glob("cv_decks.json*"))
+        assert siblings == [settings.cv_decks_path], f"temp file left behind: {siblings}"
+
+
+class TestConfigSurvivesACorruptIndex:
+    """`/api/config` is on the frontend's boot path and is raced against an 8s timeout, so
+    the same corrupt index the gate and the CLI now degrade on must not 500 it -- that
+    would leave a UI that never loads in front of a job queue that is holding gracefully."""
+
+    async def test_corrupt_index_reports_no_decks_instead_of_500(
+        self, settings, session_factory
+    ):
+        settings.cv_decks_path.parent.mkdir(parents=True, exist_ok=True)
+        settings.cv_decks_path.write_text('{"decks": [', encoding="utf-8")
+
+        app = create_app(settings)
+        app.state.session_factory = session_factory
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/config")
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["cv_structure_exists"] is False
+        assert body["cv_deck_count"] == 0
+        # Same shape as the happy path -- a missing key breaks boot just as hard as a 500.
+        for key in ("backend", "backends", "output_dir", "db_path", "port", "languages",
+                    "select_language"):
+            assert key in body
+
+    async def test_a_permissions_error_still_surfaces(self, settings, session_factory):
+        """Only JSONDecodeError/ValidationError degrade. An OS error must not be reported
+        to the user as \"you have no CV\" (cv_decks.migrate_legacy's taxonomy)."""
+        settings.cv_decks_path.parent.mkdir(parents=True, exist_ok=True)
+        settings.cv_decks_path.write_text('{"decks": [], "default_id": null}', encoding="utf-8")
+        settings.cv_decks_path.chmod(0o000)
+        try:
+            app = create_app(settings)
+            app.state.session_factory = session_factory
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                with pytest.raises(PermissionError):
+                    await client.get("/api/config")
+        finally:
+            settings.cv_decks_path.chmod(0o644)
