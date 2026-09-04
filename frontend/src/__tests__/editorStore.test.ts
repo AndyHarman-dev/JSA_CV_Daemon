@@ -372,6 +372,85 @@ describe("flushAndPersist gates every deck navigation", () => {
   });
 });
 
+describe("deckBusy is claimed before the first await", () => {
+  // Regression: switchDeck/newDeck/duplicateDeck used to set deckBusy only *after*
+  // awaiting flushAndPersist(). A second click landing inside that await is a separate
+  // task, so it sailed past the busy guard: both switches set activeDeckId and raced
+  // their loadDeckInto, and whichever getCvDeck resolved last won the buffer. The buffer
+  // could end up holding deck B's document while activeDeckId named deck C — and the next
+  // save would then write B's content into C.
+  //
+  // A clean (not `unsaved`) buffer is what makes this a real discriminator: flushAndPersist
+  // then returns true without issuing a PUT, so the *only* thing that can turn the second
+  // click away is the busy flag itself, not an incidental save failure.
+  it("refuses a second switchDeck issued before the first has awaited anything", async () => {
+    stubIndex([deck("d1"), deck("d2"), deck("d3")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    expect(useEditorStore.getState().unsaved).toBe(false);
+    vi.mocked(api.getCvDeck).mockResolvedValue(structuredClone(SAMPLE));
+
+    const first = useEditorStore.getState().switchDeck("d2");
+    // The flag must already be up here — this is the assertion the fix is about.
+    expect(useEditorStore.getState().deckBusy).toBe(true);
+    const second = useEditorStore.getState().switchDeck("d3"); // must be refused
+    await Promise.all([first, second]);
+
+    expect(api.saveCvDeck).not.toHaveBeenCalled();
+    expect(api.getCvDeck).toHaveBeenCalledTimes(1);
+    expect(api.getCvDeck).toHaveBeenCalledWith("d2");
+    expect(useEditorStore.getState().activeDeckId).toBe("d2");
+    expect(useEditorStore.getState().deckBusy).toBe(false);
+  });
+
+  it("claims the flag synchronously in newDeck and duplicateDeck too", async () => {
+    stubIndex([deck("d1"), deck("d2")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    vi.mocked(api.createCvDeck).mockResolvedValue({
+      id: "new1", name: null, auto_title: null, has_cv: false, is_default: false,
+    } as CvDeckDTO);
+
+    const p1 = useEditorStore.getState().newDeck();
+    expect(useEditorStore.getState().deckBusy).toBe(true);
+    await p1;
+    expect(useEditorStore.getState().deckBusy).toBe(false);
+
+    vi.mocked(api.duplicateCvDeck).mockResolvedValue({
+      id: "dup1", name: null, auto_title: null, has_cv: true, is_default: false,
+    } as CvDeckDTO);
+    vi.mocked(api.getCvDeck).mockResolvedValue(structuredClone(SAMPLE));
+    const p2 = useEditorStore.getState().duplicateDeck("d2");
+    expect(useEditorStore.getState().deckBusy).toBe(true);
+    await p2;
+    expect(useEditorStore.getState().deckBusy).toBe(false);
+  });
+
+  it("releases deckBusy when the switch is abandoned at the discard prompt", async () => {
+    // The early return now sits inside the try, so the finally must still clear the flag —
+    // otherwise one cancelled switch would wedge the whole rail for the rest of the session.
+    stubIndex([deck("d1"), deck("d2")], "d1");
+    loadSample();
+    useEditorStore.setState({ activeDeckId: "d1" });
+    useEditorStore.getState().updateContact({ name: "" });
+    vi.mocked(api.saveCvDeck).mockRejectedValueOnce(new Error('HTTP 422: {"detail":"bad"}'));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await useEditorStore.getState().switchDeck("d2");
+
+    expect(useEditorStore.getState().activeDeckId).toBe("d1");
+    expect(useEditorStore.getState().deckBusy).toBe(false);
+
+    // ...and a later switch still works, i.e. the rail is not wedged.
+    vi.mocked(api.getCvDeck).mockResolvedValueOnce(structuredClone(SAMPLE));
+    confirmSpy.mockReturnValue(true);
+    vi.mocked(api.saveCvDeck).mockRejectedValueOnce(new Error('HTTP 422: {"detail":"bad"}'));
+    await useEditorStore.getState().switchDeck("d2");
+    expect(useEditorStore.getState().activeDeckId).toBe("d2");
+    confirmSpy.mockRestore();
+  });
+});
+
 describe("newDeck", () => {
   it("adopts the fresh slot and shows the empty state without saving into it", async () => {
     stubIndex([deck("d1"), deck("n1", { has_cv: false })], "d1");

@@ -8,6 +8,12 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     const body = await response.text();
     throw new Error(`HTTP ${response.status}: ${body}`);
   }
+  // 204 No Content (DELETE /api/cv-decks/{id}) has an empty body, and `Response.json()`
+  // rejects on that — which would turn a *successful* delete into a thrown SyntaxError and
+  // skip everything the caller does afterwards (re-listing the decks, re-homing the active
+  // deck). Any other empty 2xx body would fail the same way, so key off the absence of a
+  // body rather than off the one status code we currently emit.
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 

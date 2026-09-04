@@ -840,9 +840,15 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     async switchDeck(id) {
       if (id === get().activeDeckId || get().deckBusy) return;
-      if (!(await get().flushAndPersist())) return;
+      // deckBusy is claimed BEFORE the first await, not after flushAndPersist() resolves.
+      // flushAndPersist can issue a real PUT, and a second click during that round-trip is
+      // a separate task that would otherwise sail past the guard above: both switches then
+      // set activeDeckId and race their loadDeckInto, leaving the buffer holding one deck's
+      // document while activeDeckId names another — the next save writes it to the wrong
+      // deck. Every early return below must therefore clear the flag, hence the outer try.
       set({ deckBusy: true });
       try {
+        if (!(await get().flushAndPersist())) return;
         // view/jsonOpen first: load()/reset() own selectedId and saveError, so setting them
         // afterwards would clobber the fresh deck's own selection.
         set({ activeDeckId: id, view: "blocks", jsonOpen: false });
@@ -854,9 +860,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     async newDeck() {
       if (get().deckBusy) return;
-      if (!(await get().flushAndPersist())) return;
-      set({ deckBusy: true });
+      set({ deckBusy: true }); // before the first await — see switchDeck
       try {
+        if (!(await get().flushAndPersist())) return;
         const deck = await api.createCvDeck(null);
         set({ activeDeckId: deck.id, view: "blocks", jsonOpen: false });
         // reset() (not startBlank) so the existing EmptyState re-offers RUN INFERENCE /
@@ -873,17 +879,17 @@ export const useEditorStore = create<EditorState>((set, get) => {
 
     async duplicateDeck(id) {
       if (get().deckBusy) return;
-      // Deliberately NOT flushAndPersist(): the server duplicates the deck *file*, so
-      // taking its discard branch would copy stale on-disk content while the user believes
-      // they duplicated what is on screen. If the live buffer is the source and it will not
-      // save, refuse outright and leave the inline saveError up — no prompt, nothing copied.
-      if (id === get().activeDeckId && get().cv) {
-        get().commit();
-        if (get().unsaved && !(await get().save())) return;
-      }
+      set({ deckBusy: true }); // before the first await — see switchDeck
       let created: string | null = null;
-      set({ deckBusy: true });
       try {
+        // Deliberately NOT flushAndPersist(): the server duplicates the deck *file*, so
+        // taking its discard branch would copy stale on-disk content while the user believes
+        // they duplicated what is on screen. If the live buffer is the source and it will not
+        // save, refuse outright and leave the inline saveError up — no prompt, nothing copied.
+        if (id === get().activeDeckId && get().cv) {
+          get().commit();
+          if (get().unsaved && !(await get().save())) return;
+        }
         const src = get().decks.find((d) => d.id === id);
         // deckLabel() reads the live buffer for the active deck, so the copy is named after
         // what is on screen — which, thanks to the flush above, is also what was copied.

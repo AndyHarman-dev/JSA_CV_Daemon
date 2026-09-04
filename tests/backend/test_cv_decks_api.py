@@ -325,6 +325,28 @@ class TestLegacyAliasEquivalence:
         assert len(listed.json()["decks"]) == 1
         assert listed.json()["decks"][0]["auto_title"] == "John Smith"
 
+    async def test_put_cv_structure_maps_a_lost_delete_race_to_404_not_500(
+        self, client, monkeypatch
+    ):
+        """Regression: the alias PUT let ``UnknownDeckId`` escape as a 500.
+
+        ``ensure_default_deck`` releases the index lock before ``save_deck`` re-takes it,
+        so a ``DELETE /api/cv-decks/{id}`` of that very deck can land in between and
+        ``save_deck`` raises. Every /api/cv-decks route maps ``UnknownDeckId`` -> 404 and
+        ``InvalidDeckId`` -> 400; this alias must not be the one reporting a lost race as
+        a server fault. Simulated by raising from save_deck rather than by racing a real
+        request, so the test pins the mapping and not the timing.
+        """
+        from jsa.store import cv_decks as _cv_decks
+
+        async def _raise(*_args, **_kwargs):
+            raise _cv_decks.UnknownDeckId("unknown deck id: 'gone'")
+
+        monkeypatch.setattr(_cv_decks, "save_deck", _raise)
+        resp = await client.put("/api/cv-structure", json={"structured": _VALID_CV})
+        assert resp.status_code == 404
+        assert "gone" in resp.json()["detail"]
+
     async def test_put_cv_structure_kicks_orchestrator(self, client, monkeypatch):
         calls = []
         monkeypatch.setattr(Orchestrator, "kick", lambda self: calls.append(True))

@@ -70,7 +70,17 @@ async def put_cv_structure(request: Request, body: CvStructureBody) -> dict:
     # one hold of the index lock, or two concurrent first-install PUTs each create a deck
     # and the loser's save_index clobbers the winner's. See cv_decks.ensure_default_deck.
     default_id = await cv_decks.ensure_default_deck(settings)
-    await cv_decks.save_deck(settings, default_id, cv)
+    try:
+        # ensure_default_deck releases the index lock before save_deck re-takes it, so a
+        # DELETE of that very deck can land in the window and save_deck then raises
+        # UnknownDeckId. Uncaught, a ValueError is a 500; every /api/cv-decks route maps
+        # these two, and this alias must not be the one that reports a lost race as a
+        # server fault.
+        await cv_decks.save_deck(settings, default_id, cv)
+    except cv_decks.InvalidDeckId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except cv_decks.UnknownDeckId as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     # Unblock the orchestrator's "no CV structure" gate without requiring a restart.
     request.app.state.orchestrator.kick()
     return {"structured": cv.model_dump()}
