@@ -1061,19 +1061,126 @@ The running card additionally windows to the last `LIVE_STEP_WINDOW` (5) steps b
 "+N earlier" toggle — chunking separates a long trace but does not **bound** it, and an
 unbounded card inflating into a wall is the behaviour this card exists to stop.
 
-**`TurnBubble` renders `turn.reasoning`.** That field was already persisted and served
-(`jsa/api/transcript.py`) but never rendered, so a turn's reasoning used to vanish the
-moment the live stream buffer was cleared.
+**`TurnBubble` renders `turn.reasoning` — but nothing reaches it.** The component reads
+the field; `jsa/api/transcript.py` attaches `reasoning` at exactly ONE place, the
+plumbing branch, and a `plumbing` turn renders as `PlumbingLine` (no card) behind the
+"show internals" toggle. `question`/`answer` turns, the ones that DO reach `TurnBubble`,
+come from `FollowUp` rows, which have no reasoning column. So a settled turn's reasoning
+is still invisible in practice, except on the one path below. This is a known gap left
+by the step-chunking work, not a regression — do not "fix" the symptom by attaching
+`reasoning` to question turns, which would attribute one Message row's thinking to a
+different turn.
 
-**Tool rows are frontend-only today.** `ReasoningStep` is a discriminated union
+**Tool rows have a real backend channel.** `ReasoningStep` is a discriminated union
 (`{kind:"text"} | {kind:"tool"}`) so tool calls render through the same row renderer and
-separator idiom. **No backend channel exists** — `AgentChunk.kind` is
-`"content" | "reasoning"` (`jsa/agents/base.py`) and nothing emits a tool call. The only
-way to see the row is the `import.meta.env.DEV`-guarded toggle in the card header, fed by
-`frontend/src/lib/reasoningMock.ts`. The `import.meta.env.DEV &&` guard on the
-`interleaveMockTools` call is **required, not redundant** — without it Rollup cannot
-prove the runtime `mockTools` state is never set and the fixture ships in the production
-bundle. When a real channel lands it replaces that call and nothing else.
+separator idiom as prose, live and settled:
+
+- **Live** — `AgentToolEvent` (`jsa/events/schema.py`), published per executed call by
+  `jsa/pipeline/tool_loop.py` and fanned out generically by `jsa/api/ws.py`, accumulated
+  into `streamBuffers[job].tools` by `store.ts`'s `case "agent_tool"` with
+  `at = reasoning.length` at arrival. **Three literals move in lockstep** or the reducer
+  silently no-ops: the `streamBuffers` type, the `base` reset, and `AgentThread.tsx`'s
+  `isJobRunning` fallback.
+- **Settled** — `TranscriptTurn.tools`, folded out of `role="tool"` Message rows onto the
+  FOLLOWING assistant turn by `transcript.py::_tool_mark`. That turn is always a
+  `plumbing` turn, so `AgentThread`'s map **hoists its `ReasoningCard` OUT of the
+  `showInternals` gate** while leaving the raw machine text gated. Removing that hoist
+  makes the whole persisted channel dead code — the card would never render.
+  `at` is the row's index within the turn there, not a buffer offset: tool mode never
+  streams, so there is no buffer, and `mergeToolSteps`' trailing append preserves the
+  persisted call order.
+
+`frontend/src/lib/reasoningMock.ts` and its `import.meta.env.DEV`-guarded card toggle are
+**gone** — the real channel replaced them, exactly as planned.
+
+---
+
+## Tool use (revision patching)
+
+`revising_cv`/`revising_cl` patch the existing document through a bounded tool loop
+instead of re-emitting it. **`docs/TOOLS.md` is the reference** — every tool, schema,
+error code, the ID discipline, and the rung matrix live there, and
+`tests/backend/test_tools_doc_sync.py` fails if that doc drifts from
+`jsa/agents/tool_spec.py`. Only the non-derivable conventions are repeated here.
+
+**The ladder is native → prompt → rewrite**, and rung 3 (today's full-document rewrite)
+is permanent, not transitional. `jsa/pipeline/tool_loop.py` owns rungs 1–2 and signals
+"give up" by returning `None`; the caller (`stages.py`'s revision branch) owns rung 3.
+`ToolMode` is `Literal["native", "prompt"]` — there is no third member, because rung 3
+is the absence of the loop, not a mode inside it.
+
+**Both rungs get a prompt contract, not just the prompt rung.** A provider enforces the
+*shape* of a call and says nothing about when to call `get_cv` versus `finalize`. This
+repo already paid for that lesson once (see `prompt_assembly.py`'s docstring on the
+`longcat-2.0` job that re-asked its opening question forever while emitting
+schema-valid JSON). Do not "simplify" the native rung to wire-schemas-only.
+
+**`_tool_contract` is single-sourced from `tool_spec.py`, NOT from `docs/TOOLS.md`.** The
+plan said "generated from docs/TOOLS.md"; that was deliberately not implemented, because
+it would let a missing or malformed markdown file break the runtime pipeline. The
+anti-drift guarantee lives in the doc-sync test instead. Do not "fix" this by making the
+prompt path read the doc.
+
+**Two capability flags, both read off the INSTANCE, never the class**
+(`OpenCodeGoBackend` sets both per-instance in `__init__` — same trap as
+`supports_structured_output`):
+- `supports_native_tools` — rung 1 is available.
+- `restore_applies_system_prompt` (default `True`, `False` on `claude-cli`/`google-cli`)
+  — rung 2 is available. Those two backends resume a **provider-held** conversation by id
+  and discard the `system_prompt`/`history` handed to `restore_session`; `send_message`
+  passes no `--system-prompt`. Since the prompt rung's ONLY transport is that system
+  prompt, it cannot work there. `stages.py::_tools_for` returns `None` when NEITHER flag
+  holds, so those backends skip the loop and keep byte-identical pre-feature behavior.
+  Without that gate every revision on them burns a wasted model turn AND leaves the
+  instruction in the persisted conversation twice. Do not remove the gate, and do not
+  flip the flag `True` for a resume-by-id CLI backend without first giving its
+  `send_message` a real system-prompt channel.
+
+**A tools-only rejection must never cost a BF-19 slot.** Every backend's `_ToolsRejected`
+subclasses **`ToolsUnsupported`**, never `AgentBackendUnavailable` — the latter routes
+into `_advance_backend_or_fail` and would advance the whole job over a degrade that
+should only cost this turn its tools. `_ToolsRejected` also stays OUT of `_call_api`'s
+existing `_CacheRejected`/`_ReasoningRejected` degrade loop: unlike caching and
+reasoning, the tool ladder is the pipeline's decision, not the backend's, so the backend
+must report the rejection upward rather than silently retrying clean. Pinned by
+`test_tools_doc_sync.py::TestExclusionClaimsAreTrue`.
+
+**Three mutual exclusions, all load-bearing:**
+- **Tool mode never streams.** `tool_loop.py` passes no `on_chunk`/`on_retry`, so every
+  backend call degrades to non-streaming by construction (asserted in the doc-sync test).
+- **Tool mode and structured mode are mutually exclusive per request** — the terminal
+  tool's arguments ARE the structured output. A tool session never receives a
+  `structured_schema`, and its history is adapted with `structured=False`, computed as a
+  **separate** decision from rung 3's own `adapt_history(structured=structured)`. The two
+  must never share one variable (see the canonical-form invariant above).
+- **Tool mode skips `_self_heal_final`.** `finalize()` already ran the same
+  `_validate_final_content` gate, so re-validating is a no-op — but the soft "CV missing
+  a Summary section" nudge under it is not: it sends a bare correction into a session with
+  no sentinel/structured contract, and a native session may answer with another tool call,
+  which `run_stage`'s `reply.kind == "tool_calls"` guard then hard-fails on. The loop's own
+  `reemit_hint` retry is this reply's self-heal equivalent.
+
+**Persistence: `role="tool"` Message rows, and NO migration.** `Message.role` is a plain
+`String(16)` with no enum or CHECK constraint, so the new role needs no schema change.
+Rows are written in one atomic `repo.checkpoint` as
+`[user instruction, *tool rows, assistant reply]` — that ORDER is load-bearing.
+`_load_history` filters `role.in_(["user", "assistant"])`, so tool rows are excluded from
+every replay (they are a log, not conversation); `transcript.py` folds them into the
+FOLLOWING assistant turn's `tools` field rather than emitting them as turns. Widening
+either one breaks the other.
+
+**Accepted cost.** On a backend that CAN reach a rung but whose model ignores the tool
+contract, a revision costs one extra model round trip before rung 3 runs. That is
+inherent to the ladder — there is no way to know the model won't use the tools without
+asking. It is not a bug and does not need "optimizing" with a per-model allowlist.
+
+**Parity gate.** `tests/backend/test_patch_parity.py` is **permanent**, like
+`test_mode_parity.py`: a patched revision and a full-rewrite revision must produce a
+byte-identical `Document.markdown`, an equal-as-parsed-JSON `Document.structured`, and
+the same `Job.state`. Deliberately NOT asserted: that the two produce the same *prose* —
+two runs of a generative step differ and that diff never closes. It also pins the
+UNPATCHED regions against the original seed, since equality between the two lanes alone
+would not catch a field both lanes drop.
 
 ---
 
