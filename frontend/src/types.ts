@@ -39,6 +39,9 @@ export interface JobDTO {
   retry_count: number;
   updated_at: string;
   created_at: string;
+  // Assigned base-CV deck id (GET /api/cv-decks), or null for "use the default deck".
+  // Writable only pre-launch — PUT /api/jobs/{id}/base-cv 409s once state != "queued".
+  base_cv_id: string | null;
 }
 
 export interface FollowUpDTO {

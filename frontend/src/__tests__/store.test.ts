@@ -9,6 +9,8 @@ vi.mock("../api", () => ({
     getPreferences: vi.fn().mockResolvedValue({ language: "en" }),
     putPreferences: vi.fn().mockResolvedValue({ language: "en" }),
     config: vi.fn().mockResolvedValue({ languages: [] }),
+    listCvDecks: vi.fn().mockResolvedValue({ decks: [], default_id: null }),
+    putJobBaseCv: vi.fn(),
   },
 }));
 
@@ -41,6 +43,11 @@ beforeEach(() => {
     languages: [],
     cvStructureExists: null,
     toasts: [],
+    editorOpen: false,
+    cvDecks: [],
+    cvDecksDefaultId: null,
+    cvPickerJobId: null,
+    cvPickerPos: { x: 0, y: 0 },
   });
   vi.clearAllMocks();
 });
@@ -349,5 +356,105 @@ describe("setLanguage", () => {
     await useStore.getState().setLanguage("xx");
 
     expect(useStore.getState().language).toBe("en");
+  });
+});
+
+describe("hydrateCvDecks", () => {
+  it("populates cvDecks and cvDecksDefaultId from GET /api/cv-decks", async () => {
+    vi.mocked(api.listCvDecks).mockResolvedValueOnce({
+      decks: [{ id: "d1", name: null, auto_title: "Jane Doe", has_cv: true, is_default: true }],
+      default_id: "d1",
+    });
+
+    await useStore.getState().hydrateCvDecks();
+
+    expect(useStore.getState().cvDecks).toHaveLength(1);
+    expect(useStore.getState().cvDecksDefaultId).toBe("d1");
+  });
+
+  it("leaves the existing deck list untouched on failure", async () => {
+    useStore.setState({ cvDecks: [{ id: "d1", name: null, auto_title: null, has_cv: true, is_default: true }] });
+    vi.mocked(api.listCvDecks).mockRejectedValueOnce(new Error("network error"));
+
+    await useStore.getState().hydrateCvDecks();
+
+    expect(useStore.getState().cvDecks).toHaveLength(1);
+  });
+});
+
+describe("setEditorOpen", () => {
+  it("re-hydrates the deck list when the editor closes", async () => {
+    vi.mocked(api.listCvDecks).mockResolvedValueOnce({
+      decks: [{ id: "d1", name: null, auto_title: "Jane Doe", has_cv: true, is_default: true }],
+      default_id: "d1",
+    });
+
+    useStore.getState().setEditorOpen(false);
+    // Flush the fire-and-forget hydrateCvDecks() call (setEditorOpen doesn't await it) —
+    // a macrotask tick, not just one microtask, since the mocked promise's own resolution
+    // is itself a queued microtask ahead of hydrateCvDecks's `await` continuation.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(api.listCvDecks).toHaveBeenCalled();
+    expect(useStore.getState().cvDecks).toHaveLength(1);
+  });
+
+  it("does not re-hydrate when the editor opens", () => {
+    useStore.getState().setEditorOpen(true);
+    expect(api.listCvDecks).not.toHaveBeenCalled();
+  });
+});
+
+describe("openCvPicker / closeCvPicker", () => {
+  const job = makeJob({ id: "job1", state: "queued" });
+
+  it("opens the picker for a queued job, clamped to the viewport", () => {
+    useStore.getState().openCvPicker(job, { clientX: 100, clientY: 200 });
+    const state = useStore.getState();
+    expect(state.cvPickerJobId).toBe("job1");
+    expect(state.cvPickerPos).toEqual({ x: 100, y: 214 });
+  });
+
+  it("is a no-op for a non-queued job", () => {
+    useStore.getState().openCvPicker(makeJob({ id: "job2", state: "pending" }), {
+      clientX: 0,
+      clientY: 0,
+    });
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+  });
+
+  it("closes the picker", () => {
+    useStore.getState().openCvPicker(job, { clientX: 0, clientY: 0 });
+    useStore.getState().closeCvPicker();
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+  });
+});
+
+describe("assignBaseCv", () => {
+  it("patches the job in the store and closes the picker on success", async () => {
+    const updated = makeJob({ id: "job1", base_cv_id: "d2" });
+    vi.mocked(api.putJobBaseCv).mockResolvedValueOnce(updated);
+    useStore.setState({ cvPickerJobId: "job1" });
+
+    await useStore.getState().assignBaseCv("job1", "d2");
+
+    expect(api.putJobBaseCv).toHaveBeenCalledWith("job1", "d2");
+    expect(useStore.getState().jobs["job1"]).toEqual(updated);
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+  });
+
+  it("closes the picker and toasts the server's detail on failure", async () => {
+    vi.mocked(api.putJobBaseCv).mockRejectedValueOnce(
+      new Error('HTTP 422: {"detail":"deck is not assignable"}')
+    );
+    useStore.setState({ cvPickerJobId: "job1", jobs: { job1: makeJob({ id: "job1" }) } });
+
+    await useStore.getState().assignBaseCv("job1", "bad-deck");
+
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+    const toasts = useStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("error");
+    expect(toasts[0].message).toBe("deck is not assignable");
   });
 });

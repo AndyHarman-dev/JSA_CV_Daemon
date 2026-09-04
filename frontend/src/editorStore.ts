@@ -338,7 +338,9 @@ function clone<T>(v: T): T {
 // both layers so the UI shows the server's reason and not the transport envelope. Extracted
 // here because inferFromFile and save() each carried a copy and the deck actions would have
 // made it four.
-function detailOf(err: unknown, fallback: string): string {
+// Exported for store.ts's assignBaseCv, which surfaces the same server-detail-or-fallback
+// text on a failed base-CV assignment — see JobList/BaseCvPicker (Phase 6).
+export function detailOf(err: unknown, fallback: string): string {
   const raw = err instanceof Error ? err.message : fallback;
   const m = /^HTTP \d+:\s*(.*)$/s.exec(raw);
   let detail = m ? m[1] : raw;

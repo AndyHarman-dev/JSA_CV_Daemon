@@ -261,5 +261,12 @@
   "cvDecks.untitled": "Untitled",
   "cvDecks.copySuffix": "copy",
   "cvDecks.discardDraft": "This base CV has unsaved changes that could not be saved. Discard them and continue?",
-  "cvDecks.deckCount": "{n}"
+  "cvDecks.deckCount": "{n}",
+  "baseCvPicker.title": "Base CV",
+  "baseCvPicker.empty": "No base CVs yet. Create one in the Structure Editor to assign it here.",
+  "baseCvPicker.openEditor": "OPEN STRUCTURE EDITOR",
+  "baseCvPicker.unassign": "UNASSIGN",
+  "baseCvPicker.assign": "Assign base CV",
+  "baseCvPicker.change": "Change base CV",
+  "baseCvPicker.default": "DEFAULT"
 }

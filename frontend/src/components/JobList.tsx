@@ -111,7 +111,16 @@ function JobRow({
         {job.role}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        {job.state === "queued" ? <LaunchButton jobId={job.id} /> : <StatusBadge state={job.state} />}
+        {job.state === "queued" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <BaseCvTrigger job={job} />
+            {/* The prompt-injection syringe trigger (feat/prompt-injection) slots here,
+                between the two, per the design handoff's own ordering. */}
+            <LaunchButton jobId={job.id} />
+          </div>
+        ) : (
+          <StatusBadge state={job.state} />
+        )}
         {job.effective_model && (
           <span
             title={`${t("jobList.modelTitle")}: ${job.effective_model}`}
@@ -129,6 +138,62 @@ function JobRow({
         )}
       </div>
     </button>
+  );
+}
+
+// Per-row base-CV picker trigger (design_handoff_cv_decks_feature's "JSA App Shell"). Local
+// to JobList since it's row chrome, not a shared widget — the popover itself (BaseCvPicker)
+// is store-driven and mounted once in App.tsx. Only rendered for `queued` rows (Phase 6 —
+// assignment is pre-launch only, matching PUT /api/jobs/{id}/base-cv's 409 outside `queued`).
+function BaseCvTrigger({ job }: { job: JobDTO }) {
+  const t = useT();
+  const openCvPicker = useStore((s) => s.openCvPicker);
+  const has = job.base_cv_id !== null;
+  const title = has ? t("baseCvPicker.change") : t("baseCvPicker.assign");
+
+  // Anchors the popover off the trigger's own position (works for both a mouse click and a
+  // keyboard activation, which has no clientX/clientY of its own).
+  const open = (target: HTMLElement) => {
+    const rect = target.getBoundingClientRect();
+    openCvPicker(job, { clientX: rect.left, clientY: rect.bottom });
+  };
+
+  // A `role="button"` <span>, not a real <button> — same reasoning as LaunchButton: this
+  // sits inside JobList's outer row <button>, and nesting a real button there is invalid
+  // HTML (and triggers React's validateDOMNesting warning).
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.stopPropagation(); // don't also trigger the row's onSelect
+        open(e.currentTarget);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          open(e.currentTarget);
+        }
+      }}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 22,
+        height: 22,
+        flex: "none",
+        border: `1px solid ${has ? T.aBorder : T.bd}`,
+        borderRadius: T.btnRadius,
+        background: has ? T.aSoft : "transparent",
+        color: has ? T.a : T.ink3,
+        cursor: "pointer",
+      }}
+    >
+      <Icon name="doc" size={12} />
+    </span>
   );
 }
 

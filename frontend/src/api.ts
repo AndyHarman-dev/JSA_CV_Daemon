@@ -47,6 +47,15 @@ export const api = {
     );
   },
 
+  // Assign/clear a job's base-CV deck (pre-launch only — the server 409s otherwise).
+  putJobBaseCv(id: string, deckId: string | null): Promise<JobDTO> {
+    return apiFetch<JobDTO>(`/api/jobs/${encodeURIComponent(id)}/base-cv`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deck_id: deckId }),
+    });
+  },
+
   revise(id: string, target: "cv" | "cl", text: string): Promise<JobDTO> {
     return apiFetch<JobDTO>(`/api/jobs/${encodeURIComponent(id)}/revise`, {
       method: "POST",
