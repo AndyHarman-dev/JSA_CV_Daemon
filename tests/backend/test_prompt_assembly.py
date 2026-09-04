@@ -340,3 +340,88 @@ class TestToolContract:
                 assert assemble_system_prompt(
                     "BASE", language=lang, tool_model=self._specs(), for_resume=resume
                 ) == base
+
+
+class TestToolContractCarriesTheInjection:
+    """Cross-feature gate: `feat/revision-tool-use` x `feat/prompt-injection`.
+
+    These two features were built on separate branches and merged cleanly into
+    `assemble_system_prompt` WITHOUT a conflict on the tool branch's return statement.
+    prompt-injection computes `base` (prefix + prompt_text + postfix) at the top of the
+    function and rewrites every branch to compose from it; revision-tool-use adds a new
+    FIRST branch that returned `prompt_text`. Taking both verbatim compiles, keeps every
+    test on both branches green, and silently drops the user's per-job wrapper from every
+    tool-mode revision — on the prompt rung, that system prompt is the ONLY transport the
+    contract and the wrapper have.
+
+    Neither branch could have owned this test: neither one's tree contains both features.
+    """
+
+    @staticmethod
+    def _specs(stage: Stage = Stage.revising_cv):
+        return tools_for(stage)
+
+    @staticmethod
+    def _inj(**kw):
+        from jsa.schema.injection import PromptInjection
+
+        return PromptInjection(**{"prefix": "", "postfix": "", "first_msg": "", **kw})
+
+    @pytest.mark.parametrize("native", [True, False])
+    def test_prefix_and_postfix_bracket_the_prompt_on_both_rungs(self, native):
+        out = assemble_system_prompt(
+            "BASE PROMPT",
+            language="en",
+            tool_model=self._specs(),
+            native_tools=native,
+            injection=self._inj(prefix="ALWAYS ANSWER IN THE PAST TENSE.", postfix="NEVER HEDGE."),
+        )
+        assert "ALWAYS ANSWER IN THE PAST TENSE." in out
+        assert "NEVER HEDGE." in out
+        # Order: prefix, then the prompt file, then postfix, then the machine-authored
+        # contract — the same precedence rule the structured path is held to, because a
+        # postfix landing after the contract becomes the last word over it.
+        assert (
+            out.index("ALWAYS ANSWER IN THE PAST TENSE.")
+            < out.index("BASE PROMPT")
+            < out.index("NEVER HEDGE.")
+            < out.index("## Revision tool contract")
+        )
+
+    @pytest.mark.parametrize("native", [True, False])
+    def test_no_injection_is_byte_identical_to_no_injection_kwarg(self, native):
+        """The uninjected path must not shift by a single byte — that is what keeps the
+        cross-job prompt-cache prefix shared for every job without an injection."""
+        specs = self._specs()
+        bare = assemble_system_prompt("BASE", language="en", tool_model=specs, native_tools=native)
+        for injection in (None, self._inj(), self._inj(prefix="   ", postfix="\n\t")):
+            assert (
+                assemble_system_prompt(
+                    "BASE",
+                    language="en",
+                    tool_model=specs,
+                    native_tools=native,
+                    injection=injection,
+                )
+                == bare
+            )
+
+    def test_the_cover_letter_stage_vocabulary_carries_it_too(self):
+        out = assemble_system_prompt(
+            "BASE",
+            language="en",
+            tool_model=self._specs(Stage.revising_cl),
+            injection=self._inj(prefix="PFX", postfix="SFX"),
+        )
+        assert "get_letter" in out
+        assert out.index("PFX") < out.index("BASE") < out.index("SFX")
+
+    def test_first_msg_alone_never_touches_the_system_prompt(self):
+        """`first_msg` is a USER-message field (`_build_initial_user_msg`), never a system
+        one — and the fit gate never gets it at all (locked decision 2). A job carrying
+        only a first_msg must produce the byte-identical shared system prefix."""
+        specs = self._specs()
+        assert assemble_system_prompt(
+            "BASE", language="en", tool_model=specs,
+            injection=self._inj(first_msg="mention 6 years of Rust"),
+        ) == assemble_system_prompt("BASE", language="en", tool_model=specs)
