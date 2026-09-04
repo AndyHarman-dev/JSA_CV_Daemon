@@ -156,10 +156,10 @@ def _structured_contract(schema: dict[str, Any], *, fit_verdict: bool) -> str:
 # The six error codes every tool result can carry. Sourced from jsa/schema/patch.py's
 # result contract (unknown_id/stale_id/bad_argument/validation_failed) plus the two the
 # LOOP synthesizes rather than the applier (budget_exhausted/not_executed — see
-# jsa/pipeline/tool_loop.py). NOTE: neither docs/TOOLS.md nor
-# tests/backend/test_tools_doc_sync.py exists yet (a later phase of the plan), so
-# nothing currently pins this tuple to the applier's codes — keep them in sync by
-# hand until that gate lands.
+# jsa/pipeline/tool_loop.py). Pinned against docs/TOOLS.md by
+# tests/backend/test_tools_doc_sync.py, which asserts this tuple and the doc's
+# documented code set are equal — adding a code here without documenting it there
+# (or vice versa) fails that gate rather than drifting silently.
 _TOOL_ERROR_CODES = (
     "unknown_id",
     "stale_id",
@@ -195,9 +195,11 @@ def _tool_contract(specs: tuple[Any, ...], *, native: bool) -> str:
     NOT from ``docs/TOOLS.md``. The plan's Phase 4 text says the contracts are "generated
     from docs/TOOLS.md" — deliberately not implemented that way: making the runtime prompt
     path read a markdown file means a missing or malformed doc breaks the pipeline. The
-    anti-drift guarantee the plan wanted is meant to come from a doc-sync test
-    (``tests/backend/test_tools_doc_sync.py``) that does NOT exist yet, alongside the
-    doc itself — until both land, this contract and the doc can drift silently.
+    anti-drift guarantee the plan wanted comes instead from a doc-sync test,
+    ``tests/backend/test_tools_doc_sync.py``, which pins this module's
+    ``_TOOL_ERROR_CODES`` and the tool vocabulary against ``docs/TOOLS.md`` — so the
+    doc stays authoritative for humans while the runtime prompt stays independent of
+    it.
     """
     names = ", ".join(f"`{s.name}`" for s in specs)
     lines = [

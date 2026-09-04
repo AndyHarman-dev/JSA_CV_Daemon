@@ -374,6 +374,86 @@ class TestFinalize:
 # --- ask_user (D8) -----------------------------------------------------------------------
 
 
+class TestFinalizeLogging:
+    """A successful finalize must log, whatever ``change_log`` did or didn't carry.
+
+    The prompt rung's parser (``protocol.py::_parse_tool_calls_block``) validates only
+    that ``arguments`` is an object — the tool schema's ``required: ["change_log"]`` is
+    never enforced there — so a model can finalize a revision with ``{}``. Keying the
+    log line off the change_log STRING instead of a "did finalize fire" flag silently
+    emits nothing for those turns.
+    """
+
+    @staticmethod
+    async def _log_texts(backend):
+        from jsa.events.bus import bus
+
+        queue = bus.subscribe()
+        try:
+            result = await _run_cv(backend)
+            events = [queue.get_nowait() for _ in range(queue.qsize())]
+            return result, [e["text"] for e in events if e["type"] == "log"]
+        finally:
+            bus.unsubscribe(queue)
+
+    async def test_finalize_without_change_log_still_logs(self):
+        backend = _native_backend([_tool_calls_reply([("finalize", {})])])
+        result, texts = await self._log_texts(backend)
+        assert result is not None
+        assert any("revision finalized — (no summary provided)" in t for t in texts)
+
+    async def test_finalize_with_empty_change_log_still_logs(self):
+        backend = _native_backend([_tool_calls_reply([("finalize", {"change_log": ""})])])
+        result, texts = await self._log_texts(backend)
+        assert result is not None
+        assert any("revision finalized — (no summary provided)" in t for t in texts)
+
+    async def test_non_string_change_log_degrades_instead_of_interpolating_raw(self):
+        backend = _native_backend([_tool_calls_reply([("finalize", {"change_log": 42})])])
+        result, texts = await self._log_texts(backend)
+        assert result is not None
+        assert any("revision finalized — (no summary provided)" in t for t in texts)
+        assert not any("42" in t for t in texts)
+
+    async def test_change_log_is_logged_when_present(self):
+        backend = _native_backend([_tool_calls_reply([("finalize", {"change_log": "tightened"})])])
+        result, texts = await self._log_texts(backend)
+        assert result is not None
+        assert any("revision finalized — tightened" in t for t in texts)
+
+
+class TestEventDetailIsBounded:
+    """``AgentToolEvent.detail`` is broadcast to every client on every tool call, and
+    ``get_cv`` returns the WHOLE document — so it is capped. The untruncated outcome
+    still reaches the durable ``role="tool"`` Message row; only the event is trimmed.
+    """
+
+    async def test_large_outcome_is_truncated_in_the_event(self):
+        from jsa.events.bus import bus
+        from jsa.pipeline.tool_loop import _MAX_EVENT_DETAIL_CHARS
+
+        queue = bus.subscribe()
+        try:
+            huge = "x" * (_MAX_EVENT_DETAIL_CHARS * 3)
+            # get_cv AFTER the oversized write: its outcome is the whole document, so
+            # this is the event that would otherwise carry a full CV to every client.
+            backend = _native_backend([
+                _tool_calls_reply([("replace_summary", {"text": huge}), ("get_cv", {})]),
+                _tool_calls_reply([("finalize", {"change_log": "done"})]),
+            ])
+            assert await _run_cv(backend) is not None
+            events = [queue.get_nowait() for _ in range(queue.qsize())]
+            tool_events = [e for e in events if e["type"] == "agent_tool"]
+            get_cv = [e for e in tool_events if e["name"] == "get_cv"]
+            assert get_cv, "expected a get_cv event"
+            assert any(huge in e["detail"] for e in tool_events) is False
+            for e in tool_events:
+                assert len(e["detail"]) <= _MAX_EVENT_DETAIL_CHARS + 64
+            assert get_cv[-1]["detail"].endswith(" chars)")
+        finally:
+            bus.unsubscribe(queue)
+
+
 class TestAskUser:
     async def test_ask_user_ends_the_loop_with_needs_input(self):
         backend = _native_backend([

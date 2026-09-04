@@ -150,6 +150,69 @@ class TestReplaceSummary:
         assert result["error"]["code"] == "bad_argument"
 
 
+class TestReplaceSummaryNonEnglish:
+    """``SUMMARY_NAME_RE`` is English-only, so a non-English CV is matched by SHAPE.
+
+    That fallback is deliberately narrow: it fires only when exactly one section is
+    text-without-entries-or-items AND it is first. Every other arrangement falls
+    through to the create branch, because ``replace_summary`` OVERWRITES — a wrong
+    shape match silently destroys a section's body. These tests pin the destructive
+    cases as much as the working one.
+    """
+
+    @staticmethod
+    def _doc(sections):
+        return CVDocument.model_validate({"contact": {"name": "X"}, "sections": sections})
+
+    def test_edits_a_german_summary_in_place(self):
+        wc = CvWorkingCopy(self._doc([
+            {"name": "Zusammenfassung", "text": "alte Zusammenfassung"},
+            {"name": "Berufserfahrung", "entries": [{"title": "Dev", "bullets": ["a"]}]},
+        ]))
+        assert wc.replace_summary("neue Zusammenfassung")["ok"] is True
+        sections = wc.get_cv()["sections"]
+        # Edited in place: no second, English-titled section prepended.
+        assert len(sections) == 2
+        assert sections[0]["name"] == "Zusammenfassung"
+        assert sections[0]["text"] == "neue Zusammenfassung"
+
+    def test_ambiguous_shape_does_not_clobber_a_non_summary_first_section(self):
+        wc = CvWorkingCopy(self._doc([
+            {"name": "Kontakt", "text": "Berlin, Deutschland"},
+            {"name": "Zusammenfassung", "text": "alte Zusammenfassung"},
+            {"name": "Berufserfahrung", "entries": [{"title": "Dev", "bullets": ["a"]}]},
+        ]))
+        assert wc.replace_summary("neue Zusammenfassung")["ok"] is True
+        sections = {s["name"]: s["text"] for s in wc.get_cv()["sections"]}
+        # Two text-only sections => ambiguous => create rather than guess. The
+        # duplicate is cosmetic; overwriting "Kontakt" would have been data loss.
+        assert sections["Kontakt"] == "Berlin, Deutschland"
+        assert sections["Summary"] == "neue Zusammenfassung"
+
+    def test_trailing_text_only_section_is_not_treated_as_the_summary(self):
+        wc = CvWorkingCopy(self._doc([
+            {"name": "Berufserfahrung", "entries": [{"title": "Dev", "bullets": ["a"]}]},
+            {"name": "Interessen", "text": "Klettern, Schach"},
+        ]))
+        assert wc.replace_summary("neue Zusammenfassung")["ok"] is True
+        sections = {s["name"]: s["text"] for s in wc.get_cv()["sections"]}
+        # Sole text-only section, but not first => not a summary.
+        assert sections["Interessen"] == "Klettern, Schach"
+        assert sections["Summary"] == "neue Zusammenfassung"
+
+    def test_english_name_still_wins_over_an_earlier_text_only_section(self):
+        wc = CvWorkingCopy(self._doc([
+            {"name": "Kontakt", "text": "Berlin, Deutschland"},
+            {"name": "Profile", "text": "old profile"},
+        ]))
+        assert wc.replace_summary("new profile")["ok"] is True
+        sections = {s["name"]: s["text"] for s in wc.get_cv()["sections"]}
+        # Pass 1 (by name) runs to completion before pass 2 is considered at all.
+        assert sections["Profile"] == "new profile"
+        assert sections["Kontakt"] == "Berlin, Deutschland"
+        assert "Summary" not in sections
+
+
 # --- replace_section -------------------------------------------------------------------------
 
 

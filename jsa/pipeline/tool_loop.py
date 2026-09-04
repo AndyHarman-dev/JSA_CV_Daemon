@@ -251,6 +251,23 @@ def _dispatch(
     return _dispatch_cl(copy, call.name, args), None, False
 
 
+# AgentToolEvent.detail is a diagnostic string broadcast to every connected client on
+# every tool call. `get_cv`/`get_letter` return the WHOLE document as their result, so
+# serializing an outcome verbatim pushes a full CV over the WebSocket up to
+# TOOL_BUDGET times per revision turn — into a field the frontend never renders
+# (store.ts uses `e.summary || e.detail`, and `summary` is always non-empty). Cap it:
+# the head of the payload is all a diagnostic needs, and the untruncated outcome is
+# still persisted verbatim in the role="tool" Message row.
+_MAX_EVENT_DETAIL_CHARS = 1000
+
+
+def _event_detail(result: dict[str, Any]) -> str:
+    detail = json.dumps(result)
+    if len(detail) <= _MAX_EVENT_DETAIL_CHARS:
+        return detail
+    return detail[:_MAX_EVENT_DETAIL_CHARS] + f"… (truncated, {len(detail)} chars)"
+
+
 def _summarize(name: str, result: dict[str, Any]) -> str:
     if result.get("ok"):
         return name
@@ -351,6 +368,14 @@ async def run_tool_loop(
         results: list[ToolResult] = []
         stop_calls = False
         final_reply: AgentReply | None = None
+        # Two separate variables on purpose: "did a successful finalize fire" is NOT
+        # derivable from the change_log being non-None. The prompt rung's parser
+        # (protocol.py::_parse_tool_calls_block) only enforces "arguments is an
+        # object" — the tool schema's `required: ["change_log"]` is never checked
+        # there — so `{"name": "finalize", "arguments": {}}` finalizes successfully
+        # with no change_log at all, and keying the log line off the string alone
+        # would silently emit nothing for a completed revision.
+        finalize_fired = False
         finalize_change_log: str | None = None
         for call in reply.tool_calls:
             seq += 1
@@ -367,8 +392,13 @@ async def run_tool_loop(
                     if is_terminal:
                         final_reply = candidate
                         if call.name == "finalize":
-                            finalize_change_log = call.arguments.get("change_log") \
-                                if isinstance(call.arguments, dict) else None
+                            finalize_fired = True
+                            raw_log = (
+                                call.arguments.get("change_log")
+                                if isinstance(call.arguments, dict)
+                                else None
+                            )
+                            finalize_change_log = raw_log if isinstance(raw_log, str) else None
 
             results.append(
                 ToolResult(call_id=call.id, name=call.name, ok=bool(outcome.get("ok")), content=outcome)
@@ -381,17 +411,17 @@ async def run_tool_loop(
                     AgentToolEvent(
                         job_id=job.id, stage=stage.value, seq=seq, call_id=call.id,
                         name=call.name, summary=_summarize(call.name, outcome),
-                        status=status, detail=json.dumps(outcome),
+                        status=status, detail=_event_detail(outcome),
                     )
                 )
             )
 
         if final_reply is not None:
-            if finalize_change_log is not None:
-                # A schema-valid but empty change_log ("" — the tool's `_STRING` param
-                # has no minLength) must still log that finalize succeeded; only a
-                # genuinely absent change_log (finalize_change_log is None, i.e. this
-                # wasn't a successful finalize call) skips this branch.
+            if finalize_fired:
+                # Keyed on the FLAG, never on the string: an empty change_log ("" —
+                # the tool's `_STRING` param has no minLength) and an absent one (the
+                # prompt rung enforces no `required`) both still mean a revision was
+                # finalized and must still be logged as one.
                 summary = finalize_change_log or "(no summary provided)"
                 await bus.publish(
                     event_to_dict(

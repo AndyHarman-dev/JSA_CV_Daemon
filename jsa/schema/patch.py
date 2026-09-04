@@ -202,14 +202,57 @@ class CvWorkingCopy:
 
     # -- mutations -------------------------------------------------------------------
 
+    def _summary_section_id(self) -> str | None:
+        """The section ``replace_summary`` should edit, or ``None`` to create one.
+
+        Two passes, in order:
+
+        1. **By name** — ``SUMMARY_NAME_RE`` (``jsa/schema/cv.py``). That regex is
+           English-only (``summary|profile|objective|about|overview``), which is fine
+           for the soft ``cv_has_summary`` nudge it was written for but NOT here: the
+           pipeline's output language is a global user setting, so a German CV's
+           summary section is "Zusammenfassung" and a French one's is "Profil
+           professionnel" (note ``profile`` does not match ``Profil``).
+        2. **By shape, only when UNAMBIGUOUS** — a section with body text and neither
+           entries nor items is structurally what a summary is, in any language. But
+           that shape is not unique to summaries: a prose "Kontakt" block, a headline,
+           or an "Interessen" paragraph share it. So this pass fires only when the CV
+           contains EXACTLY ONE such section AND it is the first section. Any other
+           arrangement is a guess, and guessing here is destructive — ``replace_summary``
+           overwrites, so a wrong match silently destroys that section's body while
+           leaving the real summary stale.
+
+        Returning ``None`` falls through to the create branch, whose failure mode is a
+        duplicate English-titled "Summary" section: cosmetic, recoverable, and visible
+        in the rendered PDF. That is the deliberate trade — this lookup fails toward
+        the additive error, never the destructive one. Do not "improve" pass 2 into a
+        positional or first-match-wins heuristic to catch more cases; widening it
+        re-introduces the overwrite. The precise fix is a per-language name regex
+        (mirroring ``_LETTER_FORMULA_RE_BY_LANG`` in ``jsa/schema/cv.py``), which needs
+        the pipeline language plumbed into this class and is tracked separately.
+        """
+        for sec_id in self._section_order:
+            if SUMMARY_NAME_RE.search(self._sections[sec_id]["name"] or ""):
+                return sec_id
+        text_only = [
+            sec_id
+            for sec_id in self._section_order
+            if self._sections[sec_id]["text"]
+            and not self._sections[sec_id]["entry_ids"]
+            and not self._sections[sec_id]["items"]
+        ]
+        if len(text_only) == 1 and text_only[0] == self._section_order[0]:
+            return text_only[0]
+        return None
+
     def replace_summary(self, text: Any) -> dict[str, Any]:
         cleaned = _clean_str_or_none(text)
         if cleaned is None:
             return _err("bad_argument", "text must be a non-empty string")
-        for sec_id in self._section_order:
-            if SUMMARY_NAME_RE.search(self._sections[sec_id]["name"] or ""):
-                self._sections[sec_id]["text"] = cleaned
-                return _ok(id=sec_id)
+        existing = self._summary_section_id()
+        if existing is not None:
+            self._sections[existing]["text"] = cleaned
+            return _ok(id=existing)
         sec_id = self._mint_section_id()
         self._sections[sec_id] = {"name": "Summary", "text": cleaned, "items": [], "entry_ids": []}
         self._section_order.insert(0, sec_id)
