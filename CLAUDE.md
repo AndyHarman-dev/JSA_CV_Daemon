@@ -594,42 +594,188 @@ the pipeline.
 
 ---
 
-## CV structure — single source of truth
+## Base CVs (decks) — single source of truth
 
-`cv_structure.json` (`jsa/store/cv_structure.py`, edited via the CV Structure Editor,
-`Settings.cv_structure_path` — `~/.jsa/cv_structure.json` by default) is the **only**
-source of *base* CV content for the pipeline — i.e. for the stages that haven't yet
-produced their own tailored CV. Both `fit_assessment` and `cv_adjust` read it at stage
-time (`jsa/pipeline/stages.py::run_stage`) and inject it into their prompts — `cv_adjust`
-as the `BASE CV STRUCTURE` JSON skeleton, `fit_assessment` as `cv_to_markdown(structure)`
-under a `CV:` header. Neither stage reads `Job.cv_text`. **`cover_letter` is the
-exception**: it reads the approved, tailored `cv_adjust` Document instead (falling back to
-this base structure only if that Document is somehow missing) — see "Two-lane pipeline /
-CV gate" below. Do not "fix" the cover-letter lane back onto `cv_structure.json`; that
-would defeat the two-lane split's entire point (writing the letter against what will
-actually be submitted).
+JSA maintains **many** base CVs ("decks"), and each job picks one. A deck is a standalone
+`CVDocument` JSON file at `Settings.cv_decks_dir / "<uuid4().hex>.json"`
+(`~/.jsa/cv_decks/`), plus one small index at `Settings.cv_decks_path`
+(`~/.jsa/cv_decks.json`) holding order, user-given names, a denormalized `auto_title`
+cache and `default_id`. The store is `jsa/store/cv_decks.py`; the routes are
+`jsa/api/routes_cv_decks.py`. `CVDocument` itself gained **no** id/name field — it stays
+the pipeline's wire schema and the editor's export format, and deck identity lives
+entirely in the index plus the filename.
 
-**`Job.cv_text` is DEPRECATED.** It is never populated (the CLI's `--cv` no longer
-stamps it) and never read by any prompt. The column still exists only because
+Both `fit_assessment` and `cv_adjust` still read exactly one base CV at stage time
+(`jsa/pipeline/stages.py::run_stage`) and inject it — `cv_adjust` as the `BASE CV
+STRUCTURE` JSON skeleton, `fit_assessment` as `cv_to_markdown(structure)` under a `CV:`
+header. Neither reads `Job.cv_text`. **`cover_letter` is still the exception**: it reads
+the approved, tailored `cv_adjust` Document instead (falling back to the base structure
+only if that Document is somehow missing) — see "Two-lane pipeline / CV gate" below. Do
+not "fix" the cover-letter lane onto a deck; that would defeat the two-lane split's point
+(writing the letter against what will actually be submitted).
+
+**`stages.py` knows nothing about decks — and that is deliberate, not an oversight.**
+`run_stage(..., cv_structure_path=<path>)` already took a path to one JSON file holding
+one `CVDocument`, and a deck file *is* exactly that format. So the resolution happens one
+level up: `Orchestrator._run_one` calls `cv_structure_path=await
+self._base_cv_resolver(job.base_cv_id)` at the `run_stage` call site, and
+`_read_base_structure` / `_base_structure_cv_block` / `_build_fit_user_msg` are reused
+verbatim. **Do not "simplify" this into a `run_stage` signature change that takes a deck
+id** — beyond being a much larger diff, it would drag deck-store knowledge into the
+pipeline layer, which is what keeps `stages.py` out of the way of concurrent feature work
+and what makes `tests/backend/test_cv_decks_parity.py` (below) a meaningful gate at all.
+
+**`Job.base_cv_id` is read live at stage time, never snapshotted at launch.** It is a
+plain nullable `String(32)` column (`jsa/db/models.py`, added via `init_db`'s additive
+`ALTER TABLE` block — there is no FK and no column-drop path), and `_run_one` resolves it
+on **every** dispatch. So a deck edited between two stages of the same job feeds the newer
+content into the later stage; that is intended, and it is the same behavior the
+single-file store had.
+
+**Resolution and fallback live entirely in `cv_decks.resolve_path`, and nothing there is
+fatal.** It returns the first *existing* file among: the requested deck → the index's
+`default_id` → index order; `None` if there is none. It does pure `.exists()` checks —
+loadability/corruption stays `stages._read_base_structure`'s job, exactly as for the
+legacy single file. It logs a warning whenever the deck actually used is not the one asked
+for, **including the `deck_id=None` case** (where "asked for" means `default_id`) — a
+silent fall-through there is the genuinely confusing one: the rail shows deck B starred as
+DEFAULT while every unassigned job runs against deck A. The `"falling back to deck"`
+substring is asserted on by `tests/backend/test_cv_decks_pipeline.py`; keep it.
+
+**The index is a cache; the deck files are the source of truth.** `GET /api/cv-decks`
+feeds the per-job picker, so it must be **one** index read and must never fan out into one
+file read per deck. `auto_title` (= `cv.contact.name`) and `has_cv` are therefore
+denormalized into the index and refreshed by `save_deck` on every write.
+`tests/backend/test_cv_decks_api.py` pins the no-fan-out property by counting
+`cv_structure.read` calls — do not add a per-deck read to that endpoint to "get fresher
+titles".
+
+**A `has_cv: False` deck is a real, reachable state** (the rail's "NEW BASE CV" slot,
+created before anything is saved into it) and it must never be assignable to a job.
+`PUT /api/jobs/{id}/base-cv` rejects it with 422, and the frontend picker filters
+`d.has_cv`. Without that, `resolve_path` would find no file and silently fall back to the
+default — i.e. the user picks deck B, the model gets deck A, and only a log line says so.
+
+**Assignment is pre-launch only.** `PUT /api/jobs/{id}/base-cv` (body `{"deck_id": str |
+null}`) returns 409 unless `job.state == queued`; 404 for an unknown job; 422 for an
+unknown deck id or an empty slot. Assigning later would silently not affect stages that
+already replayed.
+
+**Deleting a deck clears the assignment on undispatched jobs only.**
+`repo.clear_base_cv_assignments(session, deck_id)` nulls `base_cv_id` where `state IN
+(queued, pending)` and returns the count; `review`/`approved`/`failed` rows keep their
+value as a record of which base CV they were actually built from. Routes never write raw
+SQL for this — go through `jsa/db/repo.py`.
+
+**Zero decks is a legal state — there is deliberately no backend last-deck guard.**
+`DELETE /api/cv-decks/{id}` will happily remove the only deck. That is not an oversight:
+the orchestrator's gate tolerates zero decks (jobs stay `pending`, never `failed`, and the
+gate banner tells the user to open the editor), and two tests pin the behavior end to end —
+`tests/backend/test_cv_decks_api.py::TestKickWiring::test_delete_kicks` and
+`::TestConfigSignal::test_toggles_false_true_false_across_create_save_delete`. The only
+friction against reaching zero is UI-level (`DeckRail`'s `canDelete={decks.length > 1}`,
+plus a `confirm()`). A 409 "cannot delete your last deck" was drafted during review and
+**rejected** — adding one means rewriting those two tests.
+
+**Index writes are serialized and atomic; readers never take a lock.** Every index mutator
+(`create_deck`/`ensure_default_deck`/`save_deck`/`rename_deck`/`set_default`/
+`duplicate_deck`/`delete_deck`) is a load-mutate-write over the whole index file held
+behind the `"index"` lock — two overlapping mutations would otherwise have the later write
+silently drop the earlier one. `_save_index_sync` writes to a fixed-name temp file beside
+the target and `os.replace`s it, so a concurrent reader can never see a torn file; **that
+fixed temp name is only safe because writers cannot overlap** — a new mutator added
+*outside* the `"index"` lock breaks the argument and needs a unique temp name. The locks
+are keyed per running event loop through `_lock(name)` (a `WeakKeyDictionary`), **not**
+module-level singletons: `asyncio.Lock` binds to a loop on its first contended acquire, and
+each pytest-asyncio test gets a fresh loop, so a singleton would be poisoned by the first
+test that actually contends it and would then fail unrelated tests with an inscrutable
+`RuntimeError`. Do not "simplify" these back to two module-level `asyncio.Lock()` objects.
+
+`ensure_default_deck` exists so no caller writes `load_index` → `if default_id is None:
+create_deck` itself — that shape is a check-then-act *above* the lock, and two concurrent
+callers on a fresh install would each mint a deck with the second `save_index` clobbering
+the first, orphaning a deck file with no index entry.
+
+**Errors are typed so routes don't re-derive the store's rules.** `InvalidDeckId`
+(malformed id / path traversal, raised by `deck_path`) → 400; `UnknownDeckId` (well-formed
+but absent from the index) → 404. Both subclass `ValueError`, so a caller catching
+`ValueError` keeps working. `deck_path` re-validates `^[0-9a-f]{32}$` on **every** path
+derivation — it is the sole path-traversal guard between a client-supplied id and
+`cv_decks_dir`, and ids are always server-minted (`uuid4().hex`), never client-supplied.
+
+**The legacy `cv_structure.json` is migrated by copy and then left alone, forever.**
+`migrate_legacy` runs from `load_index` the first time no index file exists: if the legacy
+file exists and parses, it mints a deck id, **copies** the bytes into `cv_decks/<id>.json`,
+and writes an index with that deck as default. The legacy file is never deleted and never
+rewritten — it is an inert backup of the pre-decks state. A corrupt legacy file is treated
+as absent (warning logged). With no legacy file, `migrate_legacy` returns an empty
+`DeckIndex()` **without** writing anything, so a fresh install has no state until the user
+creates something. The migration write re-checks the index file's existence *inside*
+`_lock("migrate")`, because two first-boot callers on the same loop (`GET /api/config` and
+the orchestrator's dispatch gate) must mint exactly **one** deck, not two.
+
+**`/api/cv-structure` GET/PUT survive as thin default-deck aliases** — same paths, same
+response shapes, same 404/422/`kick()` semantics. `GET` reads the default deck (404 when
+there is none or it has no CV yet); `PUT` saves into the default deck, creating one first
+via `ensure_default_deck` if the index is empty. `POST /api/cv-structure/infer` is
+**unchanged** — it is stateless and deck-agnostic, returning an unsaved structure the
+editor then PUTs into whichever deck is active.
+
+**`cv_structure_exists` on `/api/config` now means "at least one deck has a usable CV"**
+(`bool(await cv_decks.resolve_path(settings, None))`), not `cv_structure_path.exists()`.
+The field name is kept because the frontend store reads it; `cv_deck_count` sits alongside
+it for the picker's empty-state copy. Re-pointing this mattered: after migration the legacy
+file is inert, so an `exists()` check on it would be `true` forever, including with zero
+decks.
+
+**No prompt-caching impact.** The base CV goes into the *user message*
+(`_build_fit_user_msg` / `_build_initial_user_msg`), never into the system prefix built by
+`prompt_assembly.assemble_system_prompt`. Per-job decks therefore do not violate the
+cross-job system-prefix invariant — see "Prompt caching (HTTP API backends)" above;
+`tests/backend/test_prompt_prefix_stability.py` stays untouched and green.
+
+**`Job.cv_text` is DEPRECATED.** It is never populated (the CLI's `--cv` no longer stamps
+it) and never read by any prompt. The column still exists only because
 `jsa/db/engine.py`'s migration story is `create_all` + additive `ALTER TABLE` — there is
 no column-drop path, and existing sqlite DBs have it `NOT NULL`. Do not read or write it
 in new code; do not "fix" this by reintroducing a `CV TEXT:` block into a prompt.
 
 **`--cv` is optional and bootstrap-only.** `jsa/cli.py::_bootstrap_cv_structure` seeds
-`cv_structure.json` from `--cv` exactly once, if the file doesn't exist yet (via the same
-`jsa/pipeline/infer_structure.py::run_infer` the editor's "infer" button uses). If a
-structure already exists, `--cv` is ignored (a note is printed). If neither `--cv` nor a
-saved structure exists, startup proceeds anyway — see the gate below.
+the user's **first** deck from `--cv` exactly once, if no deck with a usable CV exists yet
+(via the same `jsa/pipeline/infer_structure.py::run_infer` the editor's "infer" button
+uses) — `create_deck` + `save_deck`, **not** `cv_structure.save`. Do not "fix" a failing
+bootstrap test by dual-writing the legacy file; that resurrects the second source of truth
+the migration decision removed. If a deck already exists, `--cv` is ignored (a note is
+printed). If neither `--cv` nor a saved deck exists, startup proceeds anyway — see the gate
+below.
 
-**CV structure gate.** `Orchestrator.run()` (`jsa/pipeline/orchestrator.py`) checks
-`cv_structure_path.exists()` at the top of every dispatch cycle when a path was given
-(production always passes one via `server.py`; tests passing `cv_structure_path=None`
-are exempt — the gate is inert for them). While the file is missing, the loop skips
-dispatch entirely and jobs stay `pending` (never `failed`); a one-shot `LogEvent`
-announces the block. `PUT /api/cv-structure` calls `orchestrator.kick()` on save, and
-`GET /api/config`'s `cv_structure_exists` field drives the frontend's gate banner
-(`frontend/src/components/JobList.tsx`) — so saving a structure in the editor unblocks
-pending jobs live, no restart required.
+**Base-CV gate.** `Orchestrator.run()` (`jsa/pipeline/orchestrator.py`) checks at the top
+of every dispatch cycle whether *any* deck is usable, via `await
+self._base_cv_resolver(None)` fed to `stages._read_base_structure`. While none is, the
+loop skips dispatch entirely and jobs stay `pending` (never `failed`); a one-shot
+`LogEvent` announces the block. Every deck write route calls `orchestrator.kick()`, so
+saving a deck in the editor unblocks pending jobs live, no restart required.
+
+The resolver is **injected**, never constructed in the pipeline: `server.py`'s
+`make_base_cv_resolver(settings)` (beside `make_model_resolver`) returns
+`Callable[[str | None], Awaitable[Path | None]]` and is passed as
+`Orchestrator(base_cv_resolver=...)`. The orchestrator cannot import `Settings` — that is
+circular via `server.py`. `Orchestrator(cv_structure_path=<path>)` is still accepted and
+is wrapped in `__init__` into a resolver that ignores the deck id, so every pre-decks
+caller (and every test that passes only a path) keeps today's behavior byte-for-byte and
+there is exactly one internal code path. Passing neither leaves the gate inert.
+
+One known rough edge, not new surface: if the **default** deck's file goes corrupt, the
+gate blocks every job and assignment is `queued`-only, so the fix is the editor — which is
+exactly what the gate banner says. A corrupt *non-default* deck assigned to a job yields
+`None` from `_read_base_structure` at stage time and that job simply runs with no CV block,
+same as a corrupt single file did before decks.
+
+**Parity gate.** `tests/backend/test_cv_decks_parity.py` pins that a legacy install (only
+`cv_structure.json`, no index) produces **byte-identical** `fit_assessment` and `cv_adjust`
+user messages to what pre-decks `main` produced; the golden fixtures were captured on
+`main` before any decks code existed. This is a permanent regression gate, not a one-time
+migration check.
 
 ---
 
@@ -1143,9 +1289,9 @@ npm test           # runs: vitest run
 # Verify basic invocation prints the scaffold message
 jsa --csv /path/to/jobs.csv --cv /path/to/resume.pdf
 
-# --cv is optional — it only seeds cv_structure.json once, if none exists yet.
-# Jobs stay pending (gated, not failed) until a structure exists — see CLAUDE.md
-# → "CV structure gate".
+# --cv is optional — it only seeds your FIRST base CV deck once, if none exists yet.
+# Jobs stay pending (gated, not failed) until some deck has a usable CV — see CLAUDE.md
+# → "Base CVs (decks) — single source of truth" → "Base-CV gate".
 jsa --csv /path/to/jobs.csv
 
 # Verify validation rejects bad inputs (the --cv extension check only fires when --cv is given)
