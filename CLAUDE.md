@@ -1196,7 +1196,39 @@ ordering) must not be overridable by user text. Do not move the postfix after th
 **`for_resume=True` returns `base`, not `prompt_text`.** A resumed session must resend
 the same wrapper the fresh session was built with; returning `prompt_text` there would
 silently drop the injection on every resume after the first follow-up answer, which is
-exactly the shape of the bug this line exists to prevent.
+exactly the shape of the bug this line exists to prevent. (Two narrowings, both
+learned after that line was written: on `claude-cli`/`google-cli`, `restore_session`
+discards the `system_prompt` entirely when `external_id` is set — see
+`AgentBackend.restore_applies_system_prompt` under "Tool use (revision patching)" —
+so that path is not what this protects; what it protects is a structured-capable
+backend running in **sentinel** mode, which takes this same branch and does resend.)
+
+**The `base` substitution is an invariant, and it is the one thing to check if you
+touch this function.** Below the `base = prompt_text` block, `prompt_text` must NEVER
+be read again — every branch composes from `base`. This is not stylistic. The
+`tool_model` branch (see "Tool use (revision patching)") was added on a different
+branch, in a different region of the same function, and the two merged **cleanly with
+no conflict**: keeping both verbatim computed `base` and then returned `prompt_text`,
+silently dropping the user's wrapper from every tool-mode revision while every test on
+both branches stayed green. Pinned by
+`tests/backend/test_prompt_assembly.py::TestToolContractCarriesTheInjection`.
+
+**There are FOUR `assemble_system_prompt` call sites, and all four must be passed the
+SAME single `injection` resolution.** `run_stage` resolves `injection =
+parse_injection(job.injection)` exactly once per invocation and threads it to:
+`resume_system_prompt`, `fresh_system_prompt`, `_run_fit_assessment`'s site, and
+`_tool_system_prompt` (the closure feeding `run_tool_loop`). The fourth arrived with the
+tool-use feature and is the easy one to miss — on the prompt rung, that system prompt is
+the *only* transport the model ever sees, so omitting it there is completely silent.
+Same rule as the `structured_schema` / `adapt_history(structured=...)` pairing: one
+decision, threaded everywhere, never a second `parse_injection()` downstream. Gated by
+`tests/backend/test_feature_integration.py::TestInjectionSurvivesAToolModeRevision`.
+
+**Known asymmetry, not a bug:** the tool-mode branch appends no current-date directive,
+because it returns before that section. Tool mode only runs on backends that resend the
+system prompt every call, so the argument that puts the date on the structured-resume
+path applies here too — it is simply not wired yet. Adding it changes assembled prompt
+bytes, so it wants its own change, not a drive-by.
 
 **Single resolution, all call sites.** `stages.py::run_stage` calls `parse_injection`
 **once** (one site) and threads the resulting object to all three assembly call sites —

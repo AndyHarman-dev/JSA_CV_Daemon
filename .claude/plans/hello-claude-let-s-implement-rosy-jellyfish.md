@@ -934,6 +934,49 @@ backend 2073 → 2082 passed, 2 skipped, 21 deselected; targeted suites 329 pass
 
 ---
 
+**2026-09-04** — *Merged into `main`'s integration branch alongside the other two
+in-flight features.* Context: `feat/revision-tool-use`, `feat/cv-decks` and
+`feat/prompt-injection` were finished in three separate worktrees off the same `main`
+and had to be brought together. Actions: created
+`chore/integrate-tooluse-decks-injection` off `main` and merged all three `--no-ff`, in
+that order — tool-use first (largest, and the only one whose merge base predates main's
+current-date directive `e7c116e`), cv-decks second (it touches neither `stages.py` nor
+`prompt_assembly.py`, by its own locked decision 1), prompt-injection last, since it is
+the only branch that collides with both. Decisions:
+- Two conflicts against main's current-date feature, both "both branches added code in
+  the same place": `_current_date_directive` and `_TOOL_ERROR_CODES`/`_tool_contract` now
+  coexist in `prompt_assembly.py`, and `TestCurrentDateDirective` + `TestToolContract`
+  both survive in `test_prompt_assembly.py`.
+- The tool-mode branch of `assemble_system_prompt` still appends **no** date directive.
+  Left deliberately: tool mode did not exist on `main`, so its absence is an
+  inconsistency inside a new feature rather than a regression, and adding it would change
+  assembled prompt bytes as a side effect of a merge. Recorded as an open follow-up in
+  CLAUDE.md's "Per-job prompt injection" section instead.
+- `_tool_system_prompt` (the closure feeding `run_tool_loop`) is the FOURTH
+  `assemble_system_prompt` call site, and the one the prompt-injection branch could not
+  know about. `stages.py` auto-merged with no conflict and was still wrong — it was the
+  only site not threading `injection=`. Now threaded from `run_stage`'s single
+  per-invocation resolution.
+- This plan's Phase 5 finding that `ClaudeCliBackend`/`GoogleCliBackend`
+  `restore_session` discards the `system_prompt` when `external_id` is set contradicted a
+  comment the prompt-injection branch had written in the same file. The comment's
+  conclusion (`return base`) is right; its stated rationale was not. Corrected in place
+  rather than left as two branches' findings disagreeing inside one function.
+
+Cross-cutting: every feature branch's suite runs against a tree containing exactly ONE
+feature, so none of them can see an interaction and a bad merge stays green in all three
+— demonstrated, not assumed (reintroducing the `prompt_text`/`base` bug above left all
+2210 pre-merge tests passing). Added `tests/backend/test_feature_integration.py` (8),
+`test_prompt_assembly.py::TestToolContractCarriesTheInjection` (6) and two
+`JobList.test.tsx` cases as the merge's actual deliverable, each mutation-tested.
+Verification — **verified**: backend 2337 passed / 2 skipped, and the collected node set
+is an exact superset of the union of all four branches' node sets (2325 before the new
+tests), so no test was lost in any merge; frontend 456 passed across 28 files (no test
+file dropped); `tsc --noEmit` clean. Not done: merge to `main` (awaiting explicit
+approval per the git branch policy) and the manual end-to-end smoke checks.
+
+---
+
 ## Decisions Log
 
 _(For the user's own hand only — records approaches considered and rejected.)_

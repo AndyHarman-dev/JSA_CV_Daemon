@@ -636,6 +636,57 @@ verification result)_
 
 ---
 
+**2026-09-04** — *Merged into `main`'s integration branch alongside the other two
+in-flight features.* Context: `feat/revision-tool-use`, `feat/cv-decks` and
+`feat/prompt-injection` were finished in three separate worktrees off the same `main`
+and had to be brought together. Actions: created
+`chore/integrate-tooluse-decks-injection` off `main` and merged all three `--no-ff`, in
+that order — tool-use first (largest, and the only one whose merge base predates main's
+current-date directive `e7c116e`), cv-decks second (it touches neither `stages.py` nor
+`prompt_assembly.py`, by its own locked decision 1), prompt-injection last, since it is
+the only branch that collides with both. Decisions:
+- **The load-bearing resolution.** This branch computes `base` (prefix + prompt_text +
+  postfix) at the top of `assemble_system_prompt` and rewrites every branch to compose
+  from it. `feat/revision-tool-use` adds a NEW FIRST branch returning `prompt_text +
+  _tool_contract(...)`. Different regions of one function, so the naive keep-both
+  computes `base` and never reads it on the tool path — the per-job wrapper silently
+  vanishes from every tool-mode revision. `base` is now computed BEFORE the tool branch,
+  which returns `base + _tool_contract(...)`, and the "below this block `prompt_text` is
+  never read again" invariant is stated in the code, in CLAUDE.md, and pinned by a test.
+- `_tool_system_prompt` in `stages.py` — a fourth `assemble_system_prompt` call site that
+  did not exist on this branch — now receives `injection=` too. On the prompt rung that
+  system prompt is the model's only transport, so the omission was completely silent.
+- `jsa/db/engine.py`: the conflict split each feature's `ALTER TABLE` block before its own
+  `except OperationalError`, so keep-both produced a `try` with no handler. Caught here
+  only because it happened to be a syntax error; a split one line either way would have
+  dropped one migration silently, and nothing in the suite would have noticed — every
+  other test builds its schema with `create_all`. There is now a test for the upgrade path.
+- `JobList.tsx` queued row: all three controls in one wrapper, in the CV-decks hand-off's
+  order (BaseCvTrigger, InjectTrigger, LaunchButton). Kept this branch's
+  `<span display:inline-flex>` over cv-decks' `<div>` — the row is a `<button>`, whose
+  content model is phrasing.
+- **The i18n fan-out this plan requires had never been run** (this file's Change Log was
+  empty): 22 keys were missing from all 19 locale catalogs. Run as part of the merge;
+  `translate-ui.sh --check` is now clean.
+- Deliberate divergence left in place: `PUT /api/jobs/{id}/injection` answers 400 on the
+  pre-launch gate while the sibling `/base-cv` route answers 409. Each was specified
+  against its own design hand-off and each is pinned by its own tests; noted in the code
+  rather than unified unilaterally.
+
+Cross-cutting: every feature branch's suite runs against a tree containing exactly ONE
+feature, so none of them can see an interaction and a bad merge stays green in all three
+— demonstrated, not assumed (reintroducing the `prompt_text`/`base` bug above left all
+2210 pre-merge tests passing). Added `tests/backend/test_feature_integration.py` (8),
+`test_prompt_assembly.py::TestToolContractCarriesTheInjection` (6) and two
+`JobList.test.tsx` cases as the merge's actual deliverable, each mutation-tested.
+Verification — **verified**: backend 2337 passed / 2 skipped, and the collected node set
+is an exact superset of the union of all four branches' node sets (2325 before the new
+tests), so no test was lost in any merge; frontend 456 passed across 28 files (no test
+file dropped); `tsc --noEmit` clean. Not done: merge to `main` (awaiting explicit
+approval per the git branch policy) and the manual end-to-end smoke checks.
+
+---
+
 ## Decisions Log
 
 2026-09-04: Overriden decisions:

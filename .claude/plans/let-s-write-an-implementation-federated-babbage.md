@@ -849,6 +849,44 @@ the job, delete again (expect success).
 
 ---
 
+**2026-09-04** — *Merged into `main`'s integration branch alongside the other two
+in-flight features.* Context: `feat/revision-tool-use`, `feat/cv-decks` and
+`feat/prompt-injection` were finished in three separate worktrees off the same `main`
+and had to be brought together. Actions: created
+`chore/integrate-tooluse-decks-injection` off `main` and merged all three `--no-ff`, in
+that order — tool-use first (largest, and the only one whose merge base predates main's
+current-date directive `e7c116e`), cv-decks second (it touches neither `stages.py` nor
+`prompt_assembly.py`, by its own locked decision 1), prompt-injection last, since it is
+the only branch that collides with both. Decisions:
+- Locked decision 1 paid off exactly as written: this branch touches neither
+  `stages.py` nor `prompt_assembly.py`, so it had **zero** conflicts with the
+  revision-tool-use pipeline work. Its only two conflicts were adjacency in
+  `frontend/src/store.ts` and `store.test.ts`.
+- In `store.ts` the two branches edited the same declaration block. Kept tool-use's
+  `streamBuffers` type (the one carrying `tools`) plus this branch's four deck-picker
+  fields — taking this branch's side verbatim would have reverted `tools` off the buffer
+  and silently no-op'd the `agent_tool` reducer arm.
+- The queued-row middle slot this plan's collision map reserved for the syringe was used
+  as specified: final order is BaseCvTrigger, InjectTrigger, LaunchButton. The wrapper is
+  prompt-injection's `<span>`, not this branch's `<div>` (the row is a `<button>`).
+- The parity fixtures (`test_cv_decks_parity.py`) pass unchanged against a tree where
+  prompt-injection has modified `_build_initial_user_msg` — its new `first_msg` parameter
+  defaults to `None` and the goldens stay byte-exact. Asserted, not assumed.
+
+Cross-cutting: every feature branch's suite runs against a tree containing exactly ONE
+feature, so none of them can see an interaction and a bad merge stays green in all three
+— demonstrated, not assumed (reintroducing the `prompt_text`/`base` bug above left all
+2210 pre-merge tests passing). Added `tests/backend/test_feature_integration.py` (8),
+`test_prompt_assembly.py::TestToolContractCarriesTheInjection` (6) and two
+`JobList.test.tsx` cases as the merge's actual deliverable, each mutation-tested.
+Verification — **verified**: backend 2337 passed / 2 skipped, and the collected node set
+is an exact superset of the union of all four branches' node sets (2325 before the new
+tests), so no test was lost in any merge; frontend 456 passed across 28 files (no test
+file dropped); `tsc --noEmit` clean. Not done: merge to `main` (awaiting explicit
+approval per the git branch policy) and the manual end-to-end smoke checks.
+
+---
+
 ## Decisions Log
 
 _(Reserved for the user. Not to be written by any agent.)_
