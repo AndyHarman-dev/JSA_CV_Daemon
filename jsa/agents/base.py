@@ -212,6 +212,26 @@ class AgentBackend(ABC):
     # unused accept-and-ignore parameter to a backend that stays False.
     supports_native_tools: ClassVar[bool] = False
 
+    # True when ``restore_session`` actually APPLIES the ``system_prompt`` it is handed
+    # to the restored session. False for a backend whose session lives on the provider's
+    # side and is resumed by id (``claude-cli``'s ``--resume <uuid>``, ``google-cli``'s
+    # ``--conversation <uuid>``): those implementations deliberately ignore both
+    # ``system_prompt`` and ``history`` — the CLI already holds the conversation, and no
+    # ``--system-prompt`` flag is passed on a resume, so a NEW system prompt handed to
+    # ``restore_session`` is silently dropped on the floor.
+    #
+    # This is the load-bearing precondition for jsa/pipeline/tool_loop.py's PROMPT rung
+    # (rung 2), whose entire transport is a system prompt carrying the tool contract
+    # (``jsa/pipeline/prompt_assembly.py::_tool_contract``). On a False backend that rung
+    # cannot work by construction: the model never sees the contract, answers an ordinary
+    # ``<<<FINAL>>>``, the loop discards it as unparseable, and rung 3 re-sends the same
+    # instruction into a provider-held conversation that now contains the instruction
+    # twice. So ``jsa/pipeline/stages.py::_tools_for`` skips the tool loop outright for a
+    # backend that is neither ``supports_native_tools`` nor this — do not "simplify" that
+    # gate away, and do not flip this True for a resume-by-id CLI backend without first
+    # giving its ``send_message`` a real system-prompt channel.
+    restore_applies_system_prompt: ClassVar[bool] = True
+
     @abstractmethod
     async def start_session(
         self,

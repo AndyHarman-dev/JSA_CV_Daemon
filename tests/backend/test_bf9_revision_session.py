@@ -362,7 +362,11 @@ class TestSecondCvRevisionUsesSameCvSessionId:
         backend = TrackingFakeBackend([
             cv_final("CV v1"),                     # cv_adjust
             cl_final(),                            # cover_letter
+            # Each revising_cv turn spends TWO replies: the tool loop's prompt-rung
+            # attempt (discarded) then rung 3 — see tool_loop_miss's docstring.
+            tool_loop_miss(),                      # first revising_cv: tool-loop attempt
             cv_final("REVISED_CV_V2_MARKER"),      # first revising_cv
+            tool_loop_miss(),                      # second revising_cv: tool-loop attempt
             cv_final("REVISED_CV_V3_MARKER"),      # second revising_cv
         ])
 
@@ -392,9 +396,12 @@ class TestSecondCvRevisionUsesSameCvSessionId:
 
         await run_stage(job_after_cl, backend, Stage.revising_cv, session)
 
-        # Verify first revision used cv_session_id
-        assert backend.restore_calls[0] == cv_session_id, (
-            "First revising_cv must use cv_session_id"
+        # Verify first revision used cv_session_id — on BOTH restores it makes (the
+        # tool loop owns its own restore_session for the rung it enters, then rung 3
+        # restores again; see tool_loop_miss's docstring).
+        assert backend.restore_calls[:2] == [cv_session_id, cv_session_id], (
+            "First revising_cv must use cv_session_id on every restore it makes, "
+            f"got {backend.restore_calls[:2]!r}"
         )
 
         job_after_rev1 = await repo.get_job(session, job.id)
@@ -413,13 +420,14 @@ class TestSecondCvRevisionUsesSameCvSessionId:
 
         await run_stage(job_after_rev1, backend, Stage.revising_cv, session)
 
-        # Second restore_session call also uses cv_session_id
-        assert len(backend.restore_calls) == 2, (
-            f"Expected 2 restore_session calls total, got {len(backend.restore_calls)}"
+        # The second revision's restore_session calls also use cv_session_id
+        assert len(backend.restore_calls) == 4, (
+            f"Expected 4 restore_session calls total (two revisions x tool-loop "
+            f"attempt + rung 3), got {len(backend.restore_calls)}"
         )
-        assert backend.restore_calls[1] == cv_session_id, (
+        assert backend.restore_calls[2:] == [cv_session_id, cv_session_id], (
             f"Second revising_cv must still use cv_session_id={cv_session_id!r}, "
-            f"got {backend.restore_calls[1]!r}"
+            f"got {backend.restore_calls[2:]!r}"
         )
 
         # Three documents for cv_adjust: v1, v2, v3

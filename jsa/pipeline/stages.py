@@ -220,13 +220,35 @@ def _tools_for(backend: AgentBackend, stage: Stage) -> tuple[ToolSpec, ...] | No
     revision-tool-use plan's D3) — this is the single mechanical enforcement that
     ``cv_adjust``, ``cover_letter``, and ``fit_assessment`` NEVER get tools, mirroring
     how ``_structured_schema_for`` above is the single mechanical source for its own
-    destination-mode decision. ``backend`` is accepted (unused) for signature symmetry
-    with ``_structured_schema_for`` — tool availability here is purely stage-scoped;
-    backend capability (native vs. prompt rung) is a SEPARATE decision, made by
-    ``_tools_kwargs`` below and, ultimately, by ``jsa/pipeline/tool_loop.py``'s own
-    ladder, never by this function.
+    destination-mode decision.
+
+    ``backend`` gates the SECOND, independent precondition: at least one of the two tool
+    rungs has to be reachable at all. WHICH rung actually runs, and any native -> prompt
+    downgrade between them, stays ``jsa/pipeline/tool_loop.py``'s decision — this
+    function only rules out a backend where NEITHER can work:
+
+    * ``supports_native_tools`` -> rung 1 is available. Read off the INSTANCE, never the
+      class — see ``_tools_kwargs`` below for the ``OpenCodeGoBackend`` trap.
+    * ``restore_applies_system_prompt`` -> rung 2 is available. The prompt rung's ONLY
+      transport is a system prompt carrying the tool contract, and ``claude-cli`` /
+      ``google-cli`` resume a provider-held conversation by id, discarding the
+      ``system_prompt`` and ``history`` handed to ``restore_session`` outright (and
+      passing no ``--system-prompt`` on the resume). Entering the loop there is not
+      merely useless, it is harmful: the model never sees the contract, answers an
+      ordinary ``<<<FINAL>>>`` that the loop discards as unparseable, and rung 3 then
+      re-sends the SAME instruction into a persisted conversation that now contains it
+      twice.
+
+    Both flags False therefore means "skip the loop entirely, go straight to rung 3",
+    which is byte-for-byte the pre-tool-use behavior for those two backends. Do not
+    "simplify" this back to a stage-only check — the plan named ``claude-cli`` as its
+    prompt-rung verification target before this precondition was discovered.
     """
     if stage not in (Stage.revising_cv, Stage.revising_cl):
+        return None
+    native = getattr(backend, "supports_native_tools", False)
+    prompt_rung = getattr(backend, "restore_applies_system_prompt", True)
+    if not native and not prompt_rung:
         return None
     return _tool_specs_for_stage(stage)
 

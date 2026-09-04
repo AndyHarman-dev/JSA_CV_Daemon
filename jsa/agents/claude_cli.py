@@ -73,6 +73,13 @@ class ClaudeCliBackend(AgentBackend):
     # channel of any backend (content AND reasoning).
     supports_streaming = True
 
+    # False: `restore_session` here ignores both `system_prompt` and `history` — the
+    # Claude CLI holds the conversation and it is resumed by id (`--resume <uuid>`),
+    # and `send_message` passes no `--system-prompt`. A new system prompt handed to
+    # `restore_session` therefore never reaches the model, which rules this backend out
+    # of jsa/pipeline/tool_loop.py's prompt rung. See the flag's docstring in base.py.
+    restore_applies_system_prompt = False
+
     def __init__(self, model: str = "Sonnet 5", timeout: float = 120.0) -> None:
         self._model = model
         self._timeout = timeout
