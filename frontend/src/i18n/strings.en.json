@@ -140,6 +140,8 @@
   "chatBox.noNotesInBuffer": "No notes in buffer.",
   "reviewPane.cvTab": "CV / RESUME",
   "reviewPane.clTab": "COVER_LETTER",
+  "reviewPane.jobPosting": "JOB POSTING",
+  "reviewPane.jobPostingTitle": "Open the original job posting in a new tab",
   "reviewPane.versionLabel": "VERSION",
   "reviewPane.loadingPreview": "Loading preview…",
   "reviewPane.previewInProgress": "Preview rendering in progress…",

@@ -264,4 +264,50 @@ describe("ReviewPane", () => {
     });
     expect(screen.getByRole("button", { name: /Request Revision/i })).toBeInTheDocument();
   });
+  describe("JOB POSTING link", () => {
+    it('renders in "final" mode with the job link as href and a safe rel', async () => {
+      useStore.setState({
+        jobs: { job1: makeJob({ link: "https://jobs.example.com/eng-42" }) },
+        selectedId: "job1",
+      });
+
+      render(<ReviewPane jobId="job1" />);
+
+      const link = await screen.findByRole("link", { name: /job posting/i });
+      expect(link).toHaveAttribute("href", "https://jobs.example.com/eng-42");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    });
+
+    it('renders in "cv-gate" mode too — both stages share the one tab bar', async () => {
+      useStore.setState({
+        jobs: { job1: makeJob({ state: "cv_review", link: "https://jobs.example.com/eng-42" }) },
+        selectedId: "job1",
+      });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      const link = await screen.findByRole("link", { name: /job posting/i });
+      expect(link).toHaveAttribute("href", "https://jobs.example.com/eng-42");
+    });
+
+    it("does not render when the link is empty", async () => {
+      useStore.setState({ jobs: { job1: makeJob({ link: "" }) }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" />);
+
+      // Wait for the pane to finish loading so absence means absence, not "not yet rendered".
+      await screen.findByRole("button", { name: /approve & export/i });
+      expect(screen.queryByText(/job posting/i)).not.toBeInTheDocument();
+    });
+
+    it("does not render when the link is only whitespace", async () => {
+      useStore.setState({ jobs: { job1: makeJob({ link: "   " }) }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" />);
+
+      await screen.findByRole("button", { name: /approve & export/i });
+      expect(screen.queryByText(/job posting/i)).not.toBeInTheDocument();
+    });
+  });
 });
