@@ -26,6 +26,7 @@ from jsa.events.schema import (
 )
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
+from jsa.schema.injection import PromptInjection, parse_injection
 from jsa.store import cv_decks
 from jsa.store import preferences as preferences_store
 from jsa.util import slugify as _slugify
@@ -108,6 +109,10 @@ def _job_to_dict(
         "base_cv_id": job.base_cv_id,
         "language": job.language,
         "fit_reason": job.fit_reason,
+        # Parsed object (or null), never the raw JSON string — the frontend must
+        # never parse JSON out of a JSON field. parse_injection normalizes, so an
+        # all-blank stored row reads back as null here too.
+        "injection": parse_injection(job.injection),
         "error": job.error,
         "retry_count": job.retry_count,
         "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -600,6 +605,55 @@ async def set_job_base_cv(request: Request, job_id: str, body: BaseCvBody):
                 )
 
         await repo.set_job_base_cv(session, job, body.deck_id)
+
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        return _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
+
+
+@router.put("/api/jobs/{job_id}/injection")
+async def set_job_injection(request: Request, job_id: str, body: PromptInjection):
+    """Attach (or clear) this job's per-job prompt overrides. Pre-launch only.
+
+    Gated on `queued`, the state that renders the LAUNCH control — NOT `pending`.
+    `pending` is post-launch here: the orchestrator can dispatch it between a GET and
+    this PUT, so allowing it would mean silently editing the prompt of a job that is
+    already mid-flight. The UI hides the trigger off `queued` too; this 400 is the
+    enforcement.
+
+    An all-blank (or whitespace-only) body normalizes to None and stores SQL NULL,
+    which is the design's "clearing the injection" — and is what keeps a blank-typed
+    job byte-identical to an uninjected one for prompt-cache purposes
+    (CLAUDE.md -> "Prompt caching"). Normalization lives in one place,
+    `PromptInjection.normalized()`; the stripped model is what gets persisted.
+
+    No state transition happens here, so this is a plain field write + commit, NOT
+    `repo.checkpoint` (CLAUDE.md's checkpoint rule covers writes that change job
+    state). Nothing consumes an injection change, so there is no event and no
+    orchestrator kick either.
+
+    Note the deliberate status-code divergence from the sibling `/base-cv` route above,
+    which 409s on the same pre-launch gate: each was specified against its own design
+    hand-off and each is pinned by its own tests. Not an inconsistency to "fix" without
+    updating both test suites.
+    """
+    sf = _session_factory(request)
+
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.queued:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'queued'",
+            )
+
+        normalized = body.normalized()
+        job.injection = normalized.model_dump_json() if normalized is not None else None
+        await session.commit()
 
     async with sf() as session:
         job = await _fetch_job_with_relations(session, job_id)

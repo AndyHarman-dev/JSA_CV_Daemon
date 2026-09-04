@@ -182,6 +182,31 @@ async def _poll_job_state(
         await asyncio.sleep(0.05)
 
 
+async def _drain_inflight(orch: Orchestrator, timeout: float = 5.0) -> None:
+    """Wait for the per-job tasks ``Orchestrator.run()`` spawned but never awaits.
+
+    ``run()`` is ``while not self._stopping: ... await self.wakeup.wait()`` — it returns
+    as soon as it sees ``_stopping`` and does **not** await ``self._tasks``. So a
+    ``_run_one`` can still be mid-flight after the run task has been awaited, which bites
+    two ways: (a) it keeps writing to the DB, and ``_handle_session_expired`` in
+    particular commits its intermediate ``failed``/``retry_count=0`` state in a *separate*
+    transaction from the ``soft_reset_job`` that follows, so a test that stopped on
+    ``failed`` can read the row between the two commits; (b) the leaked task survives into
+    a later test, where it can consume a module-global monkeypatch or a one-shot fixture
+    flag that test set up for itself.
+
+    Wait for them to finish, then cancel and reap anything still parked.
+    """
+    inflight = [t for t in list(orch._tasks.values()) if not t.done()]
+    if not inflight:
+        return
+    _, pending = await asyncio.wait(inflight, timeout=timeout)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def _run_orchestrator_until(
     orch: Orchestrator,
     factory,
@@ -216,6 +241,7 @@ async def _run_orchestrator_until(
         orch._stopping = True
         orch.kick()
         await asyncio.wait_for(task, timeout=5.0)
+        await _drain_inflight(orch)
 
 
 # ---------------------------------------------------------------------------

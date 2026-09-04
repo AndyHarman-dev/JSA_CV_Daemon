@@ -9,6 +9,7 @@ import { ScratchBuffer } from "./components/ScratchBuffer";
 import { BootGate } from "./components/BootGate";
 import { Toast } from "./components/Toast";
 import { BaseCvPicker } from "./components/BaseCvPicker";
+import { PromptInjector } from "./components/PromptInjector";
 import { SHELL_THEME } from "./theme/tokens";
 import { Ambient } from "./theme/Ambient";
 
@@ -21,6 +22,7 @@ function App() {
   const selectedId = useStore((s) => s.selectedId);
   const editorOpen = useStore((s) => s.editorOpen);
   const configReady = useStore((s) => s.configReady);
+  const hydrateInjectionPresets = useStore((s) => s.hydrateInjectionPresets);
 
   useEffect(() => {
     refetchAll().catch((err: unknown) => {
@@ -29,11 +31,19 @@ function App() {
     hydrateLanguage().catch((err: unknown) => {
       console.error("Initial hydrateLanguage failed:", err);
     });
+    // Both of these are deliberately NOT folded into hydrateLanguage's timed
+    // /api/config race — the deck list and the preset library are conveniences the boot
+    // path must never wait on (see CLAUDE.md's note on keeping listing fetches off the
+    // config round-trip). They are also independent of each other, so they are fired
+    // side by side rather than chained.
     hydrateCvDecks().catch((err: unknown) => {
       console.error("Initial hydrateCvDecks failed:", err);
     });
+    hydrateInjectionPresets().catch((err: unknown) => {
+      console.error("Initial hydrateInjectionPresets failed:", err);
+    });
     connectWS();
-  }, [refetchAll, hydrateLanguage, hydrateCvDecks]);
+  }, [refetchAll, hydrateLanguage, hydrateCvDecks, hydrateInjectionPresets]);
 
   return (
     <div
@@ -52,6 +62,7 @@ function App() {
           <ScratchBuffer />
           <Toast />
           <BaseCvPicker />
+          <PromptInjector />
           <Ambient T={T} label="JSA_DAEMON" />
           <Header />
           <div className="flex flex-1 overflow-hidden" style={{ position: "relative", zIndex: 1 }}>

@@ -61,6 +61,7 @@ from jsa.pipeline.validation import (
     _validate_final_content,
 )
 from jsa.prompts import loader
+from jsa.schema.injection import PromptInjection, parse_injection
 from jsa.schema.turn_models import adapt_history, json_schema_for
 from jsa.store import cv_structure as cv_structure_store
 from jsa.store import preferences as preferences_store
@@ -696,6 +697,18 @@ async def run_stage(
             prefs = await preferences_store.read(preferences_path)
             language_code = prefs.language
 
+    # ONE resolution per invocation, threaded to every assemble_system_prompt call
+    # below. job.injection rides the Job row, so this is zero extra IO.
+    #
+    # Same single-decision rule the structured_schema/adapt_history(structured=...)
+    # pairing follows (see CLAUDE.md → "Canonical-form invariant"): the value handed to
+    # EVERY assembly site in one run_stage call must come from this one resolution,
+    # never from a second parse_injection() somewhere downstream. Every
+    # structured-capable backend is wire-stateless and resends the system prompt on
+    # every HTTP call, so a site that re-parses (or skips) the injection would apply
+    # the user's wrapper to turn 1 and silently drop it from turn 2 onward.
+    injection = parse_injection(job.injection)
+
     await bus.publish(
         event_to_dict(LogEvent(job_id=job.id, level="info", text=f"Starting stage: {stage.value}"))
     )
@@ -711,6 +724,7 @@ async def run_stage(
             system_prompt,
             language_code,
             base_structure,
+            injection,
         )
         return
 
@@ -752,6 +766,7 @@ async def run_stage(
         structured_model=schema,
         for_resume=True,
         now=datetime.utcnow(),
+        injection=injection,
     )
 
     if stage in (Stage.revising_cv, Stage.revising_cl):
@@ -827,11 +842,25 @@ async def run_stage(
                 tool_history = adapt_history(raw_history, structured=False)
 
                 def _tool_system_prompt(
-                    mode: str, _prompt: str = system_prompt, _tools: tuple[ToolSpec, ...] = tools
+                    mode: str,
+                    _prompt: str = system_prompt,
+                    _tools: tuple[ToolSpec, ...] = tools,
+                    _injection: PromptInjection | None = injection,
                 ) -> str:
+                    # FOURTH assemble_system_prompt call site, and the one the per-job
+                    # injection feature could not know about (it was written on a branch
+                    # where the tool loop did not exist). `injection=` is threaded here
+                    # from run_stage's single per-invocation resolution, exactly like the
+                    # resume/fresh/fit sites — bound as a default arg for the same reason
+                    # `_prompt`/`_tools` are, since this closure outlives the loop
+                    # iteration that builds it.
+                    #
+                    # Dropping it here would be silent: the prompt rung's contract is the
+                    # ONLY transport the model sees, and a revision on an injected job
+                    # would lose the user's prefix/postfix with every test still green.
                     return assemble_system_prompt(
                         _prompt, language=language_code, tool_model=_tools,
-                        native_tools=(mode == "native"),
+                        native_tools=(mode == "native"), injection=_injection,
                     )
 
                 tool_result = await run_tool_loop(
@@ -933,12 +962,15 @@ async def run_stage(
             else:
                 brief = None
                 cv_block = await _base_structure_cv_block(cv_structure_path)
-            initial_user_msg = _build_initial_user_msg(job, brief, cv_block)
+            initial_user_msg = _build_initial_user_msg(
+                job, brief, cv_block, first_msg=injection.first_msg if injection else None
+            )
             fresh_system_prompt = assemble_system_prompt(
                 system_prompt,
                 language=language_code,
                 structured_model=schema,
                 now=datetime.utcnow(),
+                injection=injection,
             )
             handle, reply = await _start_session_with_retry(
                 general_purpose_backend, fresh_system_prompt, initial_user_msg, schema, stage, job,
@@ -1249,6 +1281,7 @@ async def _run_fit_assessment(
     system_prompt: str,
     language_code: str = "en",
     base_structure: CVDocument | None = None,
+    injection: PromptInjection | None = None,
 ) -> None:
     """Run the one-shot fit-assessment stage and checkpoint the outcome.
 
@@ -1256,6 +1289,12 @@ async def _run_fit_assessment(
     is no resume / awaiting_input path for this stage. FIT → ``fit_done`` (pipeline
     continues to cv_adjust). Anything else → ``unfit`` (parked), storing the agent's
     reason in ``job.fit_reason`` for the frontend modal.
+
+    ``injection`` is threaded in from ``run_stage``'s single per-invocation resolution
+    — it is deliberately NOT re-parsed here. Note the intended asymmetry: this stage
+    honors the user's ``prefix``/``postfix`` (they bracket the system prompt) but never
+    ``first_msg`` — ``_build_fit_user_msg`` stays untouched, so the cheap one-shot
+    pre-check keeps its minimal, fixed user message.
     """
     initial_user_msg = _build_fit_user_msg(job, base_structure)
     job.retry_count = 0
@@ -1274,6 +1313,7 @@ async def _run_fit_assessment(
         structured_model=schema,
         fit_verdict=True,
         now=datetime.utcnow(),
+        injection=injection,
     )
 
     # Same conditional-kwarg pattern run_stage uses (see _streaming_kwargs) — this
@@ -1543,7 +1583,10 @@ def _get_system_prompt(stage: Stage) -> str:
 
 
 def _build_initial_user_msg(
-    job: Job, brief: str | None, cv_block: tuple[str, str] | None = None
+    job: Job,
+    brief: str | None,
+    cv_block: tuple[str, str] | None = None,
+    first_msg: str | None = None,
 ) -> str:
     """Build the initial user message for a fresh session.
 
@@ -1560,17 +1603,30 @@ def _build_initial_user_msg(
     stage's own system prompt, not here. Injected here (rather than after research) so it
     is part of the persisted initial message and replays verbatim on an awaiting_input
     resume.
+
+    ``first_msg`` is the per-job injection's third field (``jsa/schema/injection.py``),
+    appended LAST behind an explicit label so the boundary between JD data and
+    user-authored instructions is unambiguous to the model. Absent (the default) the
+    message is byte-identical to the pre-injection shape — no trailing newline, no
+    empty label.
     """
     brief_part = f"{brief}\n\n" if brief is not None else ""
     skeleton = ""
     if cv_block is not None:
         label, content = cv_block
         skeleton = f"{label}:\n{content}\n\n"
+    extra = ""
+    if first_msg:
+        extra = (
+            "\n\nADDITIONAL INSTRUCTIONS FROM THE USER (apply these to your work on "
+            f"this application):\n{first_msg}"
+        )
     return (
         f"{brief_part}"
         f"{skeleton}"
         f"JOB DESCRIPTION:\n{job.jd}\n\n"
         f"TIER: {job.tier}"
+        f"{extra}"
     )
 
 

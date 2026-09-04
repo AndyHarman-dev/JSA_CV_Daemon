@@ -8,7 +8,7 @@ export type IconName =
   | "alert" | "mail" | "phone" | "pin" | "bolt" | "server" | "inbox" | "doc" | "work"
   | "link" | "back" | "up" | "down" | "undo" | "redo" | "braces" | "spark" | "eye"
   | "copy" | "text" | "list" | "tag" | "cap" | "blocks" | "cols" | "globe" | "search" | "play"
-  | "pencil" | "star";
+  | "pencil" | "star" | "syringe";
 
 interface IconProps {
   name: IconName;
@@ -57,6 +57,8 @@ const PATHS: Record<IconName, string[]> = {
   play: [],
   pencil: ["M10.6 2.8a1.6 1.6 0 0 1 2.3 2.3L5.6 12.4l-3.1.8.8-3.1z", "M9.4 4l2.3 2.3"],
   star: ["M8 2.2l1.8 3.7 4.1.6-3 2.9.7 4.1L8 11.6l-3.6 1.9.7-4.1-3-2.9 4.1-.6z"],
+  // Every shape sits inside one rotate() group (see extraShapes), so nothing can live here.
+  syringe: [],
 };
 
 // Icons that mix paths with non-path primitives (rects/circles/lines) — rendered explicitly
@@ -114,6 +116,20 @@ function extraShapes(name: IconName): ReactNode {
       return <circle cx={6.5} cy={6.5} r={4.2} />;
     case "play":
       return <polygon points="5,3.4 12.5,8 5,12.6" fill="currentColor" stroke="none" />;
+    case "syringe":
+      // Rotated ~38deg for the design's diagonal "injecting" look. The rotation group has
+      // to wrap the paths too, so they live here rather than in PATHS above.
+      return (
+        <g transform="rotate(38 8 8)">
+          <path d="M1.2 6.3v3.4" />
+          <path d="M1.2 8h2" />
+          <rect x={3.2} y={6.3} width={6.6} height={3.4} rx={0.6} />
+          <path d="M5.4 6.3v3.4" />
+          <path d="M7.6 6.3v3.4" />
+          <path d="M9.8 8h4.4" />
+          <circle cx={14.8} cy={9.6} r={0.55} fill="currentColor" stroke="none" />
+        </g>
+      );
     default:
       return null;
   }

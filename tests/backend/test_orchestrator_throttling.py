@@ -90,6 +90,21 @@ def _gated_backend_class() -> type[_GatedBackend]:
     return Gated
 
 
+async def _shutdown(orch: Orchestrator, task: asyncio.Task) -> None:
+    """Cancel the dispatch loop AND reap the per-job tasks it spawned.
+
+    ``run()`` never awaits ``self._tasks``, so cancelling only the run task leaves every
+    ``_run_one`` it spawned alive — and these tests deliberately park them on a gate. A
+    leaked ``_run_one`` outlives its test and can eat a one-shot monkeypatch or fixture
+    flag a *later* test installed for itself (see this file's vanishing-``get_job`` probe).
+    """
+    task.cancel()
+    inflight = [t for t in list(orch._tasks.values()) if not t.done()]
+    for t in inflight:
+        t.cancel()
+    await asyncio.gather(task, *inflight, return_exceptions=True)
+
+
 async def _settle(orch: Orchestrator, cycles: int = 12) -> None:
     """Let the dispatch loop run: kick it and yield repeatedly.
 
@@ -142,7 +157,7 @@ class TestPerBackendCap:
             Gated.gate.set()
             orch._stopping = True
             orch.kick()
-            task.cancel()
+            await _shutdown(orch, task)
 
     async def test_saturated_backend_does_not_block_a_job_on_another_backend(
         self, session_factory
@@ -182,7 +197,7 @@ class TestPerBackendCap:
             Gated.gate.set()
             orch._stopping = True
             orch.kick()
-            task.cancel()
+            await _shutdown(orch, task)
 
     async def test_skipped_job_is_picked_up_after_a_completion(self, session_factory):
         """Starvation guard. A job skipped for saturation must run once a slot frees.
@@ -230,7 +245,7 @@ class TestPerBackendCap:
             Gated.gate.set()
             orch._stopping = True
             orch.kick()
-            task.cancel()
+            await _shutdown(orch, task)
 
     async def test_zero_means_unlimited_restores_today_behaviour(self, session_factory):
         """max_parallel_per_backend=0 → no per-backend cap; the global one is the only limit.
@@ -259,7 +274,7 @@ class TestPerBackendCap:
             Gated.gate.set()
             orch._stopping = True
             orch.kick()
-            task.cancel()
+            await _shutdown(orch, task)
 
     async def test_default_is_unlimited_so_existing_callers_are_unaffected(self):
         """The Orchestrator's own default must be the inert one (0), not the production 2."""
@@ -368,7 +383,7 @@ class TestSlotReleasePaths:
             repo.get_job = real_get_job  # type: ignore[assignment]
             orch._stopping = True
             orch.kick()
-            task.cancel()
+            await _shutdown(orch, task)
         assert job.id  # silence unused
 
     async def test_already_running_bailout_releases_the_slot(self, session_factory):
@@ -439,7 +454,7 @@ class TestSlotReleasePaths:
             orch_mod.transition = real_transition  # type: ignore[assignment]
             orch._stopping = True
             orch.kick()
-            task.cancel()
+            await _shutdown(orch, task)
 
 
 class TestDispatchStagger:

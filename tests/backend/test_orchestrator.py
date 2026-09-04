@@ -7,6 +7,7 @@ All tests use asyncio_mode = "auto" (configured in pyproject.toml).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import uuid4
@@ -115,19 +116,28 @@ async def _poll_job_state(
     target_state: JobState,
     timeout: float = 5.0,
     orch: Orchestrator | None = None,
+    settled: Callable[[Job], bool] | None = None,
 ) -> Job:
     """Poll the DB until job reaches target_state or timeout expires.
 
     When target_state is 'review' and orch is given, a job that parks at the CV gate
     (cv_review) is auto-approved (see _approve_cv) so the cover-letter lane starts — the
     two-lane pipeline no longer advances a job past the CV gate on its own.
+
+    ``settled`` is an optional extra condition the row must ALSO satisfy before the state
+    counts as reached. It exists because a bare state match is not always a terminal
+    match: a handler that writes across two transactions makes its intermediate row
+    durably readable between them, so a poll on the state alone can return on a row the
+    handler is still about to change (``_handle_session_expired`` commits
+    ``failed``/``retry_count=0`` before committing the ``soft_reset_job`` that follows).
+    It narrows *when the wait ends*, never what a test then asserts.
     """
     deadline = asyncio.get_event_loop().time() + timeout
     approved = False
     while True:
         async with factory() as s:
             job = await repo.get_job(s, job_id)
-        if job is not None and job.state == target_state:
+        if job is not None and job.state == target_state and (settled is None or settled(job)):
             return job
         if (
             not approved
@@ -146,12 +156,38 @@ async def _poll_job_state(
         await asyncio.sleep(0.05)
 
 
+async def _drain_inflight(orch: Orchestrator, timeout: float = 5.0) -> None:
+    """Wait for the per-job tasks ``Orchestrator.run()`` spawned but never awaits.
+
+    ``run()`` is ``while not self._stopping: ... await self.wakeup.wait()`` — it returns
+    as soon as it sees ``_stopping`` and does **not** await ``self._tasks``. So a
+    ``_run_one`` can still be mid-flight after the run task has been awaited, which bites
+    two ways: (a) it keeps writing to the DB, and ``_handle_session_expired`` in
+    particular commits its intermediate ``failed``/``retry_count=0`` state in a *separate*
+    transaction from the ``soft_reset_job`` that follows, so a test that stopped on
+    ``failed`` can read the row between the two commits; (b) the leaked task survives into
+    a later test, where it can consume a module-global monkeypatch or a one-shot fixture
+    flag that test set up for itself.
+
+    Wait for them to finish, then cancel and reap anything still parked.
+    """
+    inflight = [t for t in list(orch._tasks.values()) if not t.done()]
+    if not inflight:
+        return
+    _, pending = await asyncio.wait(inflight, timeout=timeout)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def _run_orchestrator_until(
     orch: Orchestrator,
     factory,
     job_ids: list[str],
     target_state: JobState,
     timeout: float = 10.0,
+    settled: Callable[[Job], bool] | None = None,
 ) -> None:
     """Run the orchestrator as a task, wait for all jobs to reach target_state, then stop."""
     task = asyncio.create_task(orch.run())
@@ -159,7 +195,7 @@ async def _run_orchestrator_until(
         await asyncio.gather(
             *[
                 asyncio.wait_for(
-                    _poll_job_state(factory, jid, target_state, orch=orch),
+                    _poll_job_state(factory, jid, target_state, orch=orch, settled=settled),
                     timeout=timeout,
                 )
                 for jid in job_ids
@@ -169,6 +205,7 @@ async def _run_orchestrator_until(
         orch._stopping = True
         orch.kick()
         await asyncio.wait_for(task, timeout=5.0)
+        await _drain_inflight(orch)
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +370,7 @@ class TestSemaphoreConcurrencyLimit:
         orch._stopping = True
         orch.kick()
         await asyncio.wait_for(orch_task, timeout=10.0)
+        await _drain_inflight(orch)
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +406,7 @@ class TestKickUnblocksLoop:
         orch._stopping = True
         orch.kick()
         await asyncio.wait_for(orch_task, timeout=5.0)
+        await _drain_inflight(orch)
 
         async with session_factory() as s:
             refreshed = await repo.get_job(s, job.id)
@@ -587,7 +626,17 @@ class TestGoogleSessionExpiredAutoRecovery:
             backend_factory=AlwaysExpiresBackend,
         )
 
-        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+        # `failed` alone is ambiguous here: _handle_session_expired commits
+        # failed/retry_count=0 in one transaction and the soft-reset in the NEXT one, so
+        # the FIRST expiry makes a `failed` row briefly readable on its way to `pending`.
+        # The terminal failure is the one where the auto-recovery has already been spent.
+        await _run_orchestrator_until(
+            orch,
+            session_factory,
+            [job.id],
+            JobState.failed,
+            settled=lambda j: j.retry_count >= 1,
+        )
 
         async with session_factory() as s:
             refreshed = await repo.get_job(s, job.id)

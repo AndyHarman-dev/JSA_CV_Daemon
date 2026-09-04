@@ -24,7 +24,7 @@ from jsa.agents.base import (
     ToolResult,
     ToolsUnsupported,
 )
-from jsa.agents.gemini_api import GeminiBackend
+from jsa.agents.gemini_api import GeminiBackend, _MAX_OUTPUT_TOKENS, _THINKING_BUDGET
 from jsa.agents.protocol import ProtocolError
 from jsa.agents.tool_spec import tools_for
 from jsa.db.models import Stage
@@ -676,7 +676,19 @@ class TestGeminiThinkingConfig:
             backend = GeminiBackend()
             await backend.start_session("sys", "hi")
         config = mock_client.post.call_args.kwargs["json"]["generationConfig"]
-        assert config["thinkingConfig"] == {"includeThoughts": True}
+        assert config["thinkingConfig"] == {
+            "includeThoughts": True,
+            "thinkingBudget": _THINKING_BUDGET,
+        }
+
+    async def test_thinking_budget_reserves_room_for_the_reply(self):
+        """Regression pin: the budget must stay strictly below the shared output
+        ceiling, so a fixed floor of _MAX_OUTPUT_TOKENS is always reserved for the
+        CV/cover-letter JSON regardless of how much the model wants to think — see
+        _reasoning_payload's docstring for the live-observed failure (a schema-valid
+        CV with a Summary section only and no Experience content) this guards
+        against. Do not "simplify" this back to an unset/dynamic thinkingBudget."""
+        assert 0 < _THINKING_BUDGET < _MAX_OUTPUT_TOKENS
 
     async def test_thinking_config_omitted_once_degraded(self):
         mock_client = _make_mock_client(_gemini_body(FINAL_RAW))

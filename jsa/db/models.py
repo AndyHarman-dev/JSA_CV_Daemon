@@ -59,6 +59,7 @@ class Job(Base):
     # deck id from cv_decks.json; NULL = use the default deck. Set pre-launch only.
     language: Mapped[str | None] = mapped_column(String(8), nullable=True)  # snapshot of the global language pref, set on LAUNCH; null until launched (falls back to the live global pref)
     fit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # agent's reason when state==unfit
+    injection: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON {prefix, postfix, first_msg}; NULL = none. See jsa/schema/injection.py
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

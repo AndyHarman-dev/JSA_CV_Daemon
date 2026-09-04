@@ -20,6 +20,27 @@ export interface CvDeckDTO {
   in_use_by: number;
 }
 
+
+// Per-job prompt overrides (jsa/schema/injection.py::PromptInjection). Server-normalized:
+// the API returns either null or an object whose fields are already stripped, so "has an
+// injection" is plain truthiness here — never a re-check for all-blank.
+export interface PromptInjectionDTO {
+  prefix: string;
+  postfix: string;
+  first_msg: string;
+}
+
+// One saved "dose" from the global preset library (jsa/store/injection_presets.py).
+// `saved_at` is client-supplied ISO-8601, display only — the server never generates it.
+export interface InjectionPresetDTO {
+  id: string;
+  name: string;
+  prefix: string;
+  postfix: string;
+  first_msg: string;
+  saved_at: string;
+}
+
 export interface JobDTO {
   id: string;
   company: string;
@@ -38,6 +59,8 @@ export interface JobDTO {
   effective_model: string | null;
   language: string | null;
   fit_reason: string | null;
+  // Null unless the user attached pre-launch prompt overrides (PUT .../injection).
+  injection: PromptInjectionDTO | null;
   error: string | null;
   retry_count: number;
   updated_at: string;

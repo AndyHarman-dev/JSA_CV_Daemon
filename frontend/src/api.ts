@@ -1,5 +1,12 @@
 import type {
-  JobDTO, FullJobDTO, Stage, CVDocument, TranscriptTurn, CvDeckDTO,
+  JobDTO,
+  FullJobDTO,
+  Stage,
+  CVDocument,
+  TranscriptTurn,
+  CvDeckDTO,
+  PromptInjectionDTO,
+  InjectionPresetDTO,
 } from "./types";
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -97,6 +104,18 @@ export const api = {
   launch(id: string): Promise<FullJobDTO> {
     return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}/launch`, {
       method: "POST",
+    });
+  },
+
+  // Attach (or clear) a job's pre-launch prompt overrides. Server-gated on `queued` (400
+  // otherwise) and returns the full job row, so the caller upserts the response rather than
+  // writing optimistically. The body model is extra="forbid" — send exactly these three
+  // fields, never a spread preset (its id/name/saved_at would 422).
+  putJobInjection(id: string, body: PromptInjectionDTO): Promise<FullJobDTO> {
+    return apiFetch<FullJobDTO>(`/api/jobs/${encodeURIComponent(id)}/injection`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
   },
 
@@ -296,6 +315,22 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ backend, model }),
+    });
+  },
+
+  // --- Prompt-injection presets, a.k.a. "doses" (global, not per-job) ---
+  // Both directions are enveloped as {presets: [...]} and the PUT is a whole-list replace
+  // (add/delete/reorder are all just a new array) — a bare array is a 422.
+
+  getInjectionPresets(): Promise<{ presets: InjectionPresetDTO[] }> {
+    return apiFetch<{ presets: InjectionPresetDTO[] }>("/api/injection-presets");
+  },
+
+  putInjectionPresets(presets: InjectionPresetDTO[]): Promise<{ presets: InjectionPresetDTO[] }> {
+    return apiFetch<{ presets: InjectionPresetDTO[] }>("/api/injection-presets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presets }),
     });
   },
 };
