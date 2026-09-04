@@ -363,7 +363,15 @@ export function DeckRail() {
                 onSetDefault={() => void setDefaultDeck(d.id)}
                 onBeginRename={() => beginRename(d.id, deckLabel(d))}
                 onDuplicate={() => void duplicateDeck(d.id)}
-                onDelete={() => void deleteDeck(d.id)}
+                onDelete={() => {
+                  // deleteDeck has no undo and, if this is the active deck, discards any
+                  // unsaved edit without a save attempt (saving a deck right before deleting
+                  // it would be pointless) — a confirm here is the only safeguard against a
+                  // stray click, for both a dirty active deck and any other deck alike.
+                  if (window.confirm(t("cvDecks.confirmDelete", { name: deckLabel(d) }))) {
+                    void deleteDeck(d.id);
+                  }
+                }}
                 onRenameDraftChange={setRenameDraft}
                 onRenameCommit={() => void renameDeck(d.id, renameDraft)}
                 onRenameCancel={cancelRename}

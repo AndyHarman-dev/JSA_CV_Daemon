@@ -261,6 +261,7 @@
   "cvDecks.untitled": "Untitled",
   "cvDecks.copySuffix": "copy",
   "cvDecks.discardDraft": "This base CV has unsaved changes that could not be saved. Discard them and continue?",
+  "cvDecks.confirmDelete": "Delete \"{name}\"? This cannot be undone.",
   "cvDecks.deckCount": "{n}",
   "baseCvPicker.title": "Base CV",
   "baseCvPicker.empty": "No base CVs yet. Create one in the Structure Editor to assign it here.",

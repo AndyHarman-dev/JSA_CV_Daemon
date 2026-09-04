@@ -129,6 +129,33 @@ describe("DeckRail", () => {
     expect(screen.queryByTestId("deck-rail-flyout")).not.toBeInTheDocument();
   });
 
+  it("clicking trash asks for confirmation, then calls deleteDeck only on OK", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<DeckRail />);
+    openRail();
+    fireEvent.mouseEnter(screen.getByTestId("deck-row-d2"));
+
+    await user.click(screen.getByTestId("deck-trash-d2"));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Frontend Deck"));
+    expect(useEditorStore.getState().deleteDeck).toHaveBeenCalledWith("d2");
+    confirmSpy.mockRestore();
+  });
+
+  it("does not call deleteDeck when the confirmation is cancelled", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<DeckRail />);
+    openRail();
+    fireEvent.mouseEnter(screen.getByTestId("deck-row-d2"));
+
+    await user.click(screen.getByTestId("deck-trash-d2"));
+
+    expect(useEditorStore.getState().deleteDeck).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
   it("clicking NEW BASE CV calls newDeck", async () => {
     const user = userEvent.setup();
     render(<DeckRail />);
@@ -158,6 +185,9 @@ describe("DeckRail", () => {
     "the %s button does not leak its click into the row's switchDeck",
     async (which) => {
       const user = userEvent.setup();
+      // trash now opens a window.confirm() — stub it so this generic leak-check doesn't
+      // depend on the dialog's outcome (jsdom's unmocked confirm() logs a console error).
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
       // Non-active row on purpose: a leaked click there is a real navigation, not a no-op.
       useEditorStore.setState({ railOpen: true });
       render(<DeckRail />);
@@ -166,6 +196,7 @@ describe("DeckRail", () => {
       await user.click(screen.getByTestId(`deck-${which}-d2`));
 
       expect(useEditorStore.getState().switchDeck).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
     }
   );
 });
