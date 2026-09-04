@@ -271,7 +271,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "fr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -545,7 +546,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "de": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -819,7 +821,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "pt": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1093,7 +1096,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "it": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1367,7 +1371,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "nl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1641,7 +1646,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "sv": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1915,7 +1921,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "pl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2189,7 +2196,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "ru": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2463,7 +2471,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "tr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2737,7 +2746,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "ar": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3011,7 +3021,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "he": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3285,7 +3296,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "zh": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3559,7 +3571,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "ko": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3833,7 +3846,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "hi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4107,7 +4121,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "id": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4381,7 +4396,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "ja": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4655,7 +4671,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "vi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4929,7 +4946,8 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   },
   "th": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -5203,6 +5221,7 @@
     "baseCvPicker.unassign": "71b209082a08793d6cd1c3954459a8c1cdb15bf93603589caa6b3bfcd0594d62",
     "baseCvPicker.assign": "d2786a27456d1362c8c5dc850bc79be92fc1a0972317fb98b9fcd9bae813ebff",
     "baseCvPicker.change": "303228481d92e000a768c77279c96e4ba72e7dc2e644ac5d50620b1bc5640dc7",
-    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5"
+    "baseCvPicker.default": "89dbf71048801678ca4abfbaa3ea8f7c651aae193357a3e23d68e21512cd07f5",
+    "cvDecks.deleteLocked": "d829d7d97f4ab002064f13f3dbbe429e57633b23520c0864f86ccb602b316f5d"
   }
 }

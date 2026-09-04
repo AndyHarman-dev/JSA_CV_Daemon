@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "PADRÃO",
   "cvDecks.delete": "Excluir",
+  "cvDecks.deleteLocked": "Em uso por {n} trabalho(s) — aprove, rejeite ou exclua-os primeiro",
   "cvDecks.discardDraft": "Este CV base tem alterações não salvas. Descartar e continuar?",
   "cvDecks.duplicate": "Duplicar",
   "cvDecks.newDeck": "NOVO CV BASE",

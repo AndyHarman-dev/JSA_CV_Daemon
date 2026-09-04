@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "DEFAULT",
   "cvDecks.delete": "Hapus",
+  "cvDecks.deleteLocked": "Sedang digunakan oleh {n} job — setujui, abaikan, atau hapus terlebih dahulu",
   "cvDecks.discardDraft": "CV dasar ini memiliki perubahan yang tidak disimpan. Buang perubahan ini dan lanjutkan?",
   "cvDecks.duplicate": "Duplikat",
   "cvDecks.newDeck": "CV DASAR BARU",

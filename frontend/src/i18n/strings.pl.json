@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "DOMYŚLNE",
   "cvDecks.delete": "Usuń",
+  "cvDecks.deleteLocked": "Używane przez {n} zadanie(nia) — zatwierdź, odrzuć lub usuń je najpierw",
   "cvDecks.discardDraft": "To CV ma niezapisane zmiany, których nie udało się zapisać. Odrzucić je i kontynuować?",
   "cvDecks.duplicate": "Duplikuj",
   "cvDecks.newDeck": "NOWE BAZOWE CV",

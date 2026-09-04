@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "MẶC ĐỊNH",
   "cvDecks.delete": "Xóa",
+  "cvDecks.deleteLocked": "Đang được sử dụng bởi {n} công việc — hãy phê duyệt, loại bỏ hoặc xóa chúng trước",
   "cvDecks.discardDraft": "CV cơ bản này có các thay đổi chưa được lưu. Bạn có muốn hủy bỏ và tiếp tục?",
   "cvDecks.duplicate": "Sao chép",
   "cvDecks.newDeck": "CV CƠ BẢN MỚI",

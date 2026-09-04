@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "デフォルト",
   "cvDecks.delete": "削除",
+  "cvDecks.deleteLocked": "{n}件のジョブで使用中 — 先に承認、却下、削除してください",
   "cvDecks.discardDraft": "このベースCVに保存されていない変更があります。破棄して続行しますか？",
   "cvDecks.duplicate": "複製",
   "cvDecks.newDeck": "新規ベースCV",

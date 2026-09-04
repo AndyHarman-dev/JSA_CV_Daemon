@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "ПО УМОЛЧАНИЮ",
   "cvDecks.delete": "Удалить",
+  "cvDecks.deleteLocked": "Используется {n} задач(и) — сначала одобрите, отклоните или удалите их",
   "cvDecks.discardDraft": "У этого основного CV есть несохраненные изменения. Отменить их и продолжить?",
   "cvDecks.duplicate": "Дублировать",
   "cvDecks.newDeck": "НОВОЕ ОСНОВНОЕ CV",

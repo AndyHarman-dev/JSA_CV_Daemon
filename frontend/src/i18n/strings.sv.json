@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "STANDARD",
   "cvDecks.delete": "Ta bort",
+  "cvDecks.deleteLocked": "Används av {n} jobb — godkänna, avfärda eller ta bort dem först",
   "cvDecks.discardDraft": "Det här grund-CV:et har osparade ändringar som inte kunde sparas. Vill du förkasta dem och fortsätta?",
   "cvDecks.duplicate": "Duplicera",
   "cvDecks.newDeck": "NYTT GRUND-CV",

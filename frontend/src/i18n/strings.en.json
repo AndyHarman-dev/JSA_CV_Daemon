@@ -256,6 +256,7 @@
   "cvDecks.rename": "Rename",
   "cvDecks.duplicate": "Duplicate",
   "cvDecks.delete": "Delete",
+  "cvDecks.deleteLocked": "In use by {n} job(s) — approve, dismiss or delete them first",
   "cvDecks.setDefault": "Set as default",
   "cvDecks.default": "DEFAULT",
   "cvDecks.untitled": "Untitled",

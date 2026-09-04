@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "ค่าเริ่มต้น",
   "cvDecks.delete": "ลบ",
+  "cvDecks.deleteLocked": "ใช้งานโดย {n} งาน — อนุมัติ ยกเลิก หรือลบจนหมดก่อน",
   "cvDecks.discardDraft": "CV ฐานนี้มีการเปลี่ยนแปลงที่ยังไม่บันทึก ไม่สามารถบันทึกได้ คุณต้องการละทิ้งและดำเนินการต่อหรือไม่",
   "cvDecks.duplicate": "ทำซ้ำ",
   "cvDecks.newDeck": "CV ฐานใหม่",

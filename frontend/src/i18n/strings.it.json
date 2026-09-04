@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "PREDEFINITO",
   "cvDecks.delete": "Elimina",
+  "cvDecks.deleteLocked": "In uso da {n} job(s) — approva, scarta o elimina prima",
   "cvDecks.discardDraft": "Questo CV base ha modifiche non salvate. Scartarle e continuare?",
   "cvDecks.duplicate": "Duplica",
   "cvDecks.newDeck": "NUOVO CV BASE",

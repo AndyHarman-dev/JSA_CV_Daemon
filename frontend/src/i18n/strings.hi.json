@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "डिफ़ॉल्ट",
   "cvDecks.delete": "हटाएं",
+  "cvDecks.deleteLocked": "{n} जॉब(ओं) द्वारा उपयोग में — पहले उन्हें स्वीकार करें, खारिज करें या हटाएं",
   "cvDecks.discardDraft": "इस आधार CV में असहेजे गए परिवर्तन हैं। उन्हें छोड़ें और जारी रखें?",
   "cvDecks.duplicate": "डुप्लिकेट करें",
   "cvDecks.newDeck": "नया आधार CV",

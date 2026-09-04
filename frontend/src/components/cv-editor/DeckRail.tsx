@@ -76,6 +76,9 @@ function DeckRow({
   // back to label mode and React removes the focused input) commit the draft as a rename.
   const suppressBlurRef = useRef(false);
   const showStar = hovered || isDefault;
+  // `?? 0` so a deck object from an older cached response (or a test fixture predating
+  // the field) reads as unlocked rather than NaN-comparing its way into a disabled state.
+  const inUse = deck.in_use_by ?? 0;
 
   return (
     <div
@@ -213,17 +216,36 @@ function DeckRow({
                 <Icon name="copy" size={12} />
               </button>
               {canDelete && (
+                // Still rendered when jobs hold the deck, but disabled and explained —
+                // hiding it would leave the user hunting for a control that is simply
+                // unavailable right now. The server refuses this with a 409 regardless
+                // (see routes_cv_decks.delete_cv_deck); this is the matching affordance,
+                // not the enforcement.
                 <button
                   type="button"
                   data-testid={`deck-trash-${deck.id}`}
-                  title={t("cvDecks.delete")}
-                  aria-label={t("cvDecks.delete")}
+                  disabled={inUse > 0}
+                  title={
+                    inUse > 0
+                      ? t("cvDecks.deleteLocked", { n: String(inUse) })
+                      : t("cvDecks.delete")
+                  }
+                  aria-label={
+                    inUse > 0
+                      ? t("cvDecks.deleteLocked", { n: String(inUse) })
+                      : t("cvDecks.delete")
+                  }
                   className="cvbtn"
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (inUse > 0) return;
                     onDelete();
                   }}
-                  style={actionBtnStyle(T.danger)}
+                  style={{
+                    ...actionBtnStyle(inUse > 0 ? T.ink3 : T.danger),
+                    opacity: inUse > 0 ? 0.4 : undefined,
+                    cursor: inUse > 0 ? "not-allowed" : "pointer",
+                  }}
                 >
                   <Icon name="trash" size={12} />
                 </button>

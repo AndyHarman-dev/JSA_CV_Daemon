@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "VARSAYILAN",
   "cvDecks.delete": "Sil",
+  "cvDecks.deleteLocked": "{n} iş tarafından kullanılmakta — Önce bunları onayla, reddet veya sil",
   "cvDecks.discardDraft": "Bu temel CV'nin kaydedilemeyen değişiklikleri var. Atıp devam etmek istiyor musunuz?",
   "cvDecks.duplicate": "Kopyala",
   "cvDecks.newDeck": "YENİ TEMEL CV",

@@ -661,10 +661,31 @@ null}`) returns 409 unless `job.state == queued`; 404 for an unknown job; 422 fo
 unknown deck id or an empty slot. Assigning later would silently not affect stages that
 already replayed.
 
-**Deleting a deck clears the assignment on undispatched jobs only.**
+**A deck a job still holds cannot be deleted — 409, not a silent fallback.**
+`DELETE /api/cv-decks/{id}` first counts holders via `repo.count_jobs_holding_deck` and
+refuses with 409 if there are any. `repo.DECK_LOCK_STATES` is the single source of truth
+for "holds", and the rule behind it is **"can this job still open a FRESH session against
+the deck file?"**, not "is it running right now" — because a stage only re-reads the deck
+when it has no `Message` rows for that job+stage (`stages.py`'s fresh-vs-resume branch).
+So a mid-flight job is immune to the file vanishing *until* something wipes its Messages,
+which `backend_switch_reset` does on a BF-19 backend switch or a model-ladder hop. Hence
+`pending` holds (it is that rewind's landing state) and `failed` holds (a re-run resets it
+to `pending` and re-dispatches fresh); `queued`, `approved` and `dismissed` release.
+Without this, deleting a deck under a running job left `base_cv_id` naming a file that no
+longer existed, and the next fresh session resolved to the **default** deck instead — the
+job genuinely rebuilt from a different base CV, with only a `resolve_path` warning to show
+for it. Approving, dismissing or deleting the holder is the intended way out; the rail
+disables its trash icon and says how many jobs hold the deck, from `in_use_by` on the deck
+DTO (`GET /api/cv-decks`, one grouped `jobs` query for all decks — not one per row).
+**Editing is deliberately NOT gated**: a job that has already started has the CV baked
+into its `Message` rows, so a `PUT` cannot reach it mid-flight anyway.
+
+**Deleting an unheld deck still clears the assignment on undispatched jobs.**
 `repo.clear_base_cv_assignments(session, deck_id)` nulls `base_cv_id` where `state IN
-(queued, pending)` and returns the count; `review`/`approved`/`failed` rows keep their
-value as a record of which base CV they were actually built from. Routes never write raw
+(queued, pending)` and returns the count; graduated rows keep their value as a record of
+which base CV built them. `pending` stays in that WHERE clause even though the lock above
+makes it unreachable through the route — it closes the window between the holder count and
+`delete_deck`, where a `queued` job can be LAUNCHed into `pending`. Routes never write raw
 SQL for this — go through `jsa/db/repo.py`.
 
 **Zero decks is a legal state — there is deliberately no backend last-deck guard.**

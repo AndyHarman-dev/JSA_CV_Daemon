@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "STANDARD",
   "cvDecks.delete": "Löschen",
+  "cvDecks.deleteLocked": "Von {n} Job(s) verwendet — genehmigen, verwerfen oder zuerst löschen",
   "cvDecks.discardDraft": "Diese BASIS-CV hat ungespeicherte Änderungen, die nicht gespeichert werden konnten. Verwerfen und fortfahren?",
   "cvDecks.duplicate": "Duplizieren",
   "cvDecks.newDeck": "NEUE BASIS-CV",

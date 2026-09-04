@@ -15,6 +15,9 @@ export interface CvDeckDTO {
   auto_title: string | null;
   has_cv: boolean;
   is_default: boolean;
+  // How many jobs currently hold this deck (repo.DECK_LOCK_STATES). Non-zero => DELETE
+  // answers 409 and the rail's trash icon is disabled.
+  in_use_by: number;
 }
 
 export interface JobDTO {

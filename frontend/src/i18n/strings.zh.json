@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "默认",
   "cvDecks.delete": "删除",
+  "cvDecks.deleteLocked": "已被 {n} 个工作占用——请先批准、驳回或删除它们",
   "cvDecks.discardDraft": "此基础简历有未保存的更改。是否放弃这些更改并继续?",
   "cvDecks.duplicate": "复制",
   "cvDecks.newDeck": "新建基础简历",

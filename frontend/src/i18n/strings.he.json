@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "ברירת מחדל",
   "cvDecks.delete": "מחק",
+  "cvDecks.deleteLocked": "בשימוש ל-{n} משימה/משימות — אשר, דחה או מחק אותן תחילה",
   "cvDecks.discardDraft": "קורות חיים בסיס זה כוללים שינויים שלא יכלו להישמר. לא להשמירם ולהמשיך?",
   "cvDecks.duplicate": "שכפול",
   "cvDecks.newDeck": "קורות חיים בסיס חדש",

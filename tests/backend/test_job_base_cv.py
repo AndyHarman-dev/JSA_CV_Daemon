@@ -353,18 +353,26 @@ class TestDeleteDeckClearsAssignments:
     async def test_delete_clears_undispatched_and_spares_dispatched(
         self, client, db, settings
     ):
+        """Once the delete is *allowed*, the assignment cleanup still runs as before.
+
+        This test used to include a `pending` holder too. It no longer can: `pending` is
+        in `repo.DECK_LOCK_STATES`, so such a job makes the DELETE a 409 and the cleanup
+        never runs at all (see TestDeckDeleteLock). `pending` deliberately stays in
+        `clear_base_cv_assignments`' own WHERE clause regardless — it closes the window
+        between this route's holder count and `delete_deck`, where a `queued` job can be
+        LAUNCHed into `pending` and would otherwise keep a dangling id. That behaviour is
+        pinned directly at the repo level above, without the route in the way.
+        """
         deck_id = await _make_deck(settings)
         other_deck = await _make_deck(settings)
 
         queued = await _insert_job(db, job_id="1111111111111111", state=JobState.queued)
-        pending = await _insert_job(db, job_id="2222222222222222", state=JobState.pending)
         approved = await _insert_job(db, job_id="3333333333333333", state=JobState.approved)
         untouched = await _insert_job(db, job_id="4444444444444444", state=JobState.queued)
 
         async with db() as s:
             for job, deck in (
-                (queued, deck_id), (pending, deck_id),
-                (approved, deck_id), (untouched, other_deck),
+                (queued, deck_id), (approved, deck_id), (untouched, other_deck),
             ):
                 row = await repo.get_job(s, job.id)
                 row.base_cv_id = deck
@@ -375,8 +383,7 @@ class TestDeleteDeckClearsAssignments:
 
         async with db() as s:
             assert (await repo.get_job(s, queued.id)).base_cv_id is None
-            assert (await repo.get_job(s, pending.id)).base_cv_id is None
-            # A dispatched job keeps the record of which base CV it was built from.
+            # A dispatched-and-graduated job keeps the record of which base CV built it.
             assert (await repo.get_job(s, approved.id)).base_cv_id == deck_id
             # A job pointing at a different deck is never touched.
             assert (await repo.get_job(s, untouched.id)).base_cv_id == other_deck
@@ -390,3 +397,144 @@ class TestDeleteDeckClearsAssignments:
         assert resp.status_code == 204
         async with db() as s:
             assert (await repo.get_job(s, job.id)).base_cv_id is None
+
+
+# ---------------------------------------------------------------------------
+# Deck delete-lock: a deck a job still holds cannot be removed
+# ---------------------------------------------------------------------------
+
+
+class TestDeckDeleteLock:
+    """`DELETE /api/cv-decks/{id}` is refused while any job still holds the deck.
+
+    This is what closes the divergence the Phase 7 review found: a job whose deck was
+    deleted mid-flight keeps `base_cv_id` pointing at it, and a later BF-19 backend
+    switch / model-ladder hop wipes its Messages and forces a FRESH session — which
+    re-reads the deck file, finds it gone, and silently falls back to the DEFAULT deck.
+    The job is then genuinely built from a different base CV than its own row records.
+    Blocking the delete removes the precondition entirely.
+
+    `repo.DECK_LOCK_STATES` is the source of truth for which states hold; the two
+    parametrized tests below are the executable form of it, so adding a JobState without
+    deciding which side it falls on will show up here.
+    """
+
+    HOLDING = [
+        JobState.pending,       # also the BF-19 rewind's landing state
+        JobState.running,
+        JobState.awaiting_input,
+        JobState.fit_done,
+        JobState.unfit,
+        JobState.cv_review,
+        JobState.cv_done,
+        JobState.cl_done,
+        JobState.review,
+        JobState.failed,        # a re-run resets to pending and opens a fresh session
+    ]
+    RELEASING = [
+        JobState.queued,        # never dispatched — assignment is just cleared
+        JobState.approved,
+        JobState.dismissed,
+    ]
+
+    @pytest.mark.parametrize("state", HOLDING)
+    async def test_delete_is_refused_while_a_job_holds_the_deck(
+        self, client, db, settings, state
+    ):
+        deck_id = await _make_deck(settings)
+        job = await _insert_job(db, state=state)
+        async with db() as session:
+            job = await repo.get_job(session, job.id)
+            await repo.set_job_base_cv(session, job, deck_id)
+
+        resp = await client.delete(f"/api/cv-decks/{deck_id}")
+        assert resp.status_code == 409, f"{state} should hold the deck"
+        assert "still in use" in resp.json()["detail"]
+
+        # ...and the deck really is still there, index and file both.
+        index = await cv_decks.load_index(settings)
+        assert [m.id for m in index.decks] == [deck_id]
+        assert cv_decks.deck_path(settings, deck_id).exists()
+
+    @pytest.mark.parametrize("state", RELEASING)
+    async def test_delete_succeeds_once_the_job_has_released(
+        self, client, db, settings, state
+    ):
+        deck_id = await _make_deck(settings)
+        job = await _insert_job(db, state=state)
+        async with db() as session:
+            job = await repo.get_job(session, job.id)
+            await repo.set_job_base_cv(session, job, deck_id)
+
+        resp = await client.delete(f"/api/cv-decks/{deck_id}")
+        assert resp.status_code == 204, f"{state} should not hold the deck"
+        assert [m.id for m in (await cv_decks.load_index(settings)).decks] == []
+
+    async def test_approving_the_last_holder_unblocks_the_delete(
+        self, client, db, settings
+    ):
+        """The user-facing escape hatch: graduate the job, then the deck is removable."""
+        deck_id = await _make_deck(settings)
+        job = await _insert_job(db, state=JobState.review)
+        async with db() as session:
+            job = await repo.get_job(session, job.id)
+            await repo.set_job_base_cv(session, job, deck_id)
+
+        assert (await client.delete(f"/api/cv-decks/{deck_id}")).status_code == 409
+
+        async with db() as session:
+            job = await repo.get_job(session, job.id)
+            job.state = JobState.approved
+            await session.commit()
+
+        assert (await client.delete(f"/api/cv-decks/{deck_id}")).status_code == 204
+
+    async def test_only_the_held_deck_is_locked(self, client, db, settings):
+        """A job holding deck A must not lock unrelated deck B."""
+        held = await _make_deck(settings)
+        free = await _make_deck(settings)
+        job = await _insert_job(db, state=JobState.running)
+        async with db() as session:
+            job = await repo.get_job(session, job.id)
+            await repo.set_job_base_cv(session, job, held)
+
+        assert (await client.delete(f"/api/cv-decks/{free}")).status_code == 204
+        assert (await client.delete(f"/api/cv-decks/{held}")).status_code == 409
+
+    async def test_editing_a_held_deck_is_still_allowed(self, client, db, settings):
+        """Only removal is gated — a running job has its CV baked into its Message rows,
+        so a PUT cannot reach it mid-flight and there is nothing to protect it from."""
+        deck_id = await _make_deck(settings)
+        job = await _insert_job(db, state=JobState.running)
+        async with db() as session:
+            job = await repo.get_job(session, job.id)
+            await repo.set_job_base_cv(session, job, deck_id)
+
+        resp = await client.put(
+            f"/api/cv-decks/{deck_id}", json={"structured": _VALID_CV}
+        )
+        assert resp.status_code == 200
+        assert (await client.patch(
+            f"/api/cv-decks/{deck_id}", json={"name": "Renamed"}
+        )).status_code == 200
+
+    async def test_list_reports_in_use_by_per_deck(self, client, db, settings):
+        held = await _make_deck(settings)
+        free = await _make_deck(settings)
+        for n, jid in enumerate(("1111111111111111", "2222222222222222")):
+            job = await _insert_job(db, state=JobState.running, job_id=jid, link=f"u{n}")
+            async with db() as session:
+                job = await repo.get_job(session, job.id)
+                await repo.set_job_base_cv(session, job, held)
+
+        decks = {d["id"]: d for d in (await client.get("/api/cv-decks")).json()["decks"]}
+        assert decks[held]["in_use_by"] == 2
+        assert decks[free]["in_use_by"] == 0
+
+    async def test_a_job_with_no_assignment_locks_nothing(self, client, db, settings):
+        """An unassigned job resolves to the default deck at stage time but does not
+        pin it — `base_cv_id IS NULL` must never be counted as a holder."""
+        deck_id = await _make_deck(settings)
+        await _insert_job(db, state=JobState.running)
+
+        assert (await client.delete(f"/api/cv-decks/{deck_id}")).status_code == 204

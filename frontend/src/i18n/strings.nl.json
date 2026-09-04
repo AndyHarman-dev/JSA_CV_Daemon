@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "STANDAARD",
   "cvDecks.delete": "Verwijderen",
+  "cvDecks.deleteLocked": "Gebruikt door {n} job(s) — eerst goedkeuren, afwijzen of verwijderen",
   "cvDecks.discardDraft": "Deze basis CV heeft wijzigingen die niet kunnen worden opgeslagen. Negeren en doorgaan?",
   "cvDecks.duplicate": "Dupliceren",
   "cvDecks.newDeck": "NIEUWE BASIS CV",

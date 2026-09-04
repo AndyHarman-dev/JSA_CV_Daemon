@@ -54,13 +54,22 @@ def _settings(request: Request):
     return request.app.state.settings
 
 
-def _deck_dict(meta: DeckMeta, default_id: str | None) -> dict:
+def _deck_dict(meta: DeckMeta, default_id: str | None, in_use_by: int = 0) -> dict:
+    """Serialize one deck. ``in_use_by`` is how many jobs currently *hold* it.
+
+    "Hold" is `repo.DECK_LOCK_STATES` — see that constant for why `pending` and `failed`
+    are in it. A non-zero count means DELETE will answer 409, and it is what the rail
+    reads to disable its trash icon. It defaults to 0 because the create/duplicate
+    responses describe a deck id that was minted microseconds earlier: no job can
+    reference it yet, so a query would be a guaranteed-zero round-trip.
+    """
     return {
         "id": meta.id,
         "name": meta.name,
         "auto_title": meta.auto_title,
         "has_cv": meta.has_cv,
         "is_default": meta.id == default_id,
+        "in_use_by": in_use_by,
     }
 
 
@@ -72,8 +81,17 @@ async def list_cv_decks(request: Request) -> dict:
     single index read: it must never fan out into one file read per deck.
     """
     index = await cv_decks.load_index(_settings(request))
+    # One grouped query for every deck at once — never one per row (see
+    # repo.count_jobs_holding_decks). This is a `jobs` query, not a deck-file read, so
+    # the "single index read" contract above is untouched.
+    sf = request.app.state.session_factory
+    async with sf() as session:
+        held = await repo.count_jobs_holding_decks(session)
     return {
-        "decks": [_deck_dict(meta, index.default_id) for meta in index.decks],
+        "decks": [
+            _deck_dict(meta, index.default_id, held.get(meta.id, 0))
+            for meta in index.decks
+        ],
         "default_id": index.default_id,
     }
 
@@ -151,7 +169,12 @@ async def patch_cv_deck(request: Request, deck_id: str, body: PatchDeckBody) -> 
     meta = next((m for m in index.decks if m.id == deck_id), None)
     if meta is None:
         raise HTTPException(status_code=404, detail=f"unknown deck id: {deck_id!r}")
-    return {"deck": _deck_dict(meta, index.default_id)}
+    # Unlike create/duplicate, this describes a pre-existing deck that jobs may already
+    # hold, so the count has to be real — the rail renders this response directly.
+    sf = request.app.state.session_factory
+    async with sf() as session:
+        in_use_by = await repo.count_jobs_holding_deck(session, deck_id)
+    return {"deck": _deck_dict(meta, index.default_id, in_use_by)}
 
 
 @router.post("/api/cv-decks/{deck_id}/duplicate", status_code=201)
@@ -178,6 +201,24 @@ async def delete_cv_deck(request: Request, deck_id: str) -> None:
         cv_decks.deck_path(settings, deck_id)  # format check only — 400 on malformed id
     except InvalidDeckId as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Refuse to delete a deck a job still holds. Without this, a job that later opens a
+    # fresh session (a BF-19 backend switch or model-ladder hop wipes its Messages and
+    # rewinds it) silently resolves to the DEFAULT deck while `base_cv_id` still records
+    # the deleted one — the job is genuinely rebuilt from a different base CV with only a
+    # warning log to show for it. Editing the deck stays unrestricted; only removal is
+    # gated. See repo.DECK_LOCK_STATES for which states hold and why.
+    sf = request.app.state.session_factory
+    async with sf() as session:
+        holders = await repo.count_jobs_holding_deck(session, deck_id)
+    if holders:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This base CV is still in use by {holders} job(s). Approve, dismiss or "
+                "delete them first, then remove it."
+            ),
+        )
 
     await cv_decks.delete_deck(settings, deck_id)
 

@@ -24,8 +24,8 @@ vi.mock("../api", () => ({
 const REAL_DECK_LABEL = useEditorStore.getState().deckLabel;
 
 const DECKS: CvDeckDTO[] = [
-  { id: "d1", name: "Backend Focus", auto_title: "Jane Doe", has_cv: true, is_default: true },
-  { id: "d2", name: null, auto_title: "Frontend Deck", has_cv: true, is_default: false },
+  { id: "d1", name: "Backend Focus", auto_title: "Jane Doe", has_cv: true, is_default: true, in_use_by: 0 },
+  { id: "d2", name: null, auto_title: "Frontend Deck", has_cv: true, is_default: false, in_use_by: 0 },
 ];
 
 // Full reset of the deck slice for each test. Network-hitting deck actions (switchDeck,
@@ -70,6 +70,45 @@ describe("DeckRail", () => {
     expect(screen.getByTestId("deck-row-d2")).toBeInTheDocument();
     expect(screen.getByText("Backend Focus")).toBeInTheDocument();
     expect(screen.getByText("Frontend Deck")).toBeInTheDocument();
+  });
+
+  it("disables the trash icon on a deck jobs still hold, and explains why", async () => {
+    // The server refuses this with a 409 regardless (routes_cv_decks.delete_cv_deck);
+    // this is the matching affordance. It stays rendered rather than hidden so the user
+    // can see *why* it is unavailable instead of hunting for a missing control.
+    const user = userEvent.setup();
+    seed({
+      decks: [
+        { ...DECKS[0], in_use_by: 2 },
+        DECKS[1],
+      ],
+    });
+    render(<DeckRail />);
+    openRail();
+    fireEvent.mouseEnter(screen.getByTestId("deck-row-d1"));
+
+    const trash = screen.getByTestId("deck-trash-d1");
+    expect(trash).toBeDisabled();
+    expect(trash).toHaveAttribute(
+      "title",
+      "In use by 2 job(s) — approve, dismiss or delete them first"
+    );
+
+    await user.click(trash);
+    expect(useEditorStore.getState().deleteDeck).not.toHaveBeenCalled();
+  });
+
+  it("leaves the trash icon live on a deck no job holds", async () => {
+    const user = userEvent.setup();
+    render(<DeckRail />);
+    openRail();
+    fireEvent.mouseEnter(screen.getByTestId("deck-row-d2"));
+
+    const trash = screen.getByTestId("deck-trash-d2");
+    expect(trash).not.toBeDisabled();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(trash);
+    expect(useEditorStore.getState().deleteDeck).toHaveBeenCalledWith("d2");
   });
 
   it("marks the active deck's row with the accent bar", () => {

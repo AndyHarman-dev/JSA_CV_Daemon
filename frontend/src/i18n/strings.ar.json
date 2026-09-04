@@ -88,6 +88,7 @@
   "cvDecks.deckCount": "{n}",
   "cvDecks.default": "افتراضي",
   "cvDecks.delete": "حذف",
+  "cvDecks.deleteLocked": "قيد الاستخدام من قبل {n} وظيفة — وافق أو ألغِ أو احذف أولاً",
   "cvDecks.discardDraft": "هذه السيرة الذاتية الأساسية تحتوي على تغييرات لم يتم حفظها. هل تريد تجاهلها والمتابعة؟",
   "cvDecks.duplicate": "نسخ مكررة",
   "cvDecks.newDeck": "سيرة ذاتية أساسية جديدة",
