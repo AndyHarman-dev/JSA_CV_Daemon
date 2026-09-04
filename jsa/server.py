@@ -20,6 +20,7 @@ from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.events.bus import bus
 from jsa.api.routes_backend_models import router as backend_models_router
 from jsa.api.routes_cv_structure import router as cv_structure_router
+from jsa.api.routes_injection_presets import router as injection_presets_router
 from jsa.api.routes_jobs import router as jobs_router
 from jsa.api.routes_meta import router as meta_router
 from jsa.api.routes_preferences import router as preferences_router
@@ -312,6 +313,7 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
     app.include_router(cv_structure_router)
     app.include_router(preferences_router)
     app.include_router(backend_models_router)
+    app.include_router(injection_presets_router)
     app.include_router(ws_router)
 
     # Serve built frontend bundle if present.

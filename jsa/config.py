@@ -95,6 +95,13 @@ class Settings(BaseSettings):
         DB, derived from ``db_path`` the same way ``preferences_path`` is."""
         return self.db_path.parent / "backend_models.json"
 
+    @property
+    def injection_presets_path(self) -> Path:
+        """Global library of named prompt-injection presets ("doses"). Lives next to the DB,
+        derived from ``db_path`` the same way ``backend_models_path`` is. Global, not per-job —
+        the per-job injection itself rides the ``Job`` row, not this file."""
+        return self.db_path.parent / "injection_presets.json"
+
     @field_validator("backends", mode="before")
     @classmethod
     def _parse_backends(cls, v: object) -> list[str]:
