@@ -52,3 +52,24 @@ def cl_final(body: str | None = None) -> AgentReply:
 def fit_reply() -> AgentReply:
     """A passing fit-assessment verdict (plain text, not JSON)."""
     return AgentReply(raw="<<<FINAL>>>\nFIT\n<<<END>>>", content="FIT", kind="final")
+
+
+def tool_loop_miss() -> AgentReply:
+    """A throwaway FINAL reply that jsa/pipeline/tool_loop.py's PROMPT rung cannot
+    parse as a ``<<<TOOL_CALLS>>>`` block (``kind`` is ``"final"``, not
+    ``"tool_calls"``).
+
+    Since the revision-tool-use plan's Phase 5, ``run_stage`` always attempts
+    ``run_tool_loop`` first for a ``revising_cv``/``revising_cl`` job whose latest
+    Document already carries a ``.structured`` payload — which any job that
+    completed a REAL ``run_stage(..., Stage.cv_adjust`` or ``Stage.cover_letter, ...)``
+    call does (as opposed to a hand-inserted ``Document`` row with no ``structured``
+    field, which skips the tool loop entirely). A scripted backend with the default
+    ``supports_native_tools=False`` therefore enters the PROMPT rung, which consumes
+    ONE scripted reply attempting to parse it as a tool call; this reply always fails
+    that parse, so the loop gives up and `run_stage` falls through to rung 3 (today's
+    unmodified full-document-rewrite path), which then consumes the NEXT scripted
+    reply. Any test scripting a revision turn against a job with a real prior
+    ``structured`` Document must prepend one of these before the "real" reply.
+    """
+    return cv_final("tool-loop miss — ignored, rung 3 follows")

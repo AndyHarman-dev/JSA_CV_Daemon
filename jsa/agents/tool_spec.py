@@ -301,30 +301,75 @@ def to_openai_tools(specs: tuple[ToolSpec, ...]) -> list[dict[str, Any]]:
 def to_gemini_function_declarations(specs: tuple[ToolSpec, ...]) -> list[dict[str, Any]]:
     """Gemini ``functionDeclarations`` shape.
 
-    Strips ``additionalProperties`` (Gemini's restricted OpenAPI-subset schema
-    rejects it, the same restriction ``turn_models.py::inline_defs`` works around
-    for the structured-output schemas) — the schemas above have no ``$ref``/``$defs``
-    to begin with, so no other transform is needed.
+    Applies **two** transforms, both required because Gemini's
+    ``functionDeclarations.parameters`` is a restricted OpenAPI-3.0 subset rather
+    than full JSON Schema (the same family of restriction
+    ``turn_models.py::inline_defs`` works around for the structured-output
+    schemas). The schemas above have no ``$ref``/``$defs``, so inlining is not
+    among them.
+
+    1. **Strip ``additionalProperties``** — not a member of that subset.
+    2. **Rewrite union types to ``nullable``** — ``_NULLABLE_STRING`` and
+       ``_NULLABLE_INT`` are JSON Schema's ``{"type": ["string", "null"]}`` form,
+       which every other renderer on this module takes verbatim. OpenAPI 3.0 has
+       no union ``type``: it is a single value plus a sibling ``nullable: true``.
+
+    Transform 2 is not cosmetic and must not be dropped as a simplification. Left
+    unconverted, all 17 nullable properties in the revision vocabulary go out as
+    array-typed ``type``, Gemini answers ``400 INVALID_ARGUMENT``, and
+    ``gemini_api.py``'s ``_permanent_4xx`` correctly classifies that as
+    ``_ToolsRejected`` — so ``tool_loop.py`` downgrades native -> prompt on
+    **every single gemini revision**. The failure is invisible: it presents as a
+    working rung-2 degrade, not as an error, and the native rung is simply never
+    exercised on this backend.
+
+    Fixed here, in the gemini-local renderer, rather than by changing
+    ``_NULLABLE_STRING``/``_NULLABLE_INT`` themselves — those feed
+    ``to_anthropic_tools`` and ``to_openai_tools`` too, where the union form is
+    valid and already covered by tests.
+
+    Not verified against the live Gemini API (that needs a key and a real call).
+    The evidence is the shape asymmetry: the structured-output path reaches this
+    provider through ``anyOf``, a form confirmed accepted, while array-typed
+    ``type`` is a form nothing in this repo has ever put on a Gemini wire.
     """
     return [
         {
             "name": s.name,
             "description": s.description,
-            "parameters": _strip_additional_properties(s.parameters),
+            "parameters": _to_gemini_schema(s.parameters),
         }
         for s in specs
     ]
 
 
-def _strip_additional_properties(node: Any) -> Any:
+def _to_gemini_schema(node: Any) -> Any:
+    """Recursively strip ``additionalProperties`` and rewrite ``{"type": [T, "null"]}``
+    into ``{"type": T, "nullable": True}``. See the caller's docstring for why."""
     if isinstance(node, dict):
-        return {
-            k: _strip_additional_properties(v)
-            for k, v in node.items()
-            if k != "additionalProperties"
-        }
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if k == "additionalProperties":
+                continue
+            if k == "type" and isinstance(v, list):
+                non_null = [t for t in v if t != "null"]
+                # Only the nullable-scalar shape this module actually emits is
+                # convertible. A genuine multi-type union has no OpenAPI 3.0
+                # equivalent, so fail loudly rather than silently sending
+                # something Gemini will reject at request time.
+                if len(non_null) != 1:
+                    raise ValueError(
+                        f"cannot render union type {v!r} as a Gemini schema: "
+                        "OpenAPI 3.0 allows exactly one type plus 'nullable'"
+                    )
+                out["type"] = non_null[0]
+                if len(non_null) != len(v):
+                    out["nullable"] = True
+                continue
+            out[k] = _to_gemini_schema(v)
+        return out
     if isinstance(node, list):
-        return [_strip_additional_properties(v) for v in node]
+        return [_to_gemini_schema(v) for v in node]
     return node
 
 

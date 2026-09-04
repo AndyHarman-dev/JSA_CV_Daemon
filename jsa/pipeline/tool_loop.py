@@ -42,6 +42,7 @@ from jsa.agents.base import (
     ToolResult,
     ToolsUnsupported,
 )
+from jsa.agents.protocol import ProtocolError
 from jsa.agents.tool_spec import ToolSpec, tools_for
 from jsa.db.models import Job, Stage
 from jsa.events.bus import bus
@@ -127,6 +128,28 @@ async def _enter_rung(
 
 def _no_parseable_call(reply: AgentReply) -> bool:
     return reply.kind != "tool_calls" or not reply.tool_calls
+
+
+def _prompt_rung_results_message(results: list[ToolResult]) -> str:
+    """The PROMPT rung's transport for one round of tool outcomes.
+
+    The prompt rung has no wire tool channel, so ``backend.send_tool_results`` is not
+    available to it — the session was restored with no ``tools=``, which means
+    ``AgentBackend.send_tool_results``'s default raises ``NotImplementedError`` on a
+    sentinel-only backend (claude-cli/google-cli) and the native-capable backends
+    either raise (anthropic/gemini/opencode-zen) or POST an incoherent ``role="tool"``
+    round with no tools attached. None of those is a ``ToolsUnsupported``, so all of
+    them escape ``run_tool_loop``'s only catch and hard-fail the job.
+
+    Results therefore go back as an ordinary user message, which is exactly what the
+    prompt rung's contract promises the model
+    (``jsa/pipeline/prompt_assembly.py::_tool_contract``): "Tool results come back to
+    you as an ordinary user message containing a JSON array of results in the same
+    order." Pairing is by POSITION, not by call id — the prompt rung's ids are
+    synthesized locally (``protocol.py``) and were never shown to the model — so this
+    serializes the bare outcome dicts, in call order, and nothing else.
+    """
+    return json.dumps([result.content for result in results])
 
 
 def _dispatch_cv(copy: CvWorkingCopy, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -283,7 +306,15 @@ async def run_tool_loop(
             backend, mode, specs, history, external_id, build_system_prompt, instruction
         )
         unparseable = _no_parseable_call(reply)
-    except ToolsUnsupported:
+    except (ToolsUnsupported, ProtocolError):
+        # ProtocolError is caught alongside ToolsUnsupported because "the rung did not
+        # produce a parseable tool call" is precisely what this function documents
+        # itself as returning None for. On the prompt rung it is the EXPECTED failure
+        # shape: the contract tells the model not to emit <<<FINAL>>>/<<<NEED_INPUT>>>,
+        # so a model that ignores the tool grammar answers prose, the backend's nudge
+        # fails a second time, and parse_reply raises "no sentinel block". Letting that
+        # escape would hard-fail the job in Orchestrator._run_one's generic handler
+        # instead of falling through to rung 3.
         handle, reply, unparseable = None, None, True  # type: ignore[assignment]
 
     if mode == "native" and unparseable:
@@ -297,7 +328,7 @@ async def run_tool_loop(
                 backend, mode, specs, history, external_id, build_system_prompt, instruction
             )
             unparseable = _no_parseable_call(reply)
-        except ToolsUnsupported:
+        except (ToolsUnsupported, ProtocolError):  # see the entry rung's catch above
             unparseable = True
 
     if unparseable:
@@ -396,7 +427,49 @@ async def run_tool_loop(
             )
             return None  # exhausted without a terminal — rung 3 is the caller's job
 
-        reply = await backend.send_tool_results(handle, results)
+        try:
+            if mode == "native":
+                reply = await backend.send_tool_results(handle, results)
+            else:
+                # Prompt rung: no wire tool channel exists, so results go back as an
+                # ordinary user message — see _prompt_rung_results_message.
+                reply = await backend.send_message(
+                    handle, _prompt_rung_results_message(results)
+                )
+        except ProtocolError:
+            # The prompt rung's most likely failure: the model answered something the
+            # sentinel parser cannot read (it was told NOT to emit <<<FINAL>>>/
+            # <<<NEED_INPUT>>>, so plain prose raises "no sentinel block" after the
+            # backends' one nudge). Same containment as the entry rung below — this
+            # module's contract is "return None and let the caller run rung 3", never
+            # to let a parse failure escape into Orchestrator._run_one's generic
+            # `except Exception` and hard-fail the job.
+            logger.info(
+                "tool_loop: stage %s job %s got an unparseable reply mid-loop on the "
+                "%s rung; falling back to full-rewrite",
+                stage.value, job.id, mode,
+            )
+            return None
+        except ToolsUnsupported:
+            # A backend can reject tools mid-turn even after accepting them on the
+            # first round (a routing gateway like openrouter may resolve a different
+            # upstream per request). Deliberately NOT a mid-loop rung downgrade: the
+            # ladder's "one attempt per rung" is a per-TURN rule, and re-entering the
+            # prompt rung here would need a fresh working copy and a fresh budget —
+            # a second full attempt at the same turn, which the ladder does not
+            # sanction. Fall through to rung 3, the loop's existing give-up path.
+            #
+            # Catching it here is not optional: every backend's `_ToolsRejected`
+            # subclasses ToolsUnsupported (NOT AgentBackendUnavailable — see that
+            # class's docstring in jsa/agents/base.py), so without this catch a
+            # mid-turn tools rejection escapes into Orchestrator._run_one's generic
+            # `except Exception` and hard-fails the job with no BF-19 and no rung 3.
+            logger.info(
+                "tool_loop: stage %s job %s had tools rejected mid-loop on the %s rung; "
+                "falling back to full-rewrite",
+                stage.value, job.id, mode,
+            )
+            return None
 
     # A mid-loop reply that isn't kind=="tool_calls" and never went through a terminal
     # tool is a broken tool-mode turn (native/prompt tool_choice is meant to force one

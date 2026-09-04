@@ -438,3 +438,63 @@ class TestToolCallsBlock:
         raw = '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]'
         with pytest.raises(ProtocolError, match="unterminated block"):
             parse_reply(raw)
+
+
+class TestToolCallsPrecedence:
+    """A NEED_INPUT/FINAL block always outranks a TOOL_CALLS block, whatever the order.
+
+    TOOL_CALLS is matched unconditionally for every session on every backend (parse_reply
+    has no session context — the prompt rung passes no ``tools=`` kwarg, so a sentinel-only
+    backend gets no signal). Without this precedence rule the plain "multiple blocks -> take
+    the last" resolution lets a stray trailing TOOL_CALLS block in a NON-tool session
+    (cv_adjust / cover_letter / fit_assessment) silently outvote the model's real answer
+    and hard-fail on run_stage's unexpected-tool-call guard.
+    """
+
+    def test_trailing_tool_calls_does_not_outvote_a_leading_final(self):
+        raw = (
+            "<<<FINAL>>>\nThe real answer.\n<<<END>>>\n"
+            '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>'
+        )
+        reply = parse_reply(raw)
+        assert reply.kind == "final"
+        assert reply.content == "The real answer."
+
+    def test_trailing_tool_calls_does_not_outvote_a_leading_need_input(self):
+        raw = (
+            "<<<NEED_INPUT>>>\nWhich role?\n<<<END>>>\n"
+            '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>'
+        )
+        reply = parse_reply(raw)
+        assert reply.kind == "needs_input"
+        assert reply.question == "Which role?"
+
+    def test_leading_tool_calls_still_loses_to_a_trailing_final(self):
+        """Consistency check: precedence is by KIND, not position, in both directions."""
+        raw = (
+            '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>\n'
+            "<<<FINAL>>>\nThe real answer.\n<<<END>>>"
+        )
+        assert parse_reply(raw).kind == "final"
+
+    def test_last_of_several_non_tool_blocks_still_wins(self):
+        """The pre-existing rule-4 behavior is unchanged among NEED_INPUT/FINAL blocks."""
+        raw = (
+            "<<<FINAL>>>\nFirst.\n<<<END>>>\n"
+            '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>\n'
+            "<<<FINAL>>>\nSecond.\n<<<END>>>"
+        )
+        reply = parse_reply(raw)
+        assert reply.kind == "final"
+        assert reply.content == "Second."
+
+    def test_tool_calls_alone_still_parses_as_tool_calls(self):
+        """Constraint the fix must NOT break: a prompt-rung (rung 2) reply consisting only
+        of a TOOL_CALLS block must not raise ProtocolError("no sentinel block") — that is
+        what claude_cli/opencode_zen's _parse_with_nudge keys on, and a nudge here would
+        burn a turn re-prompting for a sentinel the model was correctly told not to emit.
+        """
+        raw = '<<<TOOL_CALLS>>>\n[{"name": "get_cv", "arguments": {}}]\n<<<END>>>'
+        reply = parse_reply(raw)
+        assert reply.kind == "tool_calls"
+        assert reply.tool_calls is not None and len(reply.tool_calls) == 1

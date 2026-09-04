@@ -29,6 +29,13 @@ inherited ``OpenAICompatBackend`` default of ``True`` and be wrong for a
 ``/messages`` model. ``jsa/pipeline/stages.py::_structured_schema_for`` already
 reads ``backend.supports_structured_output`` off an instance, so this works
 unmodified (verified via a repo-wide grep before landing this).
+
+``supports_native_tools`` follows the SAME instance-attribute rule, for the same
+documented negative result: forced tool-use does not take on the ``/messages`` path,
+so only ``"chat"`` models are wired for native tool calling. ``/chat`` inherits the
+whole ``tools``/``tool_choice``/``send_tool_results`` machinery from
+``OpenAICompatBackend`` for free; the ``/messages`` payload builder below never gains
+a tool field.
 """
 
 from __future__ import annotations
@@ -58,8 +65,10 @@ from jsa.agents.base import (
     OnChunk,
     OnRetry,
     SessionHandle,
+    ToolResult,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
+from jsa.agents.tool_spec import ToolSpec
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +151,16 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         self._protocol: Protocol = _PROTOCOL[resolved_model]
         # Instance-level override — see this module's docstring.
         self.supports_structured_output = self._protocol == "chat"
+        # Same instance-level rule, same trap, for exactly the same reason: the
+        # reference bake-off project found forced tool-use does NOT take on this
+        # gateway's /messages path (the model answers free text regardless), so only
+        # "chat" models are wired for native tools. A CLASS-level read
+        # (OpenCodeGoBackend.supports_native_tools) would see the inherited
+        # OpenAICompatBackend default of True and be wrong for every /messages
+        # instance — jsa/pipeline/tool_loop.py reads it off the instance
+        # (`getattr(backend, "supports_native_tools", False)`), which is what makes
+        # this safe. Do not "simplify" this back to a ClassVar.
+        self.supports_native_tools = self._protocol == "chat"
 
     def _system_content(self, system_prompt: str) -> str | list[dict]:
         """Speculative ``cache_control`` breakpoint for the ``/chat/completions``
@@ -164,10 +183,23 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
         on_retry: OnRetry | None = None,
+        tools: tuple[ToolSpec, ...] | None = None,
     ) -> tuple[OpenAICompatSessionHandle, AgentReply]:
         if self._protocol == "messages":
+            # `tools` is dropped here, and that is safe ONLY because
+            # supports_native_tools is False for this protocol (see __init__), so no
+            # caller ever supplies one. Asserted rather than silently ignored: the
+            # flag is an instance attribute someone could stomp, and a silently
+            # dropped tool vocabulary would look like a model that just never calls
+            # tools instead of a wiring bug.
+            assert tools is None, (
+                "opencode-go's /messages protocol is not wired for native tools "
+                "(supports_native_tools is False for this instance)"
+            )
             return await self._start_session_messages(system_prompt, initial_user_msg, on_chunk, on_retry)
-        return await super().start_session(system_prompt, initial_user_msg, structured_schema, on_chunk, on_retry)
+        return await super().start_session(
+            system_prompt, initial_user_msg, structured_schema, on_chunk, on_retry, tools
+        )
 
     async def restore_session(
         self,
@@ -175,10 +207,15 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         history: list[HistoryTurn],
         external_id: str | None,
         structured_schema: dict[str, Any] | None = None,
+        tools: tuple[ToolSpec, ...] | None = None,
     ) -> OpenAICompatSessionHandle:
         if self._protocol == "messages":
+            assert tools is None, (  # see start_session above
+                "opencode-go's /messages protocol is not wired for native tools "
+                "(supports_native_tools is False for this instance)"
+            )
             return await self._restore_session_messages(system_prompt, history)
-        return await super().restore_session(system_prompt, history, external_id, structured_schema)
+        return await super().restore_session(system_prompt, history, external_id, structured_schema, tools)
 
     async def send_message(
         self,
@@ -191,6 +228,21 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         if self._protocol == "messages":
             return await self._send_message_messages(handle, text, on_chunk, on_retry)
         return await super().send_message(handle, text, structured_schema, on_chunk, on_retry)
+
+    async def send_tool_results(
+        self, handle: SessionHandle, results: list[ToolResult]
+    ) -> AgentReply:
+        """Inherited verbatim for the ``/chat`` protocol; refused outright for
+        ``/messages``, which never gets tools attached in the first place (see
+        ``__init__``). Without this guard the inherited implementation would POST to
+        ``/chat/completions`` on a ``/messages`` model — a silent cross-protocol
+        request rather than a loud failure."""
+        if self._protocol == "messages":
+            raise NotImplementedError(
+                "opencode-go's /messages protocol does not support native tool "
+                "calling (supports_native_tools is False for this instance)"
+            )
+        return await super().send_tool_results(handle, results)
 
     # end_session is inherited unchanged from OpenAICompatBackend — both protocols
     # share the same handle shape, and clearing handle.messages is protocol-agnostic.
@@ -276,7 +328,13 @@ class OpenCodeGoBackend(OpenAICompatBackend):
         ``OpenAICompatBackend._call_api``'s degrade path (jsa/agents/
         _openai_compat.py), reused here because the ``/messages`` protocol does not
         go through that shared ``_call_api`` at all (see this module's docstring's
-        dual-protocol split)."""
+        dual-protocol split).
+
+        ``retry_transient`` is generic over its callable's return type (it had to
+        widen so ``_call_api_once`` could return ``str | list[dict]`` for a native
+        tool-call batch). Both call sites below bind that type variable to ``str``,
+        from ``_call_messages_api_once``'s own ``-> str``: this protocol never carries
+        tools, so no runtime change was needed here."""
         try:
             return await retry_transient(
                 lambda: self._call_messages_api_once(system_prompt, messages, on_chunk),

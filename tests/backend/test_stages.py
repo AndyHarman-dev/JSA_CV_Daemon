@@ -137,6 +137,25 @@ def _final_reply(marker: str = "Adjusted CV") -> AgentReply:
     return _raw_final(json.dumps(_cv_json(marker)))
 
 
+def _tool_loop_miss_reply() -> AgentReply:
+    """A prose FINAL reply that the tool-patching loop (jsa/pipeline/tool_loop.py)
+    cannot parse as a tool call (``kind`` is ``"final"``, not ``"tool_calls"``).
+
+    Since Phase 5, `run_stage` always attempts `run_tool_loop` first for a
+    `revising_cv`/`revising_cl` job whose latest Document already has a `.structured`
+    payload (any job that completed a real `run_stage(..., Stage.cv_adjust/
+    cover_letter, ...)` call, as opposed to a hand-inserted `Document` row with no
+    `structured` field, does). `FakeAgentBackend`'s default `supports_native_tools`
+    is False, so the loop enters the PROMPT rung, sends `instruction`, and consumes
+    ONE scripted reply attempting to parse it as a `<<<TOOL_CALLS>>>` block; any
+    ordinary FINAL reply fails that parse and the loop gives up, returning None so
+    `run_stage` falls through to rung 3 (today's unmodified full-rewrite path) —
+    which then consumes the NEXT scripted reply. Tests exercising a revision against
+    a job with a real prior `structured` Document must therefore prepend one of
+    these before the "real" scripted reply."""
+    return _raw_final(json.dumps(_cv_json("tool-loop miss — ignored, rung 3 follows")))
+
+
 def _cv_json_no_summary() -> dict:
     """A schema-valid CV with NO summary section (triggers the soft summary nudge)."""
     return {
@@ -673,7 +692,10 @@ class TestDocumentVersioning:
         transition(job_for_revision, JobState.running, Stage.revising_cv)
         await session.commit()
 
-        backend2 = FakeAgentBackend([_final_reply("# CV v2 (expanded)")])
+        # See _tool_loop_miss_reply's docstring: the first cv_adjust run above went
+        # through _handle_final for real, so this job's cv_adjust Document has a
+        # `.structured` payload — the tool loop is genuinely attempted here.
+        backend2 = FakeAgentBackend([_tool_loop_miss_reply(), _final_reply("# CV v2 (expanded)")])
         await run_stage(job_for_revision, backend2, Stage.revising_cv, session)
 
         docs_v2 = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)

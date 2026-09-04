@@ -37,7 +37,7 @@ from jsa.db.models import (
 from jsa.pipeline.stages import run_stage
 from jsa.pipeline.state_machine import transition
 from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
-from tests.backend.fakes.finals import cl_final, cv_final
+from tests.backend.fakes.finals import cl_final, cv_final, tool_loop_miss
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +190,13 @@ class TestRevisingCvUsesCvSessionId:
         backend = TrackingFakeBackend([
             cv_final(cv_content),          # cv_adjust reply
             cl_final(),                    # cover_letter reply
-            cv_final("REVISED_CV_MARKER"),  # revising_cv reply
+            # cv_adjust's Document now has a real `.structured` payload, so revising_cv
+            # genuinely attempts the tool loop first (prompt rung, since
+            # TrackingFakeBackend never sets supports_native_tools) — see
+            # tool_loop_miss's docstring. That attempt consumes one reply and gives up,
+            # then rung 3 (unchanged) consumes the next.
+            tool_loop_miss(),               # revising_cv: tool-loop attempt (discarded)
+            cv_final("REVISED_CV_MARKER"),  # revising_cv reply (rung 3)
         ])
 
         await run_stage(job, backend, Stage.cv_adjust, session)
@@ -231,13 +237,15 @@ class TestRevisingCvUsesCvSessionId:
 
         await run_stage(job_after_cl, backend, Stage.revising_cv, session)
 
-        # Assert restore_session was called with cv_session_id (not cl_session_id)
-        assert len(backend.restore_calls) == 1, (
-            f"Expected exactly 1 restore_session call, got {len(backend.restore_calls)}"
+        # Assert restore_session was called with cv_session_id (not cl_session_id) —
+        # TWO calls this time: the tool-loop attempt's restore, then rung 3's.
+        assert len(backend.restore_calls) == 2, (
+            f"Expected exactly 2 restore_session calls (tool-loop attempt + rung 3), "
+            f"got {len(backend.restore_calls)}"
         )
-        assert backend.restore_calls[0] == cv_session_id, (
-            f"restore_session should receive cv_session_id={cv_session_id!r}, "
-            f"got {backend.restore_calls[0]!r} (cl_session_id={cl_session_id!r})"
+        assert backend.restore_calls == [cv_session_id, cv_session_id], (
+            f"Both restore_session calls should receive cv_session_id={cv_session_id!r}, "
+            f"got {backend.restore_calls!r} (cl_session_id={cl_session_id!r})"
         )
 
         # Assert the new document contains the revised content (not CL content)
@@ -272,6 +280,10 @@ class TestRevisingClUsesClSessionId:
         backend = TrackingFakeBackend([
             cv_final("CV v1"),
             cl_final(),
+            # See tool_loop_miss's docstring: cover_letter's Document now has a real
+            # `.structured` payload, so revising_cl genuinely attempts the tool loop
+            # (prompt rung) first.
+            tool_loop_miss(),
             cl_final(
                 "This is the REVISED_CL_MARKER revision of the cover letter, rewritten to "
                 "better highlight the candidate's relevant production experience for this role."
@@ -310,13 +322,15 @@ class TestRevisingClUsesClSessionId:
 
         await run_stage(job_after_cl, backend, Stage.revising_cl, session)
 
-        # Assert restore_session was called with cl_session_id
-        assert len(backend.restore_calls) == 1, (
-            f"Expected exactly 1 restore_session call, got {len(backend.restore_calls)}"
+        # Assert restore_session was called with cl_session_id — TWO calls this time:
+        # the tool-loop attempt's restore, then rung 3's.
+        assert len(backend.restore_calls) == 2, (
+            f"Expected exactly 2 restore_session calls (tool-loop attempt + rung 3), "
+            f"got {len(backend.restore_calls)}"
         )
-        assert backend.restore_calls[0] == cl_session_id, (
-            f"restore_session should receive cl_session_id={cl_session_id!r}, "
-            f"got {backend.restore_calls[0]!r} (cv_session_id={cv_session_id!r})"
+        assert backend.restore_calls == [cl_session_id, cl_session_id], (
+            f"Both restore_session calls should receive cl_session_id={cl_session_id!r}, "
+            f"got {backend.restore_calls!r} (cv_session_id={cv_session_id!r})"
         )
 
         # Assert the new document is stored under cover_letter stage

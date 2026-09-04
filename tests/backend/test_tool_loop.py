@@ -453,3 +453,128 @@ class TestUnknownTool:
         result = await _run_cv(backend)
         assert result is not None
         assert result.tool_calls[0]["result"]["error"]["code"] == "bad_argument"
+
+
+class TestToolsRejectedMidLoop:
+    """A backend can accept tools on the first round and reject them on a later one
+    (a routing gateway may resolve a different upstream per request). Every backend's
+    ``_ToolsRejected`` subclasses ``ToolsUnsupported``, NOT ``AgentBackendUnavailable``
+    (see that class's docstring) — so if the loop did not catch it around
+    ``send_tool_results``, it would escape into Orchestrator._run_one's generic
+    ``except Exception`` and hard-fail the job with no BF-19 and no rung 3.
+    """
+
+    async def test_tools_unsupported_from_send_tool_results_falls_back_to_rung_3(self):
+        class _RejectsOnResults(FakeAgentBackend):
+            async def send_tool_results(self, handle, results):
+                raise ToolsUnsupported("tools rejected on the follow-up round")
+
+        backend = _RejectsOnResults(
+            [_tool_calls_reply([("get_cv", {})])],  # round 1: non-terminal, forces a follow-up
+            supports_native_tools=True,
+        )
+        result = await _run_cv(backend)
+        assert result is None  # rung 3 is the caller's job
+
+    async def test_mid_loop_rejection_does_not_retry_the_prompt_rung(self):
+        """No mid-loop rung downgrade: "one attempt per rung" is a per-TURN rule, and
+        re-entering the prompt rung here would need a fresh copy and a fresh budget."""
+        calls: list[object] = []
+
+        class _RejectsOnResults(FakeAgentBackend):
+            async def restore_session(self, system_prompt, history, external_id, **kwargs):
+                calls.append(kwargs.get("tools"))
+                return await super().restore_session(
+                    system_prompt, history, external_id, **kwargs
+                )
+
+            async def send_tool_results(self, handle, results):
+                raise ToolsUnsupported("tools rejected on the follow-up round")
+
+        backend = _RejectsOnResults(
+            [_tool_calls_reply([("get_cv", {})])],
+            supports_native_tools=True,
+        )
+        assert await _run_cv(backend) is None
+        assert len(calls) == 1  # the native entry only — no prompt-rung rebuild
+
+
+class TestPromptRungResultTransport:
+    """The prompt rung has no wire tool channel, so a round of tool outcomes must go
+    back as an ordinary user message — the transport its own contract promises the
+    model (``prompt_assembly.py::_tool_contract``: "Tool results come back to you as
+    an ordinary user message containing a JSON array of results in the same order").
+
+    Calling ``backend.send_tool_results`` there instead reaches
+    ``AgentBackend.send_tool_results``'s default ``NotImplementedError`` on every
+    sentinel-only backend — not a ``ToolsUnsupported``, so it escapes the loop's only
+    catch and hard-fails the job. Since the contract's rule 1 tells the model to call
+    ``get_cv`` first, EVERY realistic prompt-rung revision needs at least two rounds.
+    """
+
+    async def test_multi_round_prompt_rung_sends_results_as_a_user_message(self):
+        backend = _prompt_backend([
+            _tool_calls_reply([("get_cv", {})]),
+            _tool_calls_reply([("finalize", {"change_log": "done"})]),
+        ])
+        result = await _run_cv(backend, instruction="Tighten the summary.")
+        assert result is not None
+        assert result.mode == "prompt"
+        assert backend.received_tool_results == []  # never routed through the wire channel
+        # Turn 1 is the verbatim instruction; turn 2 is the results array, in call order.
+        assert len(backend.received_messages) == 2
+        assert backend.received_messages[0] == "Tighten the summary."
+        payload = json.loads(backend.received_messages[1])
+        assert isinstance(payload, list) and len(payload) == 1
+        assert payload[0]["ok"] is True
+        assert payload[0]["sections"][0]["name"] == "Summary"
+
+    async def test_native_rung_still_uses_send_tool_results(self):
+        backend = _native_backend([
+            _tool_calls_reply([("get_cv", {})]),
+            _tool_calls_reply([("finalize", {"change_log": "done"})]),
+        ])
+        result = await _run_cv(backend)
+        assert result is not None
+        assert result.mode == "native"
+        assert len(backend.received_tool_results) == 1
+        # Only the instruction goes through send_message on this rung.
+        assert backend.received_messages == ["Tighten the summary."]
+
+
+class TestUnparseableReplyIsContained:
+    """``run_tool_loop`` documents itself as returning None (→ the caller's rung 3)
+    whenever a rung fails to produce a parseable tool call. A ``ProtocolError`` is the
+    prompt rung's EXPECTED failure shape — the contract tells the model not to emit
+    ``<<<FINAL>>>``/``<<<NEED_INPUT>>>``, so prose raises "no sentinel block" after the
+    backend's one nudge — and must not escape into Orchestrator._run_one's generic
+    ``except Exception``.
+    """
+
+    async def test_protocol_error_on_rung_entry_returns_none(self):
+        from jsa.agents.protocol import ProtocolError
+
+        class _Unparseable(FakeAgentBackend):
+            async def send_message(self, handle, text, **kwargs):
+                raise ProtocolError("no sentinel block")
+
+        assert await _run_cv(_Unparseable([], supports_native_tools=False)) is None
+
+    async def test_protocol_error_mid_loop_returns_none(self):
+        from jsa.agents.protocol import ProtocolError
+
+        class _UnparseableAfterFirstRound(FakeAgentBackend):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._turns = 0
+
+            async def send_message(self, handle, text, **kwargs):
+                self._turns += 1
+                if self._turns > 1:
+                    raise ProtocolError("no sentinel block")
+                return await super().send_message(handle, text, **kwargs)
+
+        backend = _UnparseableAfterFirstRound(
+            [_tool_calls_reply([("get_cv", {})])], supports_native_tools=False
+        )
+        assert await _run_cv(backend) is None

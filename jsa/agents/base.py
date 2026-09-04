@@ -36,17 +36,40 @@ class ToolsUnsupported(Exception):
     rung, so ``jsa/pipeline/tool_loop.py``'s ladder should downgrade this turn to
     the prompt rung and retry once.
 
-    Deliberately NOT a subclass of ``AgentBackendUnavailable`` — the two exceptions
-    have opposite subclassing rationale. Phase 3's per-backend ``_ToolsRejected``
-    (e.g. ``anthropic_api.py``) DOES subclass ``AgentBackendUnavailable`` on purpose,
-    as an escape safety net: if a backend's own in-process degrade-and-retry can't
-    recover, falling through to BF-19 is the right outcome. This exception is the
-    mirror image — it must be caught ONLY inside ``tool_loop.py``'s native rung to
-    trigger a same-turn, same-backend downgrade to the prompt rung. If this ever
-    subclassed ``AgentBackendUnavailable``, the orchestrator's BF-19 handler would
-    treat a tools-only degrade as a reason to advance the whole job to the next
-    configured backend — exactly the loss the rung ladder exists to prevent. A
-    genuine auth error or bad-model 4xx must keep raising ``AgentBackendUnavailable``
+    **Deliberately NOT a subclass of ``AgentBackendUnavailable``, and every
+    per-backend ``_ToolsRejected`` subclasses THIS, not that.** Each backend that
+    speaks native tools defines its own module-private
+    ``_ToolsRejected(ToolsUnsupported)`` — ``_openai_compat.py`` (canonical, inherited
+    by ``mistral``/``openrouter``/``opencode-go``/``gemini``), ``anthropic_api.py``,
+    and ``opencode_zen.py`` (its own independent copy, per CLAUDE.md's no-shared-base
+    rule for that module). They are raised from a permanent 4xx **only when native
+    tool definitions were actually in the payload**, and they propagate out of the
+    backend untouched — there is no in-backend degrade-and-retry for tools, unlike
+    ``_CacheRejected``/``_ReasoningRejected``.
+
+    Two reasons this exception sits outside the ``AgentBackendUnavailable`` hierarchy,
+    and neither is negotiable:
+
+    1. **The fallback is owned by a different layer.** Caching and reasoning are
+       optional enrichments with no functional substitute, so they shed *in-backend*
+       and retry once clean. Tool mode's fallback is the rung ladder in
+       ``jsa/pipeline/tool_loop.py`` (native → prompt → rewrite), which lives above the
+       backend. A clean in-backend retry here would re-send a system prompt that
+       explains a tool contract with no tools attached — incoherent.
+    2. **It must never cost the job a BF-19 slot.** ``Orchestrator._run_one`` routes
+       ``AgentLimitReached``/``AgentTimeout``/``AgentBackendUnavailable`` into
+       ``_advance_backend_or_fail``. If a tools-only degrade were an
+       ``AgentBackendUnavailable``, an escaped instance would advance the *whole job*
+       to the next configured backend — exactly the loss the rung ladder exists to
+       prevent.
+
+    Consequences, all required: ``_call_api``'s bounded degrade loop must NOT grow a
+    branch for it (it propagates, by design); ``tool_loop.py`` must catch
+    ``ToolsUnsupported`` around BOTH its ``restore_session`` entry and its
+    ``send_tool_results`` follow-ups (an unguarded ``send_tool_results`` lets a
+    mid-turn rejection escape into ``_run_one``'s generic ``except Exception`` and
+    hard-fail the job with no BF-19 and no rung 3); and a genuine auth error or
+    bad-model 4xx must keep raising ``AgentBackendUnavailable``
     (or ``AgentLimitReached``/``AgentTimeout``) so BF-19 still engages for those.
     """
 

@@ -18,6 +18,8 @@ from jsa.agents._openai_compat import OpenAICompatSessionHandle
 from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentTimeout, HistoryTurn
 from jsa.agents.opencode_go import OpenCodeGoBackend, _PROTOCOL
 from jsa.agents.protocol import ProtocolError
+from jsa.agents.tool_spec import tools_for
+from jsa.db.models import Stage
 
 
 @pytest.fixture(autouse=True)
@@ -359,3 +361,96 @@ class TestPromptCacheControlMessages:
             backend = OpenCodeGoBackend(model="qwen3.8-max")
             _, reply = await backend.start_session("sys", "hi")
         assert reply.kind == "final"
+
+
+# ---------------------------------------------------------------------------
+# Native tool calling (revision-tool-use plan, Phase 3 / E5)
+# ---------------------------------------------------------------------------
+
+
+class TestSupportsNativeToolsIsPerInstance:
+    """E5: this gateway's /messages path is NOT wired for native tools (the reference
+    bake-off project found forced tool-use does not take there), so the flag is an
+    INSTANCE attribute set from the selected model's protocol. A class-level read
+    would see the inherited OpenAICompatBackend default of True and be wrong for
+    every /messages model — the same trap CLAUDE.md documents at length for
+    supports_structured_output."""
+
+    def test_chat_model_instance_is_true(self):
+        backend = OpenCodeGoBackend(model="glm-5.3")
+        assert backend._protocol == "chat"
+        assert backend.supports_native_tools is True
+
+    def test_messages_model_instance_is_false(self):
+        backend = OpenCodeGoBackend(model="qwen3.8-max")
+        assert backend._protocol == "messages"
+        assert backend.supports_native_tools is False
+
+    def test_the_class_level_read_is_the_wrong_one(self):
+        """Pins WHY the instance attribute is required: the inherited class default
+        disagrees with a /messages instance. If this ever stops being true because
+        someone "simplified" it back to a ClassVar, that is the regression."""
+        assert OpenCodeGoBackend.supports_native_tools is True
+        assert OpenCodeGoBackend(model="qwen3.8-max").supports_native_tools is False
+
+    def test_tool_loop_reads_it_off_the_instance(self):
+        """tool_loop.py's rung selection is `getattr(backend, "supports_native_tools",
+        False)` — an instance read, which is what makes the override effective."""
+        assert getattr(OpenCodeGoBackend(model="qwen3.8-max"), "supports_native_tools", False) is False
+        assert getattr(OpenCodeGoBackend(model="glm-5.3"), "supports_native_tools", False) is True
+
+
+class TestChatProtocolNativeTools:
+    async def test_chat_model_sends_tools_and_tool_choice(self):
+        body = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "c1", "type": "function",
+                         "function": {"name": "get_cv", "arguments": "{}"}}
+                    ],
+                }
+            }]
+        }
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(model="glm-5.3")
+            handle = await backend.restore_session(
+                "sys", [], None, tools=tools_for(Stage.revising_cv)
+            )
+            reply = await backend.send_message(handle, "shorten it")
+        assert reply.kind == "tool_calls"
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["tool_choice"] == "required"
+        assert "response_format" not in payload
+        assert mock_client.post.call_args.args[0] == (
+            "https://opencode.ai/zen/go/v1/chat/completions"
+        )
+
+
+class TestMessagesProtocolHasNoToolFields:
+    async def test_no_tools_key_in_the_messages_payload(self):
+        mock_client = _make_mock_client(_messages_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = OpenCodeGoBackend(model="qwen3.8-max")
+            await backend.start_session("sys", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert "tools" not in payload
+        assert "tool_choice" not in payload
+
+    async def test_send_tool_results_is_refused_rather_than_cross_protocol_posted(self):
+        """Without the guard the inherited implementation would POST to
+        /chat/completions on a /messages model — a silent cross-protocol request."""
+        backend = OpenCodeGoBackend(model="qwen3.8-max")
+        handle = await backend.restore_session("sys", [], None)
+        with patch("httpx.AsyncClient") as mock_ctor:
+            with pytest.raises(NotImplementedError, match="does not support native tool"):
+                await backend.send_tool_results(handle, [])
+        mock_ctor.assert_not_called()
+
+    async def test_tools_kwarg_on_a_messages_instance_is_refused_not_silently_dropped(self):
+        backend = OpenCodeGoBackend(model="qwen3.8-max")
+        with pytest.raises(AssertionError, match="not wired for native tools"):
+            await backend.restore_session("sys", [], None, tools=tools_for(Stage.revising_cv))

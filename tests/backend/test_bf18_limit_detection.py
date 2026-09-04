@@ -10,6 +10,9 @@ Tests cover:
 7. The four multi-backend-model-select backends (mistral, openrouter, opencode-go's
    /chat/completions path, gemini) classify rate-limit / permanent-4xx / exhausted-5xx /
    timeout into the same three BF-19-recognized exception types.
+8. A tools-only degrade never costs the job a BF-19 slot: every backend's
+   ``_ToolsRejected`` is a ``ToolsUnsupported`` and is NOT an ``AgentBackendUnavailable``,
+   so it stays out of ``_advance_backend_or_fail`` entirely (revision tool-use, Phase 3).
 """
 
 from __future__ import annotations
@@ -25,14 +28,22 @@ from sqlalchemy.pool import StaticPool
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from jsa.agents.anthropic_api import AnthropicAPIBackend
-from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentReply, AgentTimeout
+from jsa.agents.base import (
+    AgentBackendUnavailable,
+    AgentLimitReached,
+    AgentReply,
+    AgentTimeout,
+    ToolsUnsupported,
+)
 from jsa.agents.claude_cli import ClaudeCliBackend, ClaudeSessionHandle
 from jsa.agents.gemini_api import GeminiBackend
 from jsa.agents.google_cli import GoogleCliBackend, GoogleSessionHandle
 from jsa.agents.mistral import MistralBackend
 from jsa.agents.opencode_go import OpenCodeGoBackend
+from jsa.agents.opencode_zen import OpenCodeZenBackend
 from jsa.agents.openrouter import OpenRouterBackend
 from jsa.agents.protocol import ProtocolError
+from jsa.agents.tool_spec import tools_for
 from jsa.db import repo
 from jsa.db.models import Base, FollowUp, Job, JobState, Stage
 from jsa.pipeline.orchestrator import Orchestrator
@@ -1332,3 +1343,185 @@ class TestOrchestratorModelLadder:
             refreshed = await repo.get_job(s, job.id)
         assert refreshed.backend_name == "claude-cli"
         assert refreshed.state == JobState.review
+
+
+# ---------------------------------------------------------------------------
+# Test 8: a tools-only degrade must never cost the job a BF-19 slot.
+#
+# Phase 3 of the revision-tool-use plan gave every native-tool backend a
+# module-private `_ToolsRejected`, raised from a permanent 4xx *only when native
+# tool definitions were actually in the payload*. That gating is the whole ball
+# game, and it can fail in two opposite directions — this class pins both:
+#
+#   (a) Too eager. If a genuine bad-model / auth 4xx were misclassified as
+#       `_ToolsRejected`, it would stop being an `AgentBackendUnavailable`, fall
+#       out of `Orchestrator._advance_backend_or_fail`'s routed set, and hit
+#       `_run_one`'s generic `except Exception` — hard-failing the job on the
+#       very first backend with a working fallback configured. That is the exact
+#       bug class this whole file exists to prevent, re-introduced through a new
+#       door.
+#
+#   (b) Too timid. If `_ToolsRejected` subclassed `AgentBackendUnavailable`
+#       (which the plan's Phase 3 preamble originally said it should — that text
+#       is wrong; see `jsa/agents/base.py`'s `ToolsUnsupported` docstring for the
+#       authoritative contract), then a tools-only rejection would advance the
+#       WHOLE JOB to the next backend rather than costing it only its native
+#       rung. `tool_loop.py`'s ladder (native -> prompt -> rewrite) exists
+#       precisely so that loss stays local to the turn.
+#
+# Behavioural coverage of each backend's tool request/reply shape lives in its
+# own test file; this class asserts only the BF-19-facing classification, which
+# is this file's remit.
+# ---------------------------------------------------------------------------
+
+REVISION_TOOL_SPECS = tools_for(Stage.revising_cv)
+
+# A 4xx envelope satisfying BOTH classifiers at once: the OpenAI-compatible
+# shape (`message` + `type`) that `_openai_compat._call_api_once` reads, and the
+# Gemini shape (`code` + `status`) that `GeminiBackend`'s override reads. One
+# body therefore drives the whole parametrized matrix.
+_PERMANENT_4XX_BODY = {
+    "error": {
+        "message": "tools: unsupported parameter",
+        "type": "invalid_request_error",
+        "code": 400,
+        "status": "INVALID_ARGUMENT",
+    }
+}
+
+
+@pytest.mark.parametrize(
+    "make_backend",
+    [
+        lambda: MistralBackend(),
+        lambda: OpenRouterBackend(),
+        lambda: OpenCodeGoBackend(),  # default model is the /chat/completions protocol
+        lambda: GeminiBackend(),
+        lambda: OpenCodeZenBackend(),
+    ],
+    ids=["mistral", "openrouter", "opencode-go-chat", "gemini", "opencode-zen"],
+)
+class TestToolsRejectedDoesNotCostABF19Slot:
+    async def test_4xx_with_tools_present_is_tools_unsupported(
+        self, make_backend, _new_backend_no_retry_delay, monkeypatch
+    ):
+        """Direction (b): a permanent 4xx WITH tools in the payload degrades the
+        rung, not the backend."""
+        monkeypatch.setattr(
+            "jsa.agents.opencode_zen.asyncio.sleep", lambda _s: asyncio.sleep(0)
+        )
+        mock_client = _make_mock_client(_PERMANENT_4XX_BODY, status_code=400)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = make_backend()
+            with pytest.raises(ToolsUnsupported) as excinfo:
+                await backend.start_session("sys", "hi", tools=REVISION_TOOL_SPECS)
+
+        # The load-bearing half: it must NOT be routable by BF-19.
+        assert not isinstance(excinfo.value, AgentBackendUnavailable), (
+            f"{backend.name}'s _ToolsRejected subclasses AgentBackendUnavailable — a "
+            "tools-only degrade would advance the whole job to the next backend"
+        )
+        assert not isinstance(excinfo.value, (AgentLimitReached, AgentTimeout))
+
+    async def test_4xx_without_tools_still_advances_the_chain(
+        self, make_backend, _new_backend_no_retry_delay, monkeypatch
+    ):
+        """Direction (a): the SAME 4xx with no tools in the payload is still a
+        plain AgentBackendUnavailable, so BF-19 still engages for a bad model or
+        a bad key. Pins that the gate reads the payload, not the capability flag
+        — every backend in this matrix has supports_native_tools True."""
+        monkeypatch.setattr(
+            "jsa.agents.opencode_zen.asyncio.sleep", lambda _s: asyncio.sleep(0)
+        )
+        mock_client = _make_mock_client(_PERMANENT_4XX_BODY, status_code=400)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = make_backend()
+            assert backend.supports_native_tools is True
+            with pytest.raises(AgentBackendUnavailable) as excinfo:
+                await backend.start_session("sys", "hi")
+
+        assert not isinstance(excinfo.value, ToolsUnsupported)
+
+
+class TestAnthropicToolsRejectedDoesNotCostABF19Slot:
+    """AnthropicAPIBackend goes through the `anthropic` SDK, not httpx, so it
+    needs its own error construction rather than a row in the matrix above."""
+
+    @staticmethod
+    def _bad_request() -> Exception:
+        import anthropic
+
+        response = MagicMock()
+        response.status_code = 400
+        return anthropic.BadRequestError(
+            message="tools: unsupported", response=response, body={}
+        )
+
+    async def test_4xx_with_tools_present_is_tools_unsupported(self):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=self._bad_request())
+        mock_client.close = AsyncMock()
+
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(ToolsUnsupported) as excinfo:
+                await backend.start_session("sys", "hi", tools=REVISION_TOOL_SPECS)
+
+        assert not isinstance(excinfo.value, AgentBackendUnavailable)
+
+    async def test_4xx_without_tools_still_advances_the_chain(self):
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(side_effect=self._bad_request())
+        mock_client.close = AsyncMock()
+
+        with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+            backend = AnthropicAPIBackend()
+            with pytest.raises(AgentBackendUnavailable) as excinfo:
+                await backend.start_session("sys", "hi")
+
+        assert not isinstance(excinfo.value, ToolsUnsupported)
+
+
+class ToolsUnsupportedBackend(FakeAgentBackend):
+    """Raises ToolsUnsupported from the stage — the shape an escaped mid-turn
+    tools rejection would have if tool_loop.py ever stopped catching it."""
+
+    async def start_session(self, *args, **kwargs):
+        raise ToolsUnsupported("tools rejected")
+
+
+class TestToolsUnsupportedIsNotRoutedByBF19:
+    """Orchestrator-level counterpart to the classification tests above.
+
+    `ToolsUnsupported` is deliberately OUTSIDE BF-19's routed set
+    (AgentLimitReached / AgentTimeout / AgentBackendUnavailable). The rung ladder
+    in tool_loop.py is what handles it, and it catches it around BOTH its
+    restore_session entry and its send_tool_results follow-ups. If it ever
+    escaped to the orchestrator, the correct behaviour is a diagnosable hard
+    fail on THIS backend — never a silent hop to the next one, which would
+    fabricate a backend-level verdict out of a tools-only degrade.
+    """
+
+    async def test_escaped_tools_unsupported_does_not_switch_backends(
+        self, session_factory
+    ):
+        job = await _insert_job_at_cv_done(session_factory)
+
+        orch = Orchestrator(
+            db_session_factory=session_factory,
+            backend_factory=lambda name: ToolsUnsupportedBackend(),
+            backends=["opencode-zen", "opencode-go"],
+        )
+
+        await _run_orchestrator_until(orch, session_factory, [job.id], JobState.failed)
+
+        async with session_factory() as s:
+            refreshed = await repo.get_job(s, job.id)
+
+        assert refreshed.state == JobState.failed
+        # The chain was NOT advanced: the job died on the backend it started on,
+        # rather than spending a hop on what is only a tools-only degrade.
+        assert refreshed.backend_name == "opencode-zen"
+        assert "Backend limit reached" not in (refreshed.error or "")
+        assert "timed out on every" not in (refreshed.error or "")
+        assert "Backend unavailable on every" not in (refreshed.error or "")

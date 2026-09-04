@@ -19,6 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.agents.base import AgentBackend, AgentReply, HistoryTurn, OnChunk, OnRetry, SessionHandle
 from jsa.agents.protocol import ProtocolError
+from jsa.agents.tool_spec import ToolSpec
+from jsa.agents.tool_spec import tools_for as _tool_specs_for_stage
+from jsa.pipeline.tool_loop import ToolLoopResult, run_tool_loop
 from jsa.render.registry import renderer_for
 from jsa.render.serialize import cover_letter_to_markdown, cv_to_markdown
 from jsa.schema import CVDocument, CoverLetter, cv_has_summary
@@ -210,8 +213,55 @@ def _structured_schema_for(backend: AgentBackend, stage: Stage) -> dict | None:
     return json_schema_for(stage) if backend.supports_structured_output else None
 
 
+def _tools_for(backend: AgentBackend, stage: Stage) -> tuple[ToolSpec, ...] | None:
+    """The tool vocabulary to offer for ``stage``, or ``None``.
+
+    Only ``Stage.revising_cv``/``Stage.revising_cl`` ever get tools (the
+    revision-tool-use plan's D3) — this is the single mechanical enforcement that
+    ``cv_adjust``, ``cover_letter``, and ``fit_assessment`` NEVER get tools, mirroring
+    how ``_structured_schema_for`` above is the single mechanical source for its own
+    destination-mode decision. ``backend`` is accepted (unused) for signature symmetry
+    with ``_structured_schema_for`` — tool availability here is purely stage-scoped;
+    backend capability (native vs. prompt rung) is a SEPARATE decision, made by
+    ``_tools_kwargs`` below and, ultimately, by ``jsa/pipeline/tool_loop.py``'s own
+    ladder, never by this function.
+    """
+    if stage not in (Stage.revising_cv, Stage.revising_cl):
+        return None
+    return _tool_specs_for_stage(stage)
+
+
+def _tools_kwargs(backend: AgentBackend, tools: tuple[ToolSpec, ...] | None) -> dict:
+    """The ``tools=`` kwarg dict for a native-tool-mode backend call, or ``{}``.
+
+    Same conditional-kwarg idiom as ``_schema_kwargs``: empty unless tools were
+    actually requested (``tools is not None``) AND the backend can speak native
+    tool-calling.
+
+    ``getattr(backend, "supports_native_tools", False)`` MUST read off the backend
+    INSTANCE (the ``backend`` parameter), never off the class — ``OpenCodeGoBackend``
+    proxies two different wire protocols under one backend name and sets
+    ``supports_native_tools`` as an INSTANCE attribute in ``__init__`` (forced tool-use
+    does not take on its ``/messages`` protocol path). A class-level read
+    (``type(backend).supports_native_tools`` / ``OpenCodeGoBackend.supports_native_tools``)
+    would silently see the inherited ``AgentBackend`` ClassVar default and be WRONG for
+    half its models — see CLAUDE.md's identical trap documented for the sibling flag
+    ``supports_structured_output``. ``backend`` here is always a real instance, so the
+    plain ``getattr`` below is correct as written; do not "simplify" it to a class read.
+    """
+    if tools is None or not getattr(backend, "supports_native_tools", False):
+        return {}
+    return {"tools": tools}
+
+
 async def _log_session_mode(
-    job: Job, stage: Stage, schema: dict | None, handle: SessionHandle
+    job: Job,
+    stage: Stage,
+    schema: dict | None,
+    handle: SessionHandle,
+    *,
+    tools: tuple[ToolSpec, ...] | None = None,
+    tool_mode: str | None = None,
 ) -> None:
     """Log the session's actual mode once, right after it is established.
 
@@ -223,13 +273,38 @@ async def _log_session_mode(
     ``structured_enabled`` attribute (AnthropicSessionHandle, any CLI SessionHandle) to
     "not downgraded" — the only backend that can downgrade is OpenCode Zen, and it
     always sets the attribute.
+
+    ``tools``/``tool_mode`` (both default ``None``, so every pre-existing call site is
+    unaffected) name the tool-patching ladder's outcome for a revision stage:
+    ``tool_mode`` is the ACTUAL rung ``run_tool_loop`` used (``"native"``/``"prompt"``,
+    from ``ToolLoopResult.mode``) when the loop produced a terminal reply, or ``None``
+    when the loop gave up and rung 3 (full-document rewrite) ran instead. This is
+    deliberately NOT derived from ``_tools_kwargs``/``backend.supports_native_tools``
+    here — the ladder can downgrade native → prompt mid-turn, so only the loop's own
+    reported outcome is truthful about which rung actually ran.
+
+    When ``tool_mode`` is given (the loop succeeded), the base sentinel/structured/
+    downgraded computation below is skipped: a tool-mode ``restore_session`` call never
+    receives a ``structured_schema`` (tool mode and structured mode are mutually
+    exclusive per request — see CLAUDE.md), so a tool handle's own
+    ``structured_enabled`` reflects nothing about the opencode-zen downgrade this
+    check exists for. The stage's underlying structured capability (``schema is not
+    None``) still names the base label.
     """
-    if schema is None:
-        mode = "sentinel"
-    elif getattr(handle, "structured_enabled", True) is False:
-        mode = "sentinel (downgraded)"
+    if tool_mode is not None:
+        base = "structured" if schema is not None else "sentinel"
+        mode = f"{base} + tools ({tool_mode})"
     else:
-        mode = "structured"
+        if schema is None:
+            mode = "sentinel"
+        elif getattr(handle, "structured_enabled", True) is False:
+            mode = "sentinel (downgraded)"
+        else:
+            mode = "structured"
+        if tools is not None:
+            # Tools were offered for this stage but the loop gave up on both rungs —
+            # rung 3 (the ACTUAL session `handle` reflects) ran instead.
+            mode = f"{mode} (tools downgraded)"
     await bus.publish(
         event_to_dict(
             LogEvent(job_id=job.id, level="info", text=f"Stage {stage.value}: session mode = {mode}")
@@ -626,6 +701,16 @@ async def run_stage(
     schema = _structured_schema_for(general_purpose_backend, stage)
     structured = schema is not None
 
+    # Same single-decision idiom as `schema`/`structured` above, computed once and
+    # reused everywhere a revision stage needs to know whether tools are in play.
+    # Non-None ONLY for revising_cv/revising_cl (see `_tools_for`'s docstring) — this
+    # is what mechanically keeps cv_adjust/cover_letter/fit_assessment tool-free.
+    tools = _tools_for(general_purpose_backend, stage)
+    # Set to the ACTUAL rung run_tool_loop used ("native"/"prompt") only when the tool
+    # loop produces a terminal reply this invocation; stays None for every non-revision
+    # stage and for a revision that fell through to rung 3 — see `_log_session_mode`.
+    tool_mode: str | None = None
+
     # One accumulator per stage invocation; None when the backend can't stream, so
     # every downstream _streaming_kwargs() call degrades to "no on_chunk kwarg"
     # cleanly (same conditional-kwarg pattern as structured_schema).
@@ -681,30 +766,88 @@ async def run_stage(
         #   - 2nd revision parks then resumes: new FollowUp.answered_at > new RevReq.created_at → resume
         is_resume = await _is_revision_resume(session, job.id, stage, rev_req.created_at)
 
+        # Both sub-branches below only need to disagree on WHICH raw (unadapted)
+        # history + instruction to use — everything downstream (the tool-loop
+        # attempt, and rung 3's fallback) is identical from here on, so compute those
+        # two once rather than duplicating the tool-loop/rung-3 dispatch per branch.
         if is_resume:
-            # Resume: the user answered a follow-up question mid-revision.
-            # The CLI session already has the full context; just send the answer.
-            # For AnthropicAPIBackend (history-based), pass combined history so
-            # the model has the original cover-letter/CV context AND the revision turns.
+            # Resume: the user answered a follow-up question mid-revision (this is
+            # also the ``ask_user`` tool's resume target — a fresh CvWorkingCopy/
+            # ClWorkingCopy is built below and the model re-establishes read state by
+            # calling get_cv/get_letter again; ask_user discards any edits from the
+            # parked turn, so there is nothing to replay there).
             revision_turns = await _load_history(session, job.id, stage)
             answer_text = await _get_latest_answer(session, job.id, stage)
             original_history = await _load_history(session, job.id, original_stage)
-            combined_history = original_history + revision_turns
-            combined_history = adapt_history(combined_history, structured=structured)
-            restore_kwargs = _schema_kwargs(schema)
-            handle = await general_purpose_backend.restore_session(
-                resume_system_prompt, combined_history, revision_session_id, **restore_kwargs
-            )
-            reply, accumulated_messages = await _send_message_with_wire_retry(
-                general_purpose_backend, handle, answer_text, schema, stage, job,
-                on_chunk=on_chunk, accumulator=accumulator,
-            )
+            raw_history = original_history + revision_turns
+            instruction = answer_text
         else:
             # Fresh revision: restore the original stage's session and send the
             # revision instruction.
-            history = await _load_history(session, job.id, original_stage)
+            raw_history = await _load_history(session, job.id, original_stage)
             instruction = rev_req.instruction
-            history = adapt_history(history, structured=structured)
+
+        tool_result: ToolLoopResult | None = None
+        if tools is not None:
+            document_obj = await _latest_document_object(session, job.id, original_stage)
+            if document_obj is not None:
+                # The tool session is NON-structured by construction (tool mode and
+                # structured mode are mutually exclusive per request — the terminal
+                # tool's arguments ARE the structured output, so no response_format is
+                # ever sent here) — this `adapt_history(..., structured=False)` is
+                # computed SEPARATELY from rung 3's `adapt_history(..., structured=
+                # structured)` below; they must never share one variable (see
+                # CLAUDE.md's canonical-form invariant).
+                tool_history = adapt_history(raw_history, structured=False)
+
+                def _tool_system_prompt(
+                    mode: str, _prompt: str = system_prompt, _tools: tuple[ToolSpec, ...] = tools
+                ) -> str:
+                    return assemble_system_prompt(
+                        _prompt, language=language_code, tool_model=_tools,
+                        native_tools=(mode == "native"),
+                    )
+
+                tool_result = await run_tool_loop(
+                    backend=general_purpose_backend,
+                    stage=stage,
+                    job=job,
+                    document=document_obj,
+                    instruction=instruction,
+                    history=tool_history,
+                    external_id=revision_session_id,
+                    build_system_prompt=_tool_system_prompt,
+                    language=language_code,
+                )
+
+        if tool_result is not None:
+            handle = tool_result.handle
+            reply = tool_result.reply
+            tool_mode = tool_result.mode
+            # Persist the loop's execution log as role="tool" Message rows, ordered,
+            # one per attempted call (including not_executed/budget_exhausted entries)
+            # — jsa/pipeline/tool_loop.py's own docstring names this as this phase's
+            # job. `_load_history`'s role.in_(["user", "assistant"]) filter already
+            # excludes "tool" rows from every future replay with zero changes there;
+            # jsa/api/transcript.py's skip list only skips "system", so these still
+            # render in the transcript. Do NOT widen either.
+            tool_rows = [
+                {"role": "tool", "content": json.dumps(call, sort_keys=True)}
+                for call in tool_result.tool_calls
+            ]
+            assistant_msg = {"role": "assistant", "content": reply.raw}
+            accumulated_messages = [
+                {"role": "user", "content": instruction},
+                *tool_rows,
+                assistant_msg,
+            ]
+        else:
+            # Rung 3: no tools offered (unreachable for these two stages — see
+            # `_tools_for`), no seed document, or the loop gave up on both rungs —
+            # give up on tools and do today's full-document rewrite, UNCHANGED: the
+            # CV/cover-letter content is already part of `raw_history` (the original
+            # stage's session), so nothing new is injected here.
+            history = adapt_history(raw_history, structured=structured)
             restore_kwargs = _schema_kwargs(schema)
             handle = await general_purpose_backend.restore_session(
                 resume_system_prompt, history, revision_session_id, **restore_kwargs
@@ -787,25 +930,40 @@ async def run_stage(
     elif stage == Stage.cover_letter:
         job.cl_session_id = handle.external_id
 
-    await _log_session_mode(job, stage, schema, handle)
+    await _log_session_mode(job, stage, schema, handle, tools=tools, tool_mode=tool_mode)
 
     # Self-heal: if a FINAL block fails content validation (e.g. the agent emitted a
     # change-log or "done" summary instead of the artifact), re-prompt the SAME session
     # to re-emit a clean artifact before the reply is dispatched below. Recovered →
     # proceeds as FINAL; turned into NEED_INPUT → parks; still invalid → _handle_final
     # raises and fails the job.
-    reply, accumulated_messages = await _self_heal_final(
-        backend=general_purpose_backend,
-        handle=handle,
-        stage=stage,
-        job=job,
-        reply=reply,
-        accumulated_messages=accumulated_messages,
-        language=language_code,
-        structured=structured,
-        on_chunk=on_chunk,
-        accumulator=accumulator,
-    )
+    #
+    # Skipped entirely when a tool-loop rung produced this reply (tool_mode is not
+    # None): jsa/schema/patch.py's finalize() already ran this exact content gate
+    # (_validate_final_content) before the loop ever returned, so a FINAL reply here
+    # is already known-valid — re-validating is a harmless no-op, but the soft
+    # "CV missing a Summary section" nudge below it is NOT a no-op. That nudge sends a
+    # plain correction message via backend.send_message on the tool-mode handle, whose
+    # session has no sentinel/structured contract at all (tool and structured/sentinel
+    # modes are mutually exclusive per request) — a native-tool session may answer
+    # with another tool call instead of a bare "final" reply, which `run_stage`'s
+    # `reply.kind == "tool_calls"` guard below would then hard-fail on. The tool
+    # loop's own reemit_hint retry (inside finalize()) is this reply's self-heal
+    # equivalent; nesting the two here is exactly the "self-heal double-application"
+    # this function's own docstring already warns against for the wire-level budget.
+    if tool_mode is None:
+        reply, accumulated_messages = await _self_heal_final(
+            backend=general_purpose_backend,
+            handle=handle,
+            stage=stage,
+            job=job,
+            reply=reply,
+            accumulated_messages=accumulated_messages,
+            language=language_code,
+            structured=structured,
+            on_chunk=on_chunk,
+            accumulator=accumulator,
+        )
 
     # Guard against a stale result: the agent turn above may have run for a long
     # time, during which the job could have been dismissed/cancelled/deleted on
@@ -865,20 +1023,25 @@ async def run_stage(
         raise PausedForInput()
 
     if reply.kind == "tool_calls":
-        # run_stage never enters jsa/pipeline/tool_loop.py's loop yet (Phase 5 wiring)
-        # — no session dispatched from here is a tool session, so a `<<<TOOL_CALLS>>>`
-        # block (protocol.py's TOOL_CALLS verb, added Phase 2) can only mean the model
-        # hallucinated one unprompted. Without this guard the reply would fall through
-        # to `_handle_final` below: `_self_heal_final`'s `while reply.kind == "final"`
-        # is false for "tool_calls" (skipped, no correction budget), and
+        # This is unreachable for a genuinely successful tool-loop turn: run_tool_loop
+        # (jsa/pipeline/tool_loop.py) only ever returns a ToolLoopResult (handled above,
+        # BEFORE this point — see the revising_cv/revising_cl branch) when a terminal
+        # tool (finalize/ask_user) fired, synthesizing an ordinary "final"/"needs_input"
+        # AgentReply; it never hands back a bare "tool_calls" reply. So by the time
+        # execution reaches here, `reply` is either a non-revision stage's reply, or a
+        # revision stage's rung-3 (full-rewrite) reply — in BOTH cases no session
+        # dispatched to produce this `reply` was a tool session, so a `<<<TOOL_CALLS>>>`
+        # block (protocol.py's TOOL_CALLS verb) can only mean the model hallucinated
+        # one unprompted. Without this guard the reply would fall through to
+        # `_handle_final` below: `_self_heal_final`'s `while reply.kind == "final"` is
+        # false for "tool_calls" (skipped, no correction budget), and
         # `_validate_final_content` would `json.loads` the tool-call array successfully
         # (it's valid JSON) and then fail `CVDocument`/`CoverLetter.model_validate` on a
         # list — a confusing schema error instead of a diagnosable one. Raising here
         # also means this does NOT get the sentinel-nudge retry
         # (`_parse_with_nudge`/OpenCode Zen's downgrade) a genuine "no sentinel block"
         # gets — the block DID parse, just unexpectedly — so it hard-fails the job in
-        # one shot. Phase 5 makes this conditional on whether `stage` actually IS a
-        # tool session.
+        # one shot.
         raise ProtocolError("unexpected tool-call block outside a tool session")
 
     # reply.kind == "final"
@@ -1379,6 +1542,28 @@ async def _base_structure_cv_block(cv_structure_path: Path | None) -> tuple[str,
         "BASE CV STRUCTURE (the candidate's base CV, curated in the Structure Editor)",
         base_structure.model_dump_json(indent=2),
     )
+
+
+async def _latest_document_object(
+    session: AsyncSession, job_id: str, doc_stage: Stage
+) -> CVDocument | CoverLetter | None:
+    """The latest ``Document.structured`` for ``job_id``/``doc_stage``, parsed into a
+    ``CVDocument``/``CoverLetter`` — the working-copy seed for
+    ``jsa/pipeline/tool_loop.py``'s ``run_tool_loop``.
+
+    ``None`` when no Document exists yet for this stage, or its ``structured`` column
+    is empty (a legacy row predating the structured-output plan's JSON
+    source-of-truth) — both should be unreachable for a real revision (a revision
+    always targets an already-produced, already-structured document), but are
+    tolerated the same way ``_read_base_structure``/``_base_structure_cv_block``
+    tolerate absence: the caller falls back to skipping the tool loop and running rung
+    3 (the full-document rewrite), which needs no working-copy seed at all.
+    """
+    docs = await repo.get_documents(session, job_id, doc_stage)
+    if not docs or not docs[0].structured:
+        return None
+    model = CVDocument if doc_stage == Stage.cv_adjust else CoverLetter
+    return model.model_validate_json(docs[0].structured)
 
 
 async def _load_history(

@@ -98,6 +98,9 @@ class FakeAgentBackend(AgentBackend):
         # time (None on a prompt-rung restore), and every send_tool_results payload.
         self.received_tools: list[tuple[ToolSpec, ...] | None] = []
         self.received_tool_results: list[list[ToolResult]] = []
+        # Every send_message text, in order — lets a test assert the prompt rung's
+        # tool-results-as-a-user-message transport without a bespoke subclass.
+        self.received_messages: list[str] = []
 
     def _pop_reply(self) -> AgentReply:
         if not self._replies:
@@ -157,7 +160,8 @@ class FakeAgentBackend(AgentBackend):
         on_chunk: OnChunk | None = None,
         on_retry: OnRetry | None = None,
     ) -> AgentReply:
-        """Consume and return the next scripted reply."""
+        """Consume and return the next scripted reply, recording ``text``."""
+        self.received_messages.append(text)
         await self._emit_scripted_chunks(on_chunk)
         return self._pop_reply()
 
@@ -165,7 +169,19 @@ class FakeAgentBackend(AgentBackend):
         self, handle: SessionHandle, results: list[ToolResult]
     ) -> AgentReply:
         """Consume and return the next scripted reply, recording ``results`` for
-        assertions."""
+        assertions.
+
+        Raises ``NotImplementedError`` when ``supports_native_tools`` is False, exactly
+        as ``AgentBackend.send_tool_results``'s default does. Without this the fake
+        simulates a capability no real sentinel-only backend has, and a caller that
+        reaches here on the prompt rung (where the session was restored with no
+        ``tools=``) passes in the fake while hard-failing the job in production.
+        """
+        if not self.supports_native_tools:
+            raise NotImplementedError(
+                "FakeAgentBackend does not support native tool calling "
+                "(supports_native_tools is False)"
+            )
         self.received_tool_results.append(results)
         return self._pop_reply()
 

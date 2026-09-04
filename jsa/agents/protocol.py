@@ -104,7 +104,9 @@ def parse_reply(raw: str) -> AgentReply:
     1. Scan for complete <<<NEED_INPUT>>>...<<<END>>> and <<<FINAL>>>...<<<END>>> blocks.
     2. Exactly one block → valid; classify by kind, content is the inside text.
     3. Zero complete blocks → check for unterminated markers; raise accordingly.
-    4. Multiple complete blocks → take the last; log a warning.
+    4. Multiple complete blocks → take the last; log a warning. EXCEPTION: a
+       NEED_INPUT/FINAL block always outranks a TOOL_CALLS block regardless of
+       position — see the precedence note below.
     5. Unclosed sentinel (open marker without <<<END>>>) → raise ProtocolError("unterminated block").
     6. Nested sentinels not supported; <<<END>>> is always a literal terminator.
     """
@@ -123,8 +125,32 @@ def parse_reply(raw: str) -> AgentReply:
             len(matches),
         )
 
-    # Take the last complete block
-    marker, inner = matches[-1]
+    # Take the last complete block — except that a NEED_INPUT/FINAL block always
+    # outranks a TOOL_CALLS block, whatever the order.
+    #
+    # Why the exception: TOOL_CALLS is matched unconditionally, for EVERY session on
+    # every backend, because parse_reply has no way to know whether its caller is
+    # inside a tool session (the prompt rung passes no `tools=` kwarg, so a
+    # sentinel-only backend like claude-cli gets no signal at all). Left as a plain
+    # "take the last", that means a non-tool session (cv_adjust, cover_letter,
+    # fit_assessment) whose reply happens to end with text shaped like
+    # <<<TOOL_CALLS>>>...<<<END>>> would have its legitimate FINAL/NEED_INPUT block
+    # silently outvoted, land as kind="tool_calls", and hard-fail on run_stage's
+    # unexpected-tool-call guard.
+    #
+    # This ordering rule fixes that without any cross-cutting session plumbing, and it
+    # must NOT be "fixed" by narrowing _BLOCK_RE back to NEED_INPUT|FINAL: a prompt-rung
+    # (rung 2) reply consisting ONLY of a TOOL_CALLS block would then raise
+    # ProtocolError("no sentinel block"), which claude_cli/opencode_zen's
+    # _parse_with_nudge keys on — burning a nudge turn re-prompting for a sentinel the
+    # model was correctly told not to emit, before tool_loop.py ever sees the reply.
+    #
+    # Residual, deliberately accepted: a non-tool session emitting ONLY a TOOL_CALLS
+    # block (and no FINAL/NEED_INPUT at all) still reaches run_stage's guard. That
+    # requires the model to spontaneously invent a verb that appears nowhere in its
+    # prompt, and the guard's message is diagnosable.
+    non_tool = [m for m in matches if m[0] != "TOOL_CALLS"]
+    marker, inner = non_tool[-1] if non_tool else matches[-1]
     content = inner.strip()
 
     if marker == "FINAL":

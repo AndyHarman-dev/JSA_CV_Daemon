@@ -66,7 +66,10 @@ interface Store {
   // retry/nudge/self-heal path replayed the whole turn and this buffer is stale).
   // Not persisted anywhere — a page reload loses an in-flight stream, same as today's
   // "loading" state until the next transcript fetch lands.
-  streamBuffers: Record<string, { stage: string; content: string; reasoning: string }>;
+  streamBuffers: Record<
+    string,
+    { stage: string; content: string; reasoning: string; tools: { name: string; detail: string; ok: boolean; at: number }[] }
+  >;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setViewedStage(stage: Store["viewedStage"]): void;
@@ -260,7 +263,7 @@ export const useStore = create<Store>((set, get) => ({
       case "agent_chunk":
         set((state) => {
           const existing = state.streamBuffers[e.job_id];
-          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "" };
+          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "", tools: [] };
           return {
             streamBuffers: {
               ...state.streamBuffers,
@@ -268,6 +271,25 @@ export const useStore = create<Store>((set, get) => ({
                 stage: e.stage,
                 content: e.kind === "content" ? base.content + e.text : base.content,
                 reasoning: e.kind === "reasoning" ? base.reasoning + e.text : base.reasoning,
+                tools: base.tools,
+              },
+            },
+          };
+        });
+        break;
+      case "agent_tool":
+        // Anchor the mark at the reasoning buffer's length AT ARRIVAL — that offset is
+        // what ReasoningCard/mergeToolSteps use to interleave it against the segmented
+        // reasoning text in the right position.
+        set((state) => {
+          const existing = state.streamBuffers[e.job_id];
+          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "", tools: [] };
+          return {
+            streamBuffers: {
+              ...state.streamBuffers,
+              [e.job_id]: {
+                ...base,
+                tools: [...base.tools, { name: e.name, detail: e.summary || e.detail, ok: e.status === "ok", at: base.reasoning.length }],
               },
             },
           };
