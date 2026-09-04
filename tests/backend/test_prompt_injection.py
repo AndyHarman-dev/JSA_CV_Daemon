@@ -420,3 +420,398 @@ class TestMigration:
             cols = (await conn.execute(sa_text("PRAGMA table_info(jobs)"))).fetchall()
         assert "injection" in {row[1] for row in cols}
         await engine.dispose()
+
+
+# ===========================================================================
+# Phase 2: assemble_system_prompt threading
+#
+# The injection brackets the file-authored prompt_text and NOTHING else — every
+# machine-authored runtime section (structured contract, language directive,
+# current-date directive) keeps its existing FINAL position, AFTER the postfix.
+# ===========================================================================
+
+
+from datetime import datetime  # noqa: E402
+
+from jsa.db.models import Stage  # noqa: E402
+from jsa.pipeline.prompt_assembly import assemble_system_prompt  # noqa: E402
+from jsa.pipeline.stages import _build_fit_user_msg, _build_initial_user_msg  # noqa: E402
+from jsa.schema.turn_models import json_schema_for  # noqa: E402
+
+_PROMPT_TEXT = "SYSTEM PROMPT BODY — the file-authored stage instructions."
+_NOW = datetime(2026, 1, 2, 3, 4, 5)
+
+
+class TestAssemblyBrackets:
+    def test_prefix_lands_before_the_prompt_text(self):
+        out = assemble_system_prompt(
+            _PROMPT_TEXT,
+            language="en",
+            injection=PromptInjection(prefix="LEAD WITH PAYMENTS"),
+        )
+        assert out.index("LEAD WITH PAYMENTS") < out.index(_PROMPT_TEXT)
+        assert out == f"LEAD WITH PAYMENTS\n\n{_PROMPT_TEXT}"
+
+    def test_postfix_lands_after_the_prompt_text(self):
+        out = assemble_system_prompt(
+            _PROMPT_TEXT,
+            language="en",
+            injection=PromptInjection(postfix="KEEP IT TO ONE PAGE"),
+        )
+        assert out.index(_PROMPT_TEXT) < out.index("KEEP IT TO ONE PAGE")
+        assert out == f"{_PROMPT_TEXT}\n\nKEEP IT TO ONE PAGE"
+
+    def test_both_bracket_the_prompt_text(self):
+        out = assemble_system_prompt(
+            _PROMPT_TEXT,
+            language="en",
+            injection=PromptInjection(prefix="BEFORE", postfix="AFTER"),
+        )
+        assert out == f"BEFORE\n\n{_PROMPT_TEXT}\n\nAFTER"
+
+    def test_first_msg_only_never_touches_the_system_prompt(self):
+        """normalized() is non-None here (first_msg survives), but neither prefix nor
+        postfix does — so the assembled prompt must stay byte-identical. This is the
+        one path where "an injection is present" and "the system prompt is unchanged"
+        must both hold."""
+        baseline = assemble_system_prompt(_PROMPT_TEXT, language="en")
+        out = assemble_system_prompt(
+            _PROMPT_TEXT,
+            language="en",
+            injection=PromptInjection(first_msg="mention the open-source work"),
+        )
+        assert out == baseline
+
+
+class TestPostfixNeverOutranksTheMachineAuthoredSections:
+    """Ordering is load-bearing, not cosmetic: the structured contract asserts it
+    "supersedes any sentinel-block instructions above", so a postfix landing after it
+    (e.g. "reply in plain prose, no JSON") would become the last word over the JSON
+    contract — a ProtocolError every turn, burning the MAX_FINAL_CORRECTIONS self-heal
+    budget and then triggering a BF-19 backend hop."""
+
+    def _assembled(self) -> str:
+        return assemble_system_prompt(
+            _PROMPT_TEXT,
+            language="es",
+            structured_model=json_schema_for(Stage.cv_adjust),
+            now=_NOW,
+            injection=PromptInjection(prefix="BEFORE", postfix="AFTER"),
+        )
+
+    def test_postfix_precedes_the_structured_contract(self):
+        out = self._assembled()
+        assert out.index("AFTER") < out.index("## Structured output contract")
+
+    def test_postfix_precedes_the_language_directive(self):
+        out = self._assembled()
+        assert out.index("AFTER") < out.index("## Output language")
+
+    def test_postfix_precedes_the_current_date_directive(self):
+        out = self._assembled()
+        assert out.index("AFTER") < out.index("## Current date")
+
+    def test_full_relative_order_prefix_prompt_postfix_then_machine_sections(self):
+        out = self._assembled()
+        positions = [
+            out.index("BEFORE"),
+            out.index(_PROMPT_TEXT),
+            out.index("AFTER"),
+            out.index("## Structured output contract"),
+            out.index("## Output language"),
+            out.index("## Current date"),
+        ]
+        assert positions == sorted(positions)
+
+
+class TestByteIdentityWithoutAnInjection:
+    """injection=None and an all-blank injection must both produce output
+    byte-identical to the pre-injection implementation — the cross-job prompt-cache
+    prefix invariant (CLAUDE.md → "Prompt caching") depends on it."""
+
+    _BLANKS = [
+        PromptInjection(),
+        PromptInjection(prefix="   ", postfix="\n\t ", first_msg="  \n"),
+    ]
+
+    @pytest.mark.parametrize("stage_name", ["fit_assessment", "cv_adjust", "cover_letter"])
+    @pytest.mark.parametrize("structured", [False, True])
+    @pytest.mark.parametrize("for_resume", [False, True])
+    def test_none_and_blank_match_the_no_injection_output(
+        self, stage_name, structured, for_resume
+    ):
+        from jsa.prompts.loader import read_prompt
+
+        stage = Stage[stage_name]
+        kwargs = dict(
+            language="es",
+            structured_model=json_schema_for(stage) if structured else None,
+            fit_verdict=stage is Stage.fit_assessment,
+            for_resume=for_resume,
+            now=_NOW,
+        )
+        prompt_text = read_prompt(stage_name)
+        baseline = assemble_system_prompt(prompt_text, **kwargs)
+
+        assert assemble_system_prompt(prompt_text, injection=None, **kwargs) == baseline
+        for blank in self._BLANKS:
+            assert assemble_system_prompt(prompt_text, injection=blank, **kwargs) == baseline
+
+
+class TestSentinelResumeKeepsTheWrapper:
+    """The sentinel-mode for_resume=True early return must return the WRAPPED text.
+    Returning the bare prompt_text there silently drops the user's wrapper from every
+    turn after the first on a CLI backend rebuilt from history."""
+
+    def test_for_resume_sentinel_mode_carries_prefix_and_postfix(self):
+        out = assemble_system_prompt(
+            _PROMPT_TEXT,
+            language="es",
+            structured_model=None,
+            for_resume=True,
+            now=_NOW,
+            injection=PromptInjection(prefix="BEFORE", postfix="AFTER"),
+        )
+        assert out == f"BEFORE\n\n{_PROMPT_TEXT}\n\nAFTER"
+        # Still no language/date directive on this path — unchanged from before.
+        assert "## Output language" not in out
+        assert "## Current date" not in out
+
+    def test_for_resume_structured_mode_carries_prefix_and_postfix(self):
+        out = assemble_system_prompt(
+            _PROMPT_TEXT,
+            language="en",
+            structured_model=json_schema_for(Stage.cv_adjust),
+            for_resume=True,
+            injection=PromptInjection(prefix="BEFORE", postfix="AFTER"),
+        )
+        assert out.index("BEFORE") < out.index(_PROMPT_TEXT) < out.index("AFTER")
+        assert out.index("AFTER") < out.index("## Structured output contract")
+
+
+# ===========================================================================
+# Phase 2: the first user message
+# ===========================================================================
+
+
+def _plain_job() -> Job:
+    return Job(**_job_data(), state=JobState.pending)
+
+
+class TestInitialUserMsgFirstMsg:
+    def test_first_msg_is_appended_last_under_the_label(self):
+        job = _plain_job()
+        msg = _build_initial_user_msg(job, None, None, first_msg="mention the OSS work")
+        assert msg.endswith(
+            "ADDITIONAL INSTRUCTIONS FROM THE USER (apply these to your work on this "
+            "application):\nmention the OSS work"
+        )
+        assert msg.index(job.jd) < msg.index("ADDITIONAL INSTRUCTIONS FROM THE USER")
+        assert msg.index(f"TIER: {job.tier}") < msg.index("ADDITIONAL INSTRUCTIONS FROM THE USER")
+
+    @pytest.mark.parametrize("first_msg", [None, ""])
+    def test_absent_first_msg_is_byte_identical(self, first_msg):
+        job = _plain_job()
+        baseline = _build_initial_user_msg(job, None, None)
+        assert _build_initial_user_msg(job, None, None, first_msg=first_msg) == baseline
+        assert baseline.endswith(f"TIER: {job.tier}")
+
+    def test_first_msg_composes_with_brief_and_cv_block(self):
+        job = _plain_job()
+        msg = _build_initial_user_msg(
+            job, "[INTEL_BRIEF] stuff", ("BASE CV STRUCTURE", "{}"), first_msg="do X"
+        )
+        positions = [
+            msg.index("[INTEL_BRIEF]"),
+            msg.index("BASE CV STRUCTURE"),
+            msg.index("JOB DESCRIPTION"),
+            msg.index("TIER:"),
+            msg.index("ADDITIONAL INSTRUCTIONS FROM THE USER"),
+        ]
+        assert positions == sorted(positions)
+
+
+class TestFitUserMsgIsNotTouched:
+    """Locked decision: the fit gate honors prefix/postfix (system prompt) but never
+    first_msg — _build_fit_user_msg stays a pure function of (job, base_structure)."""
+
+    def test_signature_takes_no_injection(self):
+        import inspect
+
+        sig = inspect.signature(_build_fit_user_msg)
+        assert list(sig.parameters) == ["job", "base_structure"]
+
+    def test_output_carries_no_user_instruction_block(self):
+        job = _plain_job()
+        msg = _build_fit_user_msg(job, base_structure=None)
+        assert "ADDITIONAL INSTRUCTIONS FROM THE USER" not in msg
+        assert msg.endswith(f"JOB DESCRIPTION:\n{job.jd}")
+
+
+# ===========================================================================
+# Phase 2: run_stage threading (fakes only — CLAUDE.md → "Testing conventions")
+# ===========================================================================
+
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+
+from jsa.agents.base import AgentReply  # noqa: E402
+from jsa.db.models import Base  # noqa: E402
+from jsa.pipeline.stages import run_stage  # noqa: E402
+from jsa.pipeline.state_machine import transition  # noqa: E402
+
+
+@pytest.fixture
+async def pipeline_session():
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with factory() as s:
+        yield s
+    await engine.dispose()
+
+
+async def _seed_job(session: AsyncSession, injection_raw: str) -> Job:
+    job = await repo.upsert_job(session, _job_data())
+    job.state = JobState.pending
+    job.injection = injection_raw
+    await session.commit()
+    return job
+
+
+def _capturing_backend_cls():
+    from uuid import uuid4
+
+    from tests.backend.fakes.fake_backend import FakeAgentBackend, FakeSessionHandle
+
+    class _Capturing(FakeAgentBackend):
+        def __init__(self, replies):
+            super().__init__(replies)
+            self.start_session_prompt: str | None = None
+            self.start_session_user_msg: str | None = None
+            self.restore_session_prompt: str | None = None
+
+        async def start_session(self, system_prompt, initial_user_msg):
+            self.start_session_prompt = system_prompt
+            self.start_session_user_msg = initial_user_msg
+            return FakeSessionHandle(id=str(uuid4()), external_id=None), self._pop_reply()
+
+        async def restore_session(self, system_prompt, history, external_id):
+            self.restore_session_prompt = system_prompt
+            return FakeSessionHandle(id=str(uuid4()), external_id=external_id)
+
+    return _Capturing
+
+
+_CV_JSON = {
+    "contact": {"name": "Jane Doe", "email": "jane.doe@example.com"},
+    "sections": [{"name": "Summary", "text": "Adjusted CV: senior engineer."}],
+}
+
+
+def _final_reply(content: str) -> "AgentReply":
+    return AgentReply(raw=f"<<<FINAL>>>\n{content}\n<<<END>>>", content=content, kind="final")
+
+
+_INJECTION_RAW = json.dumps(
+    {"prefix": "PREFIX-MARKER", "postfix": "POSTFIX-MARKER", "first_msg": "FIRSTMSG-MARKER"}
+)
+
+
+class TestRunStageThreadsTheInjection:
+    async def test_fresh_cv_adjust_session_carries_prefix_postfix_and_first_msg(
+        self, pipeline_session
+    ):
+        job = await _seed_job(pipeline_session, _INJECTION_RAW)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await pipeline_session.commit()
+
+        backend = _capturing_backend_cls()([_final_reply(json.dumps(_CV_JSON))])
+        await run_stage(job, backend, Stage.cv_adjust, pipeline_session)
+
+        prompt = backend.start_session_prompt
+        assert prompt is not None
+        assert prompt.startswith("PREFIX-MARKER\n\n")
+        # The postfix brackets the prompt file but still precedes every
+        # machine-authored section (here: the current-date directive).
+        assert "\n\nPOSTFIX-MARKER" in prompt
+        assert prompt.index("POSTFIX-MARKER") < prompt.index("## Current date")
+        assert backend.start_session_user_msg.endswith(
+            "ADDITIONAL INSTRUCTIONS FROM THE USER (apply these to your work on this "
+            "application):\nFIRSTMSG-MARKER"
+        )
+
+    async def test_resumed_cv_adjust_session_still_carries_prefix_and_postfix(
+        self, pipeline_session
+    ):
+        """Every structured-capable backend is wire-stateless and resends the system
+        prompt on every HTTP call; a CLI backend restores from history. Miss
+        resume_system_prompt and the injection applies to turn 1 and evaporates from
+        turn 2 onward."""
+        from datetime import datetime as _dt
+
+        from jsa.db.models import FollowUp, Message
+
+        job = await _seed_job(pipeline_session, _INJECTION_RAW)
+        transition(job, JobState.running, Stage.cv_adjust)
+        pipeline_session.add(
+            Message(job_id=job.id, stage=Stage.cv_adjust, role="user", content="hi")
+        )
+        pipeline_session.add(
+            Message(job_id=job.id, stage=Stage.cv_adjust, role="assistant", content="ok")
+        )
+        pipeline_session.add(
+            FollowUp(
+                job_id=job.id,
+                stage=Stage.cv_adjust,
+                question="q?",
+                answer="a!",
+                answered_at=_dt.utcnow(),
+            )
+        )
+        await pipeline_session.commit()
+
+        backend = _capturing_backend_cls()([_final_reply(json.dumps(_CV_JSON))])
+        await run_stage(job, backend, Stage.cv_adjust, pipeline_session)
+
+        assert backend.start_session_prompt is None  # resume path
+        prompt = backend.restore_session_prompt
+        assert prompt is not None
+        assert prompt.startswith("PREFIX-MARKER\n\n")
+        assert prompt.endswith("\n\nPOSTFIX-MARKER")
+
+    async def test_no_injection_leaves_both_paths_untouched(self, pipeline_session):
+        job = await _seed_job(pipeline_session, None)
+        transition(job, JobState.running, Stage.cv_adjust)
+        await pipeline_session.commit()
+
+        backend = _capturing_backend_cls()([_final_reply(json.dumps(_CV_JSON))])
+        await run_stage(job, backend, Stage.cv_adjust, pipeline_session)
+
+        assert "PREFIX-MARKER" not in backend.start_session_prompt
+        assert "ADDITIONAL INSTRUCTIONS FROM THE USER" not in backend.start_session_user_msg
+
+    async def test_fit_assessment_gets_prefix_postfix_but_never_first_msg(
+        self, pipeline_session
+    ):
+        job = await _seed_job(pipeline_session, _INJECTION_RAW)
+        transition(job, JobState.running, Stage.fit_assessment)
+        await pipeline_session.commit()
+
+        backend = _capturing_backend_cls()([_final_reply("FIT\ngood match")])
+        await run_stage(job, backend, Stage.fit_assessment, pipeline_session)
+
+        prompt = backend.start_session_prompt
+        assert prompt is not None
+        assert prompt.startswith("PREFIX-MARKER\n\n")
+        assert "\n\nPOSTFIX-MARKER" in prompt
+        assert prompt.index("POSTFIX-MARKER") < prompt.index("## Current date")
+        # Locked decision: _build_fit_user_msg is not touched.
+        assert "FIRSTMSG-MARKER" not in backend.start_session_user_msg
+        assert "ADDITIONAL INSTRUCTIONS FROM THE USER" not in backend.start_session_user_msg

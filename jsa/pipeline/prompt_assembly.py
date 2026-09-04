@@ -34,6 +34,20 @@ files"). It owns three independent concerns:
    caching (HTTP API backends)"); seconds-precision would make every request's prefix
    unique and defeat caching outright, while day granularity only invalidates the
    cached prefix once every 24h — looser than every provider's cache TTL here.
+4. **Per-job prompt injection** (only when ``injection`` is given) — the user-authored
+   ``prefix``/``postfix`` from ``jsa/schema/injection.py``'s ``PromptInjection``, which
+   bracket the file-authored ``prompt_text`` and **nothing else**. This is applied
+   FIRST, before any of the three sections above, so every machine-authored section
+   keeps its existing final position AFTER the postfix. The ordering is load-bearing,
+   not cosmetic: the structured-output contract asserts "This contract supersedes any
+   sentinel-block instructions above", so a postfix landing after it (e.g. "reply in
+   plain prose, no JSON") would become the last word over the JSON contract — a
+   ``ProtocolError`` every turn, burning the ``MAX_FINAL_CORRECTIONS`` self-heal budget
+   and then triggering a BF-19 backend hop. Do not reorder. ``injection=None`` and an
+   all-blank injection are both byte-identical to the pre-injection output, so the
+   cross-job prefix invariant above is untouched for every job without one (a job WITH
+   one deliberately gets its own, different prefix — an intended trade, pinned in
+   ``tests/backend/test_prompt_prefix_stability.py``).
 
 For sentinel-mode sessions (``structured_model=None``), only ever call this for NEW
 sessions (``start_session``) — never for a ``restore_session`` path; a resumed
@@ -75,6 +89,7 @@ from datetime import datetime
 from typing import Any
 
 from jsa.i18n.languages import language_name
+from jsa.schema.injection import PromptInjection
 
 
 def _sentinel_language_directive(language_code: str, *, fit_verdict: bool) -> str:
@@ -212,16 +227,21 @@ def assemble_system_prompt(
     fit_verdict: bool = False,
     for_resume: bool = False,
     now: datetime | None = None,
+    injection: PromptInjection | None = None,
 ) -> str:
     """Compose a session's system prompt from the file-authored ``prompt_text``.
 
     ``structured_model=None`` with ``now=None`` (the sentinel-mode / CLI-backend path,
     at its parity-gate default) is byte-identical to the pre-existing
     ``stages.py::_with_language_directive`` — see the module docstring's parity note.
-    In this mode ``for_resume=True`` returns ``prompt_text`` unchanged regardless of
-    ``now`` (no language directive, no date directive) — CLI backends have a real
-    session, so a resumed call needs nothing appended; this is what every
-    ``restore_session`` call site got before ``for_resume`` existed.
+    In this mode ``for_resume=True`` returns the prompt with no machine-authored
+    section appended, regardless of ``now`` (no language directive, no date directive)
+    — CLI backends have a real session, so a resumed call needs nothing appended; this
+    is what every ``restore_session`` call site got before ``for_resume`` existed. It
+    returns ``base``, not ``prompt_text``: the per-job injection wrapper MUST survive
+    this path, or a CLI backend rebuilding its session from history (BF-19 switch,
+    revision replay) silently drops it from turn 2 onward. With no injection the two
+    are the same object, which is why this reads as unchanged for every existing caller.
 
     ``structured_model``, when given, is the JSON schema (``jsa.schema.turn_models
     .json_schema_for(stage)``) the destination backend will enforce; passing it appends
@@ -239,9 +259,27 @@ def assemble_system_prompt(
     LAST, after everything else. Every real call site passes ``now=datetime.utcnow()``;
     only tests pass ``now=None`` to get the pre-date-directive output. See the module
     docstring's point 3 for the resend/day-granularity rationale.
+
+    ``injection`` (the per-job ``PromptInjection``, see ``jsa/schema/injection.py``)
+    brackets ``prompt_text`` and NOTHING else — see the module docstring's point 4 for
+    why every machine-authored section must keep its position after the postfix.
+    ``injection=None`` and an all-blank injection both produce byte-identical output to
+    the pre-injection implementation (``normalized()`` collapses the blank triple to
+    ``None``, and it is re-normalized here defensively rather than trusting the caller).
     """
+    # User-authored wrapper, applied FIRST so every machine-authored section below
+    # (structured contract, language directive, date directive) still lands last — see
+    # the module docstring's point 4.
+    inj = injection.normalized() if injection is not None else None
+    base = prompt_text
+    if inj is not None:
+        if inj.prefix:
+            base = f"{inj.prefix}\n\n{prompt_text}"
+        if inj.postfix:
+            base = f"{base}\n\n{inj.postfix}"
+
     if structured_model is not None:
-        prompt = prompt_text + _structured_contract(structured_model, fit_verdict=fit_verdict)
+        prompt = base + _structured_contract(structured_model, fit_verdict=fit_verdict)
         if not for_resume and language != "en":
             prompt += _structured_language_directive(language, fit_verdict=fit_verdict)
         # Wire-stateless backends resend the system prompt every call (see module
@@ -254,10 +292,12 @@ def assemble_system_prompt(
     if for_resume:
         # Real CLI session — it already carries the date from its fresh start (below);
         # nothing is appended here on resume, deliberately, same as the language
-        # directive this path has always skipped.
-        return prompt_text
+        # directive this path has always skipped. Returns `base`, NOT `prompt_text`:
+        # a CLI backend that rebuilds its session from history (BF-19 switch, revision
+        # replay) would otherwise silently drop the user's wrapper from turn 2 onward.
+        return base
 
-    prompt = prompt_text
+    prompt = base
     if language != "en":
         prompt += _sentinel_language_directive(language, fit_verdict=fit_verdict)
     if now is not None:
