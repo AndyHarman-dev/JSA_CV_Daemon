@@ -85,6 +85,12 @@ async def init_db(engine) -> None:
             await conn.execute(text("ALTER TABLE messages ADD COLUMN reasoning TEXT"))
         except OperationalError:
             pass  # column already exists — safe to ignore
+        # injection: per-job prompt overrides as JSON {prefix, postfix, first_msg};
+        # NULL = none (the normalized all-blank case too). See jsa/schema/injection.py.
+        try:
+            await conn.execute(text("ALTER TABLE jobs ADD COLUMN injection TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
 
 
 # ---------------------------------------------------------------------------
