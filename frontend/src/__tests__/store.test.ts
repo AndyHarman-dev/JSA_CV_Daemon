@@ -12,6 +12,8 @@ vi.mock("../api", () => ({
     listCvDecks: vi.fn().mockResolvedValue({ decks: [], default_id: null }),
     putJobBaseCv: vi.fn(),
     putJobInjection: vi.fn(),
+    getInjectionPresets: vi.fn(),
+    putInjectionPresets: vi.fn(),
   },
 }));
 
@@ -51,6 +53,8 @@ beforeEach(() => {
     cvPickerPos: { x: 0, y: 0 },
     injectorJobId: null,
     injectorPos: { x: 0, y: 0 },
+    injectionPresets: [],
+    presetsHydrated: false,
   });
   vi.clearAllMocks();
 });
@@ -598,5 +602,40 @@ describe("saveInjection", () => {
     expect(toasts[0].message).toBe("Job 'job1' is in state 'pending', expected 'queued'");
     // The panel deliberately stays open so the draft survives when it is still mountable.
     expect(useStore.getState().injectorJobId).toBe("job1");
+  });
+});
+
+describe("injection presets — the hydration gate", () => {
+  it("flips presetsHydrated only on a successful load", async () => {
+    vi.mocked(api.getInjectionPresets).mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    await useStore.getState().hydrateInjectionPresets();
+    expect(useStore.getState().presetsHydrated).toBe(false);
+    expect(useStore.getState().injectionPresets).toEqual([]);
+
+    vi.mocked(api.getInjectionPresets).mockResolvedValueOnce({ presets: [] } as never);
+    await useStore.getState().hydrateInjectionPresets();
+    expect(useStore.getState().presetsHydrated).toBe(true);
+  });
+
+  it("refuses to PUT before a successful load, so an empty list can't overwrite the library", async () => {
+    // `injectionPresets: []` means both "empty" and "load failed"; only the flag tells
+    // them apart, and every write here is a whole-list replace.
+    const ok = await useStore.getState().saveInjectionPresets([
+      { id: "a", name: "A", prefix: "p", postfix: "", first_msg: "", saved_at: "" },
+    ]);
+    expect(ok).toBe(false);
+    expect(api.putInjectionPresets).not.toHaveBeenCalled();
+    expect(useStore.getState().injectionPresets).toEqual([]);
+  });
+
+  it("reverts the optimistic list and reports false when the PUT fails", async () => {
+    const existing = { id: "x", name: "X", prefix: "", postfix: "", first_msg: "", saved_at: "" };
+    useStore.setState({ presetsHydrated: true, injectionPresets: [existing] });
+    vi.mocked(api.putInjectionPresets).mockRejectedValueOnce(new Error("HTTP 422"));
+
+    const ok = await useStore.getState().saveInjectionPresets([]);
+
+    expect(ok).toBe(false);
+    expect(useStore.getState().injectionPresets).toEqual([existing]);
   });
 });

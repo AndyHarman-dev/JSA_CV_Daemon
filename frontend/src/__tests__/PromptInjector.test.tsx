@@ -77,6 +77,10 @@ beforeEach(() => {
     injectorJobId: null,
     injectorPos: { x: 0, y: 0 },
     injectionPresets: [],
+    // These tests model a normally-booted app. The store's own default is `false`, which
+    // BLOCKS every preset write (see store.ts's `presetsHydrated`) — leaving it unset here
+    // would let the three preset tests below pass while silently never reaching the API.
+    presetsHydrated: true,
   });
 });
 
@@ -324,6 +328,66 @@ describe("PromptInjector presets", () => {
     fireEvent.click(screen.getByText("SAVE"));
 
     expect(api.putInjectionPresets).not.toHaveBeenCalled();
+  });
+
+  it("refuses every preset write when the library was never loaded, and offers a reload", async () => {
+    // The wipe this guards: hydration fails, `injectionPresets` sits at [] (which is
+    // indistinguishable from an empty library), and the next save whole-list-PUTs one
+    // entry over everything on the server. The gate is the flag, not the array.
+    useStore.setState({ presetsHydrated: false, injectionPresets: [] });
+    seedJobs(makeJob());
+    renderBoth();
+
+    fireEvent.click(trigger(), { clientX: 10, clientY: 10 });
+    fireEvent.change(screen.getByLabelText("PRE-FIX PROMPT"), { target: { value: "text" } });
+    fireEvent.change(screen.getByPlaceholderText("Name this dose to save…"), {
+      target: { value: "New dose" },
+    });
+    fireEvent.click(screen.getByText("SAVE"));
+
+    await screen.findByTestId("preset-error");
+    // The load-bearing assertion: nothing was sent. A test asserting only that an error
+    // rendered would still pass against a store that PUTs first and reports failure after.
+    expect(api.putInjectionPresets).not.toHaveBeenCalled();
+    // The typed name survives, so the dose isn't lost to a write that never happened.
+    expect(screen.getByPlaceholderText("Name this dose to save…")).toHaveValue("New dose");
+
+    // Recovery is explicit, never a re-hydrate fired from inside the refused write — that
+    // would land a fresh list under a component still holding the stale empty snapshot.
+    vi.mocked(api.getInjectionPresets).mockResolvedValueOnce({
+      presets: [makePreset({ id: "srv", name: "FromServer" })],
+    } as never);
+    fireEvent.click(screen.getByText("RELOAD"));
+    await waitFor(() => expect(useStore.getState().presetsHydrated).toBe(true));
+
+    fireEvent.click(screen.getByText("SAVE"));
+    await waitFor(() => expect(api.putInjectionPresets).toHaveBeenCalledTimes(1));
+    // Composed against the reloaded list — the server's dose is still there.
+    expect(vi.mocked(api.putInjectionPresets).mock.calls[0][0].map((p) => p.name)).toEqual([
+      "New dose",
+      "FromServer",
+    ]);
+  });
+
+  it("keeps the typed dose name when the write itself fails", async () => {
+    vi.mocked(api.putInjectionPresets).mockRejectedValueOnce(new Error("HTTP 422"));
+    useStore.setState({ injectionPresets: [makePreset({ id: "old", name: "Older" })] });
+    seedJobs(makeJob());
+    renderBoth();
+
+    fireEvent.click(trigger(), { clientX: 10, clientY: 10 });
+    fireEvent.change(screen.getByLabelText("PRE-FIX PROMPT"), { target: { value: "text" } });
+    fireEvent.change(screen.getByPlaceholderText("Name this dose to save…"), {
+      target: { value: "Rejected" },
+    });
+    fireEvent.click(screen.getByText("SAVE"));
+
+    await screen.findByTestId("preset-error");
+    expect(screen.getByPlaceholderText("Name this dose to save…")).toHaveValue("Rejected");
+    // Optimistic set was reverted, so the chip doesn't linger as if it saved.
+    expect(useStore.getState().injectionPresets.map((p) => p.name)).toEqual(["Older"]);
+    // A failed write is not a failed load — no RELOAD offered.
+    expect(screen.queryByText("RELOAD")).toBeNull();
   });
 
   it("deletes the chip that was clicked even when two presets share an id", async () => {

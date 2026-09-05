@@ -294,7 +294,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "fr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -591,7 +594,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "de": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -888,7 +894,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "pt": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1185,7 +1194,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "it": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1482,7 +1494,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "nl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1779,7 +1794,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "sv": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2076,7 +2094,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "pl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2373,7 +2394,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "ru": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2670,7 +2694,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "tr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2967,7 +2994,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "ar": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3264,7 +3294,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "he": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3561,7 +3594,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "zh": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3858,7 +3894,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "ko": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4155,7 +4194,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "hi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4452,7 +4494,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "id": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4749,7 +4794,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "ja": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -5046,7 +5094,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "vi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -5343,7 +5394,10 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   },
   "th": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -5640,6 +5694,9 @@
     "promptInjector.presetDeleteTitle": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
     "promptInjector.clear": "9cc3a043b6a91d450bc371346440544bbf9393ad1cf3122c1f37da242992f72e",
     "promptInjector.cancel": "ad8d698573fcb090121f2003187e82cec33f5596e4ee2279d6c6fb7b61dc0179",
-    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595"
+    "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
+    "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
+    "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
   }
 }

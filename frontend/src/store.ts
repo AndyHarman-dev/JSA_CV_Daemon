@@ -96,6 +96,14 @@ interface Store {
   injectorPos: { x: number; y: number };
   // Global "dose" library (GET/PUT /api/injection-presets). Hydrated once on boot.
   injectionPresets: InjectionPresetDTO[];
+  // True only once a GET has actually succeeded. `injectionPresets: []` is ambiguous —
+  // it is both "the library is empty" and "the load failed" — and every write here is a
+  // whole-list replace, so writing under the second reading PUTs one entry over the
+  // user's entire server-side library. Hydration runs once at mount and never retries,
+  // so a single transient failure (dev mode's split origin, or a tab outliving a `jsa`
+  // restart) would otherwise leave that tab one save away from destroying the library.
+  // This flag, not the array's emptiness, is what gates `saveInjectionPresets`.
+  presetsHydrated: boolean;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setViewedStage(stage: Store["viewedStage"]): void;
@@ -127,7 +135,9 @@ interface Store {
   closeInjector(): void;
   saveInjection(jobId: string, draft: PromptInjectionDTO): Promise<void>;
   hydrateInjectionPresets(): Promise<void>;
-  saveInjectionPresets(presets: InjectionPresetDTO[]): Promise<void>;
+  // Resolves false when the write was refused or failed, so the caller can keep the
+  // user's input instead of clearing it against a save that never landed.
+  saveInjectionPresets(presets: InjectionPresetDTO[]): Promise<boolean>;
 }
 
 // Panel geometry, needed here (not in the component) because the clamp below runs at open
@@ -166,6 +176,7 @@ export const useStore = create<Store>((set, get) => ({
   injectorJobId: null,
   injectorPos: { x: 0, y: 0 },
   injectionPresets: [],
+  presetsHydrated: false,
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -576,22 +587,35 @@ export const useStore = create<Store>((set, get) => ({
   async hydrateInjectionPresets() {
     try {
       const { presets } = await api.getInjectionPresets();
-      set({ injectionPresets: presets });
+      // `presetsHydrated` flips only here, on an actual success — see its declaration.
+      set({ injectionPresets: presets, presetsHydrated: true });
     } catch (err) {
-      // Presets are a convenience — a failed load must never block the boot path.
+      // Presets are a convenience — a failed load must never block the boot path. It
+      // leaves `presetsHydrated` false instead, which blocks writes rather than the boot.
       console.error("hydrateInjectionPresets failed:", err);
     }
   },
 
   async saveInjectionPresets(presets: InjectionPresetDTO[]) {
+    if (!get().presetsHydrated) {
+      // Refuse rather than overwrite. Deliberately NOT self-healing with a re-hydrate
+      // fired from here: that would land a fresh list under a caller still holding the
+      // stale empty snapshot it computed `presets` from, and the very next write would
+      // do exactly the damage this guard exists to prevent. Recovery is an explicit
+      // RELOAD in the panel, so the component re-renders before it composes a new list.
+      console.error("saveInjectionPresets refused: presets were never loaded");
+      return false;
+    }
     const previous = get().injectionPresets;
     set({ injectionPresets: presets });
     try {
       // Whole-list replace: add, delete and reorder are all just a new array.
       await api.putInjectionPresets(presets);
+      return true;
     } catch (err) {
       console.error("saveInjectionPresets failed, reverting:", err);
       set({ injectionPresets: previous });
+      return false;
     }
   },
 }));

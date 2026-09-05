@@ -239,11 +239,16 @@ function Vial({ job }: { job: JobDTO }) {
   const saveInjection = useStore((s) => s.saveInjection);
   const presets = useStore((s) => s.injectionPresets);
   const saveInjectionPresets = useStore((s) => s.saveInjectionPresets);
+  const presetsHydrated = useStore((s) => s.presetsHydrated);
+  const hydrateInjectionPresets = useStore((s) => s.hydrateInjectionPresets);
   const pos = useStore((s) => s.injectorPos);
   const t = useT();
 
   const [draft, setDraft] = useState<PromptInjectionDTO>(job.injection ?? BLANK);
   const [saveName, setSaveName] = useState("");
+  // Hoisted above BOTH preset writes (save and delete) — a refused delete has no
+  // `saveName` to fall back on, so a message local to the save row would leave it silent.
+  const [presetError, setPresetError] = useState<string | null>(null);
 
   // Escape closes and discards, same as Cancel — standard for a dismissible overlay.
   useEffect(() => {
@@ -256,6 +261,19 @@ function Vial({ job }: { job: JobDTO }) {
 
   const filled = FIELDS.filter((f) => draft[f.key].trim() !== "").length;
 
+  // Both preset writes funnel through here so the refusal and the failure surface once.
+  // The name is cleared only after the write actually lands — clearing it optimistically
+  // discarded the user's typing on a write that never happened.
+  const writePresets = async (next: InjectionPresetDTO[], onOk?: () => void) => {
+    const ok = await saveInjectionPresets(next);
+    if (ok) {
+      setPresetError(null);
+      onOk?.();
+    } else {
+      setPresetError(presetsHydrated ? "promptInjector.presetWriteFailed" : "promptInjector.presetsBlocked");
+    }
+  };
+
   const savePreset = () => {
     const name = saveName.trim();
     if (!name || !anyFilled(draft)) return; // ignored, per the design — no error state
@@ -265,8 +283,7 @@ function Vial({ job }: { job: JobDTO }) {
       ...draft,
       saved_at: new Date().toISOString(), // client-supplied; the server never generates it
     };
-    setSaveName("");
-    void saveInjectionPresets([preset, ...presets]);
+    void writePresets([preset, ...presets], () => setSaveName(""));
   };
 
   return (
@@ -390,8 +407,42 @@ function Vial({ job }: { job: JobDTO }) {
               // Only the three injection fields are copied across — a preset's id/name/
               // saved_at would 422 the extra="forbid" PUT body if they ever rode along.
               onPaste={(p) => setDraft({ prefix: p.prefix, postfix: p.postfix, first_msg: p.first_msg })}
-              onDelete={(i) => void saveInjectionPresets(presets.filter((_, idx) => idx !== i))}
+              onDelete={(i) => void writePresets(presets.filter((_, idx) => idx !== i))}
             />
+            {presetError !== null && (
+              <div
+                data-testid="preset-error"
+                role="alert"
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 8,
+                  font: `400 11px/1.45 ${T.ui}`,
+                  color: T.danger,
+                }}
+              >
+                <span style={{ flex: 1 }}>{t(presetError)}</span>
+                {!presetsHydrated && (
+                  <button
+                    type="button"
+                    onClick={() => void hydrateInjectionPresets()}
+                    style={{
+                      flex: "none",
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      font: `600 10px ${T.mono}`,
+                      letterSpacing: ".12em",
+                      color: T.danger,
+                      textDecoration: "underline",
+                    }}
+                  >
+                    {t("promptInjector.presetsReload")}
+                  </button>
+                )}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 6 }}>
               <input
                 value={saveName}
