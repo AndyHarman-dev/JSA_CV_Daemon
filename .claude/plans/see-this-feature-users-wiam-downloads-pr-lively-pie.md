@@ -714,6 +714,22 @@ independently confirmed all four `assemble_system_prompt` call sites thread
 `injection=`, the `prompt_text`→`base` invariant in every branch, and the 22 i18n keys
 across en/ru/ar.
 
+**2026-09-04**: context — the user approved fixing the one escalated review finding (the
+preset-library wipe). actions — added `presetsHydrated` to the store, flipped true only by
+a successful GET, and gated `saveInjectionPresets` on the flag rather than on
+`injectionPresets.length`; both panel call sites (save and delete) now funnel through one
+`writePresets` helper, the dose name is cleared only after the write lands, and recovery is
+an explicit RELOAD action in the panel. Three i18n keys added and fanned to all 19 locales.
+decisions — deliberately did NOT self-heal by re-hydrating from inside the refused write:
+that lands a fresh list under a caller still holding the stale empty snapshot it composed
+`presets` from, which is the same wipe by another route. Surfaced the message inline in the
+panel rather than as a toast, because `ToastItem.message` is reserved for verbatim server
+text and this is app copy that must go through `useT()`. Left `injection_presets.py`'s
+non-atomic `_save_sync` alone — this closes the wipe-by-valid-write path, not
+torn-file-on-crash. verification — **verified**: frontend 463 passed across 28 files (+5),
+`tsc --noEmit` clean, `npm run build` clean, `translate-ui.sh --check` exit 0. The blocked
+-write test was mutation-tested — removing the guard from `store.ts` fails it.
+
 ---
 
 ## Decisions Log
