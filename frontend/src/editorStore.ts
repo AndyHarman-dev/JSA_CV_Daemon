@@ -250,6 +250,12 @@ interface EditorState {
   saving: boolean;
   saveError: string | null;
 
+  // Import-a-.json failure. Deliberately its own field rather than a reuse of `inferError`
+  // (which drives InferringState's step checklist — an import has no steps) or `saveError`
+  // (whose strip reads "Couldn't save: …", the wrong sentence for a file that never got
+  // as far as the server).
+  importError: string | null;
+
   // --- decks (the editor rail) ---
   decks: CvDeckDTO[];
   defaultDeckId: string | null;
@@ -309,6 +315,7 @@ interface EditorState {
   beginInfer(filename: string): void;
   onInferProgress(e: Extract<WSEvent, { type: "infer_progress" }>): void;
   inferFromFile(file: File): Promise<void>;
+  importFromJsonFile(file: File): Promise<void>;
   save(): Promise<boolean>;
 
   // --- decks ---
@@ -359,6 +366,19 @@ export function detailOf(err: unknown, fallback: string): string {
 function tr(key: string): string {
   const language = useStore.getState().language;
   return getCatalog(language)?.[key] ?? englishCatalog[key] ?? key;
+}
+
+// Blob.text() would be the modern one-liner, but the jsdom build these tests run against
+// does not implement it (`f.text is not a function`), and FileReader — which jsdom and every
+// target browser do have — costs one wrapper. Failing to read is kept distinct from failing
+// to parse: an unreadable file is not malformed JSON, and saying so would misdirect.
+function readTextFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsText(file);
+  });
 }
 
 export const useEditorStore = create<EditorState>((set, get) => {
@@ -424,6 +444,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     canRedo: false,
     saving: false,
     saveError: null,
+    importError: null,
     decks: [],
     defaultDeckId: null,
     activeDeckId: null,
@@ -444,6 +465,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         canRedo: false,
         inferring: false,
         inferError: null,
+        importError: null,
         selectedId: ed.sections[0]?.id ?? null,
         saveError: null,
         unsaved: false,
@@ -462,6 +484,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         canRedo: false,
         inferring: false,
         inferError: null,
+        importError: null,
         selectedId: ed.sections[0]?.id ?? null,
         saveError: null,
         // A pristine blank slate is not an unsaved *change* — the first edit sets the flag.
@@ -482,6 +505,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         inferring: false,
         inferStep: 0,
         inferError: null,
+        importError: null,
         selectedId: null,
         jsonOpen: false,
         saveError: null,
@@ -753,6 +777,42 @@ export const useEditorStore = create<EditorState>((set, get) => {
       } catch (err) {
         set({ inferring: true, inferError: detailOf(err, "Inference failed") });
       }
+    },
+
+    // Adopt an already-structured CV JSON file — the third entry point beside RUN INFERENCE
+    // (a PDF/DOCX through the model) and INIT BLANK (an empty skeleton). Purely client-side:
+    // it fills the buffer and nothing more, so the deck it lands in is whichever empty slot
+    // the user is standing in, and COMMIT is still the gate that writes it to disk. That is
+    // what keeps a rejected file from minting a `has_cv: false` deck nobody asked for.
+    async importFromJsonFile(file) {
+      let text: string;
+      try {
+        text = await readTextFile(file);
+      } catch {
+        set({ importError: tr("cvEditor.importReadFailed") });
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        set({ importError: tr("cvEditor.importBadJson") });
+        return;
+      }
+      try {
+        // toEditor() is the shape guard, not a hand-written schema check: it dereferences
+        // `cv.contact` and spreads `sections`/`items`/`bullets` unconditionally, so anything
+        // it cannot read throws here — BEFORE its first set() — leaving the buffer untouched.
+        // Reimplementing CVDocument client-side would only duplicate the server's Pydantic
+        // model, which still gets the final say on COMMIT (422 → saveError).
+        get().load(parsed as CVDocument); // clears importError on success
+      } catch {
+        set({ importError: tr("cvEditor.importBadShape") });
+        return;
+      }
+      // Unlike startBlank()'s pristine skeleton, an imported document IS content: leaving
+      // `unsaved` false would let a deck switch drop the user's file without a prompt.
+      set({ unsaved: true });
     },
 
     async save() {

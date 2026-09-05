@@ -618,3 +618,63 @@ describe("renameDeck", () => {
     expect(useEditorStore.getState().renameId).toBeNull();
   });
 });
+
+describe("importFromJsonFile — adopting an existing CV .json", () => {
+  function jsonFile(body: string, name = "cv.json"): File {
+    return new File([body], name, { type: "application/json" });
+  }
+
+  it("fills the buffer from a valid CV document without touching the deck API", async () => {
+    await useEditorStore.getState().importFromJsonFile(jsonFile(JSON.stringify(SAMPLE)));
+
+    const st = useEditorStore.getState();
+    expect(st.importError).toBeNull();
+    expect(st.cv?.contact.name).toBe("Jane Doe");
+    expect(st.cv?.sections.map((s) => s.name)).toEqual(["Summary", "Experience", "Skills"]);
+    // The import is buffer-only — COMMIT is still what writes it. A deck minted here on a
+    // file the server later rejects would leave an unassignable `has_cv: false` row behind.
+    expect(api.createCvDeck).not.toHaveBeenCalled();
+    expect(api.saveCvDeck).not.toHaveBeenCalled();
+    // Unlike INIT BLANK's pristine skeleton, this is content: a deck switch must flush it.
+    expect(st.unsaved).toBe(true);
+  });
+
+  it("round-trips the imported document back out unchanged", async () => {
+    await useEditorStore.getState().importFromJsonFile(jsonFile(JSON.stringify(SAMPLE)));
+    expect(exportJson(useEditorStore.getState().cv!)).toEqual(exportJson(toEditor(SAMPLE)));
+  });
+
+  it("reports unparseable JSON and leaves the buffer alone", async () => {
+    await useEditorStore.getState().importFromJsonFile(jsonFile("{not json at all"));
+
+    const st = useEditorStore.getState();
+    expect(st.cv).toBeNull();
+    expect(st.importError).toBe("That file isn't valid JSON — it couldn't be parsed.");
+    expect(st.unsaved).toBe(false);
+  });
+
+  it("reports well-formed JSON that isn't a CV structure, instead of throwing", async () => {
+    // The load-bearing case: toEditor() dereferences `cv.contact` unconditionally, so
+    // without the catch this rejects and the buffer is left mid-import. Removing the
+    // try/catch in importFromJsonFile must fail THIS test.
+    for (const body of ["[]", "{}", "null", '{"sections": []}', '{"contact": {"name": "x"}, "sections": 5}']) {
+      useEditorStore.getState().reset();
+      await expect(
+        useEditorStore.getState().importFromJsonFile(jsonFile(body))
+      ).resolves.toBeUndefined();
+      const st = useEditorStore.getState();
+      expect(st.cv, `body=${body}`).toBeNull();
+      expect(st.importError, `body=${body}`).toBe(
+        'That JSON isn\'t a CV structure. It needs a "contact" object and a "sections" list.'
+      );
+    }
+  });
+
+  it("clears a previous import error once a good file lands", async () => {
+    await useEditorStore.getState().importFromJsonFile(jsonFile("nope"));
+    expect(useEditorStore.getState().importError).not.toBeNull();
+
+    await useEditorStore.getState().importFromJsonFile(jsonFile(JSON.stringify(SAMPLE)));
+    expect(useEditorStore.getState().importError).toBeNull();
+  });
+});

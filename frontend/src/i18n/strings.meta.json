@@ -297,7 +297,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "fr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -597,7 +601,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "de": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -897,7 +905,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "pt": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1197,7 +1209,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "it": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1497,7 +1513,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "nl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -1797,7 +1817,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "sv": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2097,7 +2121,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "pl": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2397,7 +2425,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "ru": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2697,7 +2729,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "tr": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -2997,7 +3033,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "ar": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3297,7 +3337,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "he": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3597,7 +3641,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "zh": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -3897,7 +3945,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "ko": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4197,7 +4249,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "hi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4497,7 +4553,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "id": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -4797,7 +4857,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "ja": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -5097,7 +5161,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "vi": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -5397,7 +5465,11 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   },
   "th": {
     "cvEditor.sub": "e387f39e2f8c5f49e8bcecc67c50df77f1dbc44abc74ea1ddfa64bed9ac645b8",
@@ -5697,6 +5769,10 @@
     "promptInjector.save": "22a57e60af5b11d1619bfebb38e30dfeb0cb971adebf1459fa9b874c90605595",
     "promptInjector.presetsBlocked": "cea46f297c1ab70b8a5fa7d8b3bd389803844ce63df62e49481702f17c7e6d56",
     "promptInjector.presetWriteFailed": "4a18d7d603306e7814b5a370c9abc03bbb1c8a15e39f196da357ec95d9f5f9fe",
-    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e"
+    "promptInjector.presetsReload": "8229c4ee6826f88ecacc250b9ffa94b88f1e843c882dbf7a81697bfefa92657e",
+    "cvEditor.openJson": "d7645fc348d8a8ce19f1dbe4cc19f98624eeb713a9c7a6244e1643e391088d91",
+    "cvEditor.importReadFailed": "6053962159b9cd257d63dbd39fc5279bd39527085f7fa4f6c26065b2d633b71d",
+    "cvEditor.importBadJson": "c5e907bc6962beb918c6703d5ca5168cf66708b16d001efe8cb1405e846c10a2",
+    "cvEditor.importBadShape": "9d5647716bdb83a09988e5724cf43aa6a97531b504e85dcd63d6b266a47dcc0b"
   }
 }

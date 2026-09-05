@@ -11,7 +11,7 @@ import { useStore } from "../../store";
 import { useT } from "../../i18n/useT";
 import { panelBase, cornerMarks } from "../../theme/chrome";
 import { Icon, type IconName } from "../../theme/Icon";
-import { EDITOR_THEME, paperT } from "../../theme/tokens";
+import { EDITOR_THEME, SHELL_THEME, paperT } from "../../theme/tokens";
 import { BlocksView } from "./BlocksView";
 import { DocumentView } from "./PaperSheet";
 import { JsonDrawer } from "./JsonDrawer";
@@ -21,7 +21,9 @@ import { DeckRail } from "./DeckRail";
 
 const T = EDITOR_THEME;
 
-function tbtnStyle(primary: boolean, disabled?: boolean): CSSProperties {
+// `accent` overrides the editor's red only for the OPEN JSON button, which the design
+// carries in the shell's amber — see SHELL_THEME in theme/tokens.ts.
+function tbtnStyle(primary: boolean, disabled?: boolean, accent: string = T.a): CSSProperties {
   return {
     display: "inline-flex",
     alignItems: "center",
@@ -33,43 +35,58 @@ function tbtnStyle(primary: boolean, disabled?: boolean): CSSProperties {
     font: `600 12px ${T.disp}`,
     letterSpacing: ".04em",
     color: primary ? "#06080B" : T.ink,
-    background: primary ? T.a : T.surface,
+    background: primary ? accent : T.surface,
     opacity: disabled ? 0.5 : 1,
-    boxShadow: primary ? `0 1px 14px ${T.a}55` : "none",
+    boxShadow: primary ? `0 1px 14px ${accent}55` : "none",
   };
 }
 
+// One hidden-input dance for both file entry points (inference and JSON import). The
+// `e.target.value = ""` reset is load-bearing: without it, picking the SAME file twice in a
+// row fires no change event and the second click looks dead.
 function FileButton({
   label,
   primary,
   disabled,
+  accept = ".pdf,.docx,.txt,.md",
+  icon = "spark",
+  accent,
+  testId,
+  onFile,
 }: {
   label: string;
   primary?: boolean;
   disabled?: boolean;
+  accept?: string;
+  icon?: IconName;
+  accent?: string;
+  testId?: string;
+  onFile?: (f: File) => void;
 }) {
   const inferFromFile = useEditorStore((s) => s.inferFromFile);
   const ref = useRef<HTMLInputElement>(null);
+  const handle = onFile ?? ((f: File) => void inferFromFile(f));
   return (
     <>
       <button
         type="button"
         onClick={() => ref.current?.click()}
         disabled={disabled}
+        data-testid={testId}
         className={primary ? "cvprimary" : "cvghost"}
-        style={tbtnStyle(!!primary, disabled)}
+        style={tbtnStyle(!!primary, disabled, accent)}
       >
-        <Icon name="spark" size={14} />
+        <Icon name={icon} size={14} />
         {label}
       </button>
       <input
         ref={ref}
         type="file"
-        accept=".pdf,.docx,.txt,.md"
+        accept={accept}
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) void inferFromFile(f);
+          if (f) handle(f);
           e.target.value = "";
         }}
       />
@@ -79,6 +96,8 @@ function FileButton({
 
 function EmptyState() {
   const startBlank = useEditorStore((s) => s.startBlank);
+  const importFromJsonFile = useEditorStore((s) => s.importFromJsonFile);
+  const importError = useEditorStore((s) => s.importError);
   const t = useT();
   return (
     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", zIndex: 1 }}>
@@ -105,6 +124,15 @@ function EmptyState() {
         </p>
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
           <FileButton label={t("cvEditor.runInference")} primary />
+          <FileButton
+            label={t("cvEditor.openJson")}
+            primary
+            accept=".json,application/json"
+            icon="braces"
+            accent={SHELL_THEME.a}
+            testId="open-json"
+            onFile={(f) => void importFromJsonFile(f)}
+          />
           <button
             type="button"
             onClick={startBlank}
@@ -127,6 +155,23 @@ function EmptyState() {
             {t("cvEditor.initBlank")}
           </button>
         </div>
+        {importError && (
+          <div
+            data-testid="import-error"
+            role="alert"
+            style={{
+              marginTop: 16,
+              padding: "8px 12px",
+              border: `1px solid ${T.danger}55`,
+              background: `${T.danger}1A`,
+              color: T.danger,
+              font: `400 13px/1.5 ${T.ui}`,
+              borderRadius: T.btnRadius,
+            }}
+          >
+            {importError}
+          </div>
+        )}
       </div>
     </div>
   );
