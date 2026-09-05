@@ -547,8 +547,29 @@ export const useStore = create<Store>((set, get) => ({
       get().upsertJob(job);
       get().closeInjector();
     } catch (err) {
-      // Leave the panel open with the draft intact so the edit isn't silently lost.
+      // Leave the panel open with the draft intact so the edit isn't silently lost —
+      // but that alone is NOT enough on the failure this route actually produces. The
+      // 400 fires when the job left `queued` (a concurrent LAUNCH ALL) between opening
+      // the vial and pressing SAVE, and the WS state change then unmounts the panel
+      // (`PromptInjector` returns null off `queued`), taking the "intact" draft with it.
+      // So surface it the same way the sibling `assignBaseCv` above surfaces its own
+      // pre-launch-gate rejection.
       console.error("saveInjection failed:", err);
+      const store = get();
+      set({
+        toasts: [
+          ...store.toasts,
+          {
+            id: `injection-${jobId}-${Date.now()}`,
+            jobId,
+            jobLabel: store.jobLabelFor(jobId),
+            kind: "error" as const,
+            from: "",
+            to: "",
+            message: detailOf(err, "Could not save the prompt injection"),
+          },
+        ].slice(-5),
+      });
     }
   },
 

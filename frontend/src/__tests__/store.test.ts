@@ -11,6 +11,7 @@ vi.mock("../api", () => ({
     config: vi.fn().mockResolvedValue({ languages: [] }),
     listCvDecks: vi.fn().mockResolvedValue({ decks: [], default_id: null }),
     putJobBaseCv: vi.fn(),
+    putJobInjection: vi.fn(),
   },
 }));
 
@@ -48,6 +49,8 @@ beforeEach(() => {
     cvDecksDefaultId: null,
     cvPickerJobId: null,
     cvPickerPos: { x: 0, y: 0 },
+    injectorJobId: null,
+    injectorPos: { x: 0, y: 0 },
   });
   vi.clearAllMocks();
 });
@@ -556,5 +559,44 @@ describe("assignBaseCv", () => {
     expect(toasts).toHaveLength(1);
     expect(toasts[0].kind).toBe("error");
     expect(toasts[0].message).toBe("deck is not assignable");
+  });
+});
+
+describe("saveInjection", () => {
+  it("patches the job in the store and closes the panel on success", async () => {
+    const updated = makeJob({ id: "job1", injection: { prefix: "p", postfix: "", first_msg: "" } });
+    vi.mocked(api.putJobInjection).mockResolvedValueOnce(updated as never);
+    useStore.setState({ injectorJobId: "job1" });
+
+    await useStore.getState().saveInjection("job1", { prefix: "p", postfix: "", first_msg: "" });
+
+    expect(api.putJobInjection).toHaveBeenCalledWith("job1", {
+      prefix: "p",
+      postfix: "",
+      first_msg: "",
+    });
+    expect(useStore.getState().jobs["job1"]).toEqual(updated);
+    expect(useStore.getState().injectorJobId).toBeNull();
+  });
+
+  it("toasts the server's detail on failure instead of failing silently", async () => {
+    // The real 400: LAUNCH ALL moved the job off `queued` between opening the vial and
+    // pressing SAVE. Leaving the panel open is not enough — the WS state change unmounts
+    // it (PromptInjector returns null off `queued`), so without this toast the rejected
+    // write is invisible. Mirrors assignBaseCv's gate-rejection toast above.
+    vi.mocked(api.putJobInjection).mockRejectedValueOnce(
+      new Error('HTTP 400: {"detail":"Job \'job1\' is in state \'pending\', expected \'queued\'"}')
+    );
+    useStore.setState({ injectorJobId: "job1", jobs: { job1: makeJob({ id: "job1" }) } });
+
+    await useStore.getState().saveInjection("job1", { prefix: "p", postfix: "", first_msg: "" });
+
+    const toasts = useStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("error");
+    expect(toasts[0].jobId).toBe("job1");
+    expect(toasts[0].message).toBe("Job 'job1' is in state 'pending', expected 'queued'");
+    // The panel deliberately stays open so the draft survives when it is still mountable.
+    expect(useStore.getState().injectorJobId).toBe("job1");
   });
 });

@@ -685,6 +685,32 @@ tests), so no test was lost in any merge; frontend 456 passed across 28 files (n
 file dropped); `tsc --noEmit` clean. Not done: merge to `main` (awaiting explicit
 approval per the git branch policy) and the manual end-to-end smoke checks.
 
+**2026-09-04**: context — the CLAUDE.md-mandated post-implementation review
+(`/code-review medium 3b3b61f^..HEAD`, scope verified as this branch's integration
+commits) landed after the merge was committed; triage its five findings. actions —
+applied one (`store.saveInjection` now toasts `detailOf(err, …)` on failure, mirroring
+the sibling `assignBaseCv`, pinned by two new `store.test.ts` cases); rejected three
+(no `max_length` on the injection PUT body — v1 is local-only single-user and the only
+poster is the user's own vial; the preset-save revert staying console-only — the toast
+channel is job-keyed and presets are global, so surfacing it is a design call, not a
+fix; `_THINKING_BUDGET` — `includeThoughts` already created the whole `thinkingConfig`
+rejection surface, and the pinned budget is itself the fix for a live-observed starved
+reply); escalated one (a failed `hydrateInjectionPresets` leaves `injectionPresets: []`
+with no retry, and the next dose save whole-list-PUTs one entry over the server library
+— real, but the guard is a UX choice). decisions — the reviewer's "boot race" trigger
+for that finding is wrong for the bundled path but right for `npm run dev`'s split
+origin and for a tab outliving a `jsa` restart; its corrupt-file trigger is weak, since
+overwriting an unparseable file with one valid entry is closer to recovery than loss.
+Also recorded here because it was not accounted for at merge time: this branch carried
+two commits unrelated to prompt injection that the merge brought onto the integration
+branch — `60e3420` (cap Gemini's `thinkingBudget`) and `e3c686b` (the ReviewPane JOB
+POSTING link, folded in as Phase 5). verification — **verified**: frontend 458 passed
+across 28 files, `tsc --noEmit` clean, `npm run build` clean (bundle rebuilt); backend
+untouched by the applied fix. Zero merge defects were found by the review — it
+independently confirmed all four `assemble_system_prompt` call sites thread
+`injection=`, the `prompt_text`→`base` invariant in every branch, and the 22 i18n keys
+across en/ru/ar.
+
 ---
 
 ## Decisions Log
