@@ -19,14 +19,17 @@ from jsa.config import Settings
 from jsa.db.engine import create_engine, create_session_factory, init_db
 from jsa.events.bus import bus
 from jsa.api.routes_backend_models import router as backend_models_router
+from jsa.api.routes_cv_decks import router as cv_decks_router
 from jsa.api.routes_cv_structure import router as cv_structure_router
+from jsa.api.routes_injection_presets import router as injection_presets_router
 from jsa.api.routes_jobs import router as jobs_router
 from jsa.api.routes_meta import router as meta_router
 from jsa.api.routes_preferences import router as preferences_router
 from jsa.api.ws import router as ws_router
-from jsa.pipeline.orchestrator import Orchestrator
+from jsa.pipeline.orchestrator import BaseCvResolver, Orchestrator
 from jsa.agents.registry import backend_for
 from jsa.store import backend_models as backend_models_store
+from jsa.store import cv_decks
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,25 @@ def make_model_resolver(settings: Settings) -> Callable[[str], str | None]:
 
     def _resolve(name: str) -> str | None:
         return settings.backend_models.get(name) or _flat_default_model(settings, name)
+
+    return _resolve
+
+
+def make_base_cv_resolver(settings: Settings) -> BaseCvResolver:
+    """A job's ``base_cv_id`` -> the deck file the pipeline should read for it.
+
+    Injected into ``Orchestrator`` the same way ``make_model_resolver`` is, and for the
+    same reason: ``jsa/pipeline/orchestrator.py`` cannot import ``Settings`` (this module
+    imports the orchestrator, so the reverse direction is a circular import).
+
+    All the fallback semantics live in ``cv_decks.resolve_path`` -- requested deck ->
+    index default -> first deck with a file on disk -> ``None``. ``None`` is never fatal:
+    the orchestrator's gate holds jobs ``pending``, and ``stages._read_base_structure``
+    treats it exactly like a missing legacy ``cv_structure.json``.
+    """
+
+    async def _resolve(deck_id: str | None) -> Path | None:
+        return await cv_decks.resolve_path(settings, deck_id)
 
     return _resolve
 
@@ -274,7 +296,11 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
                 timeout_override=settings.fit_timeout,
             ),
             output_dir=settings.output_dir,
-            cv_structure_path=settings.cv_structure_path,
+            # Decks, not the legacy single file: `cv_structure_path=` is left unpassed in
+            # production so there is exactly one base-CV source of truth. The resolver
+            # handles both the gate's "is any deck usable" question and each job's own
+            # `base_cv_id` at dispatch.
+            base_cv_resolver=make_base_cv_resolver(settings),
             preferences_path=settings.preferences_path,
             # Provider-account throttling: cap in-flight jobs per backend and jitter the
             # start of each worker, so N simultaneous launches don't hit one API key at once.
@@ -310,8 +336,10 @@ def create_app(settings: Settings, dev_tunnel: bool = False) -> FastAPI:
     app.include_router(meta_router)
     app.include_router(jobs_router)
     app.include_router(cv_structure_router)
+    app.include_router(cv_decks_router)
     app.include_router(preferences_router)
     app.include_router(backend_models_router)
+    app.include_router(injection_presets_router)
     app.include_router(ws_router)
 
     # Serve built frontend bundle if present.

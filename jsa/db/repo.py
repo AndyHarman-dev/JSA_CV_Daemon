@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime
-from sqlalchemy import select, or_, exists, update, delete
+from sqlalchemy import select, or_, exists, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.db.models import Job, Message, Document, FollowUp, RevisionRequest, JobState, Stage
@@ -665,3 +665,104 @@ async def answer_follow_up(
     await session.commit()
     await session.refresh(fu)
     return fu
+
+
+async def set_job_base_cv(session: AsyncSession, job: Job, deck_id: str | None) -> None:
+    """Assign (or clear, with `deck_id=None`) the job's base-CV deck reference.
+
+    A plain field write + commit -- not a `Job.state`/`current_stage` transition, so
+    this does not go through `jsa.pipeline.state_machine.transition` or `checkpoint()`
+    (CLAUDE.md's checkpoint rule covers state-changing writes; `base_cv_id` is an
+    auxiliary field the caller (`PUT /api/jobs/{id}/base-cv`) has already gated to
+    `state == queued` before calling this). Callers must never write raw SQL for this --
+    that rule is why this helper exists instead of an inline UPDATE in the route.
+    """
+    job.base_cv_id = deck_id
+    job.updated_at = datetime.utcnow()
+    session.add(job)
+    await session.commit()
+
+
+# States in which a job still "holds" its base CV deck, i.e. deleting that deck is
+# refused (409 from DELETE /api/cv-decks/{id}).
+#
+# The rule is "can this job still open a FRESH agent session against the deck file?",
+# not "is this job running right now". A stage only re-reads the deck when it has no
+# Message rows for that job+stage (jsa/pipeline/stages.py's fresh-vs-resume branch), so
+# a mid-flight job is immune to the file vanishing -- until something wipes its Messages
+# and forces a fresh session. `repo.backend_switch_reset` does exactly that on a BF-19
+# backend switch or a model-ladder hop, rewinding a cv_adjust failure to `pending`.
+# Hence:
+#
+#   `pending` HOLDS -- it is both "launched, awaiting dispatch" and the landing state of
+#   that rewind; releasing it is what let a mid-flight job silently switch to the default
+#   deck while `base_cv_id` still named the deleted one.
+#
+#   `failed` HOLDS -- a re-run resets it to `pending` and re-dispatches into a fresh
+#   session, so it can still re-read the deck. Deleting or dismissing the job is the
+#   intended escape hatch for a permanently-failed job pinning a deck.
+#
+#   `queued` RELEASES -- never dispatched, so `clear_base_cv_assignments` just nulls the
+#   assignment (unchanged behaviour). `approved`/`dismissed` RELEASE -- terminal, nothing
+#   will re-read the deck.
+#
+# Editing a deck is deliberately NOT gated: a job that has already started has the CV
+# baked into its Message rows, so a PUT cannot reach it mid-flight anyway.
+DECK_LOCK_STATES: tuple[JobState, ...] = (
+    JobState.pending,
+    JobState.running,
+    JobState.awaiting_input,
+    JobState.fit_done,
+    JobState.unfit,
+    JobState.cv_review,
+    JobState.cv_done,
+    JobState.cl_done,
+    JobState.review,
+    JobState.failed,
+)
+
+
+async def count_jobs_holding_decks(session: AsyncSession) -> dict[str, int]:
+    """Return `{deck_id: n}` for every deck currently held by >=1 job.
+
+    One grouped query for ALL decks rather than one per deck: `GET /api/cv-decks` needs
+    this for every row it renders, and that endpoint's whole contract is that listing
+    decks stays cheap. Decks held by nobody are simply absent from the mapping, so
+    callers should read it with `.get(deck_id, 0)`.
+    """
+    stmt = (
+        select(Job.base_cv_id, func.count())
+        .where(Job.base_cv_id.is_not(None), Job.state.in_(DECK_LOCK_STATES))
+        .group_by(Job.base_cv_id)
+    )
+    rows = await session.execute(stmt)
+    return {deck_id: count for deck_id, count in rows.all() if deck_id is not None}
+
+
+async def count_jobs_holding_deck(session: AsyncSession, deck_id: str) -> int:
+    """Single-deck form of `count_jobs_holding_decks`, for the delete guard."""
+    stmt = select(func.count()).where(
+        Job.base_cv_id == deck_id, Job.state.in_(DECK_LOCK_STATES)
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def clear_base_cv_assignments(session: AsyncSession, deck_id: str) -> int:
+    """Clear `base_cv_id` on undispatched jobs that reference `deck_id`. Returns the count.
+
+    Scoped to `state IN (queued, pending)` -- deliberately narrow. A job already past
+    those states (running, awaiting_input, fit_done, cv_review, cv_done, cl_done, review,
+    approved, failed) keeps its `base_cv_id` untouched as a record of which base CV it
+    was actually built from; only a job that hasn't been dispatched yet has that
+    assignment silently invalidated by the deck's deletion. Called by
+    `DELETE /api/cv-decks/{id}` (owned by a different phase/agent -- not wired here, see
+    the Phase 3 task notes). Uses a bulk ORM `update()`, never raw text SQL.
+    """
+    stmt = (
+        update(Job)
+        .where(Job.base_cv_id == deck_id, Job.state.in_([JobState.queued, JobState.pending]))
+        .values(base_cv_id=None)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    return result.rowcount

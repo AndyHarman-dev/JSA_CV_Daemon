@@ -11,14 +11,27 @@ file's module docstring for the httpx.AsyncClient patching rationale.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jsa.agents._openai_compat import OpenAICompatSessionHandle
-from jsa.agents.base import AgentBackendUnavailable, AgentLimitReached, AgentTimeout, HistoryTurn
+from jsa.agents._openai_compat import (
+    OpenAICompatBackend,
+    OpenAICompatSessionHandle,
+    _ToolsRejected,
+)
+from jsa.agents.base import (
+    AgentBackendUnavailable,
+    AgentLimitReached,
+    AgentTimeout,
+    HistoryTurn,
+    ToolResult,
+    ToolsUnsupported,
+)
 from jsa.agents.mistral import MistralBackend
 from jsa.agents.protocol import ProtocolError
+from jsa.agents.tool_spec import tools_for
 from jsa.db.models import Stage
 from jsa.schema.turn_models import json_schema_for
 
@@ -460,3 +473,428 @@ class TestDowngradeOnUnparseableStructuredReply:
             await backend.send_message(handle, "next", structured_schema=schema)
         last_payload = mock_client.post.call_args.kwargs["json"]
         assert "response_format" not in last_payload
+
+
+# ---------------------------------------------------------------------------
+# Native tool calling (revision-tool-use plan, Phase 3 / E2)
+# ---------------------------------------------------------------------------
+
+
+def _tool_call_entry(call_id: str, name: str, arguments: str) -> dict:
+    return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+
+
+def _tool_calls_body(*entries: dict) -> dict:
+    """An OpenAI-compatible reply whose message carries tool_calls and, as real
+    providers do, a NULL content alongside them."""
+    return {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": list(entries)}}]}
+
+
+def _cv_specs() -> tuple:
+    return tools_for(Stage.revising_cv)
+
+
+class TestSupportsNativeTools:
+    def test_flag_is_true_on_the_shared_base(self):
+        assert OpenAICompatBackend.supports_native_tools is True
+
+    def test_flag_is_true_on_mistral(self):
+        assert MistralBackend().supports_native_tools is True
+
+
+class TestToolRequestShape:
+    async def test_tools_and_tool_choice_sent_when_tools_given(self):
+        mock_client = _make_mock_client(_tool_calls_body(_tool_call_entry("c1", "get_cv", "{}")))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session(
+                "sys", [HistoryTurn(role="user", content="hi")], None, tools=_cv_specs()
+            )
+            await backend.send_message(handle, "shorten the summary")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["tool_choice"] == "required"
+        names = [t["function"]["name"] for t in payload["tools"]]
+        assert "get_cv" in names and "finalize" in names
+        assert all(t["type"] == "function" for t in payload["tools"])
+
+    async def test_no_response_format_when_tools_active(self):
+        """Tool mode and structured mode are mutually exclusive per request — the
+        terminal tool's arguments ARE the structured output."""
+        mock_client = _make_mock_client(_tool_calls_body(_tool_call_entry("c1", "get_cv", "{}")))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert "response_format" not in payload
+
+    async def test_both_tools_and_schema_on_one_request_is_an_assertion_error(self):
+        """The mutual exclusion is asserted, not merely arranged for by the callers."""
+        backend = MistralBackend()
+        with pytest.raises(AssertionError, match="mutually exclusive"):
+            await backend._call_api_once(
+                "sys",
+                [{"role": "user", "content": "hi"}],
+                structured_schema=json_schema_for(Stage.cv_adjust),
+                tools=_cv_specs(),
+            )
+
+    async def test_no_tools_key_when_tools_absent(self):
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            await backend.start_session("sys", "hi")
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert "tools" not in payload and "tool_choice" not in payload
+
+    async def test_tool_mode_never_streams(self):
+        """Plan Phase 2 finding #1: an on_chunk-carrying call still goes down the
+        non-streaming path once tools are attached, which is what makes _consume_sse's
+        lack of delta.tool_calls reassembly correct rather than a gap."""
+        mock_client = _make_mock_client(_tool_calls_body(_tool_call_entry("c1", "get_cv", "{}")))
+        mock_client.stream = MagicMock()
+
+        async def _on_chunk(_chunk):
+            return None
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go", on_chunk=_on_chunk)
+        mock_client.stream.assert_not_called()
+        assert "stream" not in mock_client.post.call_args.kwargs["json"]
+
+
+class TestToolReplyExtraction:
+    async def test_null_content_with_tool_calls_is_a_success_not_a_transient_retry(self):
+        """The sharpest trap in E2: `content: null` alongside `tool_calls` must be
+        read as a tool call, NOT as the null-content transient failure — otherwise a
+        perfectly good call burns all _MAX_ATTEMPTS retries and ends as
+        AgentBackendUnavailable, dropping the backend out of BF-19."""
+        mock_client = _make_mock_client(_tool_calls_body(_tool_call_entry("c1", "get_cv", "{}")))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert reply.kind == "tool_calls"
+        assert mock_client.post.await_count == 1  # exactly one HTTP attempt
+
+    async def test_multiple_tool_calls_returned_in_order_with_ids_and_parsed_arguments(self):
+        mock_client = _make_mock_client(
+            _tool_calls_body(
+                _tool_call_entry("call_abc", "get_cv", "{}"),
+                _tool_call_entry("call_def", "edit_entry_bullets",
+                                 '{"entry_id": "e1", "bullets": ["one", "two"]}'),
+                _tool_call_entry("call_ghi", "finalize", '{"change_log": "tightened"}'),
+            )
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert [c.id for c in reply.tool_calls] == ["call_abc", "call_def", "call_ghi"]
+        assert [c.name for c in reply.tool_calls] == ["get_cv", "edit_entry_bullets", "finalize"]
+        assert reply.tool_calls[0].arguments == {}
+        assert reply.tool_calls[1].arguments == {"entry_id": "e1", "bullets": ["one", "two"]}
+        assert all(isinstance(c.arguments, dict) for c in reply.tool_calls)
+
+    async def test_missing_provider_id_is_synthesized(self):
+        entry = {"type": "function", "function": {"name": "get_cv", "arguments": "{}"}}
+        mock_client = _make_mock_client(_tool_calls_body(entry))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert reply.tool_calls[0].id == "call_0"
+
+    async def test_malformed_arguments_json_raises_protocol_error(self):
+        """A half-readable tool batch fails loudly rather than being silently coerced
+        into a bogus kind='final' that stages.py would try to validate as a document."""
+        mock_client = _make_mock_client(
+            _tool_calls_body(_tool_call_entry("c1", "replace_summary", "{not json"))
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(ProtocolError, match="unparseable arguments JSON"):
+                await backend.send_message(handle, "go")
+
+    async def test_text_reply_in_tool_mode_is_not_sentinel_nudged(self):
+        """tool_choice: 'required' should prevent this, but if a model answers prose
+        anyway it must not trigger the sentinel nudge (a tool session was never given
+        the sentinel contract) — one attempt, handed back for rung 3."""
+        mock_client = _make_mock_client(_completion_body(NO_SENTINEL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            reply = await backend.send_message(handle, "go")
+        assert reply.kind == "final"
+        assert mock_client.post.await_count == 1  # no nudge replay
+
+
+class TestSendToolResults:
+    async def test_one_tool_message_per_result_with_matching_ids(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=200, text="x", json=MagicMock(return_value=_tool_calls_body(
+                    _tool_call_entry("c1", "get_cv", "{}"),
+                    _tool_call_entry("c2", "remove_entry", '{"entry_id": "e9"}'),
+                ))),
+                MagicMock(status_code=200, text="y", json=MagicMock(return_value=_tool_calls_body(
+                    _tool_call_entry("c3", "finalize", '{"change_log": "done"}'),
+                ))),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            first = await backend.send_message(handle, "go")
+            second = await backend.send_tool_results(
+                handle,
+                [
+                    ToolResult(call_id="c1", name="get_cv", ok=True, content={"ok": True, "cv": {}}),
+                    ToolResult(call_id="c2", name="remove_entry", ok=False,
+                               content={"ok": False, "error": {"code": "bad_argument"}}),
+                ],
+            )
+        assert first.kind == "tool_calls" and second.kind == "tool_calls"
+        sent = mock_client.post.call_args.kwargs["json"]["messages"]
+        tool_msgs = [m for m in sent if m["role"] == "tool"]
+        assert [m["tool_call_id"] for m in tool_msgs] == ["c1", "c2"]
+        assert json.loads(tool_msgs[0]["content"]) == {"ok": True, "cv": {}}
+        # The assistant turn carrying the provider's own tool_calls precedes them.
+        assistant_turns = [m for m in sent if m["role"] == "assistant"]
+        assert [tc["id"] for tc in assistant_turns[-1]["tool_calls"]] == ["c1", "c2"]
+
+    async def test_tools_still_attached_on_the_follow_up_request(self):
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=200, text="x", json=MagicMock(return_value=_tool_calls_body(
+                    _tool_call_entry("c1", "get_cv", "{}")))),
+                MagicMock(status_code=200, text="y", json=MagicMock(return_value=_tool_calls_body(
+                    _tool_call_entry("c2", "finalize", '{"change_log": "d"}')))),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            await backend.send_tool_results(
+                handle, [ToolResult(call_id="c1", name="get_cv", ok=True, content={"ok": True})]
+            )
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert payload["tool_choice"] == "required"
+        assert payload["tools"]
+
+    async def test_text_reply_to_results_ends_tool_mode_without_a_sentinel_nudge(self):
+        """The model answering prose instead of another batch is the loop's
+        "non-tool_calls reply mid-loop" -> rung 3 path. It must not be nudged for a
+        sentinel, and it must clear pending_tool_calls (the only place that happens)."""
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=200, text="x", json=MagicMock(return_value=_tool_calls_body(
+                    _tool_call_entry("c1", "get_cv", "{}")))),
+                MagicMock(status_code=200, text="y", json=MagicMock(
+                    return_value=_completion_body(NO_SENTINEL_RAW))),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            reply = await backend.send_tool_results(
+                handle, [ToolResult(call_id="c1", name="get_cv", ok=True, content={"ok": True})]
+            )
+        assert reply.kind == "final"
+        assert handle.pending_tool_calls is None
+        assert mock_client.post.await_count == 2  # no nudge replay on the second call
+        # The assistant tool_calls turn + its tool results are now committed.
+        assert [m["role"] for m in handle.messages] == ["user", "assistant", "tool", "assistant"]
+
+    async def test_tools_rejected_mid_loop_is_a_tools_unsupported(self):
+        """tool_loop.py wraps this exact call in `except ToolsUnsupported` (a routing
+        gateway can resolve a different upstream per request, so a backend that
+        accepted tools on round 1 can reject them on round 2). Confirms
+        send_tool_results really can produce that exception, not just send_message."""
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(
+            side_effect=[
+                MagicMock(status_code=200, text="x", json=MagicMock(return_value=_tool_calls_body(
+                    _tool_call_entry("c1", "get_cv", "{}")))),
+                MagicMock(status_code=400, text="z", json=MagicMock(return_value={
+                    "error": {"message": "no endpoints support tool use",
+                              "type": "invalid_request_error"}})),
+            ]
+        )
+        mock_client.aclose = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+            with pytest.raises(ToolsUnsupported) as exc_info:
+                await backend.send_tool_results(
+                    handle, [ToolResult(call_id="c1", name="get_cv", ok=True, content={"ok": True})]
+                )
+        assert isinstance(exc_info.value, _ToolsRejected)
+        assert not isinstance(exc_info.value, AgentBackendUnavailable)
+        assert mock_client.post.await_count == 2  # no in-backend retry-clean
+
+    async def test_wrong_handle_type_raises(self):
+        backend = MistralBackend()
+        with pytest.raises(TypeError):
+            await backend.send_tool_results(object(), [])  # type: ignore[arg-type]
+
+
+class TestToolsRejectedDegrade:
+    """A permanent 4xx with tools present is a TOOLS rejection, not a dead backend:
+    tool_loop.py's native->prompt rung ladder owns the recovery, so this backend must
+    neither retry clean in-process (as _CacheRejected/_ReasoningRejected do) nor tell
+    BF-19 to advance the whole job."""
+
+    async def test_permanent_4xx_with_tools_raises_tools_unsupported(self):
+        mock_client = _make_mock_client(
+            {"error": {"message": "no endpoints support tool use", "type": "invalid_request_error"}},
+            status_code=400,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(ToolsUnsupported) as exc_info:
+                await backend.send_message(handle, "go")
+        assert isinstance(exc_info.value, _ToolsRejected)
+        # NOT a BF-19 signal — that would advance the whole job to the next backend
+        # over a tools-only degrade, exactly the loss the rung ladder prevents.
+        assert not isinstance(exc_info.value, AgentBackendUnavailable)
+
+    async def test_raised_without_an_in_backend_retry_clean(self):
+        """Contrast with _CacheRejected/_ReasoningRejected, which DO retry once clean
+        (see test_openrouter.py) — this one propagates after exactly one attempt."""
+        mock_client = _make_mock_client(
+            {"error": {"message": "tool use unsupported", "type": "invalid_request_error"}},
+            status_code=400,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend(prompt_caching=False)
+            backend._reasoning = False
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(ToolsUnsupported):
+                await backend.send_message(handle, "go")
+        assert mock_client.post.await_count == 1
+
+    async def test_tools_shed_first_when_tools_reasoning_and_caching_are_all_present(self):
+        """Degrade precedence is tools -> reasoning -> caching -> fail. With all three
+        on the wire, a 4xx names TOOLS, and neither enrichment flag is touched."""
+        mock_client = _make_mock_client(
+            {"error": {"message": "bad request", "type": "invalid_request_error"}},
+            status_code=400,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend(prompt_caching=True)  # prompt_cache_key present
+            assert backend._reasoning is True               # reasoning_effort present
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(_ToolsRejected):
+                await backend.send_message(handle, "go")
+        assert backend._reasoning is True
+        assert backend._prompt_caching is True
+        assert mock_client.post.await_count == 1
+
+    async def test_permanent_4xx_without_tools_is_unchanged_bf19_behavior(self):
+        mock_client = _make_mock_client(
+            {"error": {"message": "invalid model", "type": "invalid_request_error"}},
+            status_code=400,
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend(prompt_caching=False)
+            backend._reasoning = False
+            with pytest.raises(AgentBackendUnavailable) as exc_info:
+                await backend.start_session("sys", "hi")
+        assert type(exc_info.value) is AgentBackendUnavailable
+        assert not isinstance(exc_info.value, ToolsUnsupported)
+        assert mock_client.post.await_count == 1
+
+    async def test_429_with_tools_present_is_still_a_limit_signal(self):
+        """Quota is account-scoped, not a tools problem — it must keep engaging BF-19."""
+        mock_client = _make_mock_client({}, status_code=429)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(AgentLimitReached):
+                await backend.send_message(handle, "go")
+
+
+class TestToolSessionHandleState:
+    async def test_restore_session_stores_the_vocabulary_on_the_handle(self):
+        backend = MistralBackend()
+        specs = _cv_specs()
+        handle = await backend.restore_session("sys", [], None, tools=specs)
+        assert handle.tools == specs
+        assert handle.structured_enabled is False
+
+    async def test_non_tool_session_leaves_the_field_none(self):
+        backend = MistralBackend()
+        handle = await backend.restore_session("sys", [], None)
+        assert handle.tools is None
+        assert handle.pending_tool_calls is None
+
+    async def test_assistant_tool_calls_turn_is_parked_not_appended_until_results_return(self):
+        """A turn ending on a terminal tool never sends results back, and an assistant
+        tool_calls turn with no matching tool results is an invalid conversation."""
+        mock_client = _make_mock_client(
+            _tool_calls_body(_tool_call_entry("c1", "finalize", '{"change_log": "x"}'))
+        )
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            await backend.send_message(handle, "go")
+        assert handle.messages == [{"role": "user", "content": "go"}]
+        assert [tc["id"] for tc in handle.pending_tool_calls] == ["c1"]
+
+    async def test_handle_untouched_when_the_call_fails(self):
+        mock_client = _make_mock_client({}, status_code=429)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None, tools=_cv_specs())
+            with pytest.raises(AgentLimitReached):
+                await backend.send_message(handle, "go")
+        assert handle.messages == []
+        assert handle.pending_tool_calls is None
+
+
+class TestToolModeGuardParity:
+    """Two guards this base was missing that its three siblings (anthropic_api.py,
+    gemini_api.py, opencode_zen.py) already carried."""
+
+    async def test_start_session_text_reply_in_tool_mode_is_not_sentinel_nudged(self):
+        """The start_session twin of TestToolReplyExtraction's send_message case.
+        Without the tool branch this falls into _parse_structured_with_downgrade ->
+        _parse_with_nudge, which re-prompts for a <<<FINAL>>> block the tool session
+        was never given the contract for — and replays with tools stripped."""
+        mock_client = _make_mock_client(_completion_body(NO_SENTINEL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle, reply = await backend.start_session("sys", "go", tools=_cv_specs())
+        assert reply.kind == "final"
+        assert mock_client.post.await_count == 1  # no nudge replay
+        assert handle.structured_enabled is False
+
+    async def test_send_tool_results_without_a_tool_session_raises_locally(self):
+        """A prompt-rung handle (restored with no tools=) must fail loudly here, not
+        POST role='tool' rows with an empty assistant tool_calls array and no tools
+        field — that 400s and, since no tool fields were sent, classifies as a plain
+        AgentBackendUnavailable, costing the job a BF-19 hop over a local bug."""
+        mock_client = _make_mock_client(_completion_body(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = MistralBackend()
+            handle = await backend.restore_session("sys", [], None)
+            with pytest.raises(ValueError, match="requires a native tool session"):
+                await backend.send_tool_results(
+                    handle,
+                    [ToolResult(call_id="c1", name="get_cv", ok=True, content={"ok": True})],
+                )
+        assert mock_client.post.await_count == 0  # nothing ever went on the wire

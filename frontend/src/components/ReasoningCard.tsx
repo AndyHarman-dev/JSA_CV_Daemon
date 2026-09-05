@@ -22,13 +22,15 @@ import { SHELL_THEME } from "../theme/tokens";
 import { Icon } from "../theme/Icon";
 import { panelBase, Spinner } from "../theme/chrome";
 import { segmentReasoning, type ReasoningStep } from "../lib/reasoningSteps";
-import { interleaveMockTools } from "../lib/reasoningMock";
+import { mergeToolSteps, type ToolMark } from "../lib/mergeToolSteps";
 
 const T = SHELL_THEME;
 
 export const LIVE_STEP_WINDOW = 5;
 
-function StepRow({ step, active, last }: { step: ReasoningStep; active: boolean; last: boolean }) {
+// Exported so the settled-turn renderer (AgentThread.tsx's TurnBubble) can render its
+// persisted tool rows through the exact same row/separator idiom live rows use.
+export function StepRow({ step, active, last }: { step: ReasoningStep; active: boolean; last: boolean }) {
   const t = useT();
   return (
     <div
@@ -106,26 +108,28 @@ function StepRow({ step, active, last }: { step: ReasoningStep; active: boolean;
   );
 }
 
-export function ReasoningCard({ reasoning, running }: { reasoning: string; running: boolean }) {
+export function ReasoningCard({
+  reasoning,
+  running,
+  tools = [],
+}: {
+  reasoning: string;
+  running: boolean;
+  tools?: ToolMark[];
+}) {
   const t = useT();
   const [expanded, setExpanded] = useState(running);
   const [showAll, setShowAll] = useState(false);
-  // Dev-only: the backend has no tool channel yet (nothing emits AgentChunk kind
-  // "tool"), so this is the only way to see the tool row against real streaming
-  // reasoning in the browser. Tree-shaken out of a production build by the DEV guard.
-  const [mockTools, setMockTools] = useState(false);
 
-  const { closed, open } = segmentReasoning(reasoning);
-  const textSteps: ReasoningStep[] = open ? [...closed, open] : closed;
-  // The `import.meta.env.DEV` half is what lets Rollup statically drop the fixture
-  // from a production bundle — `mockTools` alone is runtime state it cannot prove
-  // is never set (verified: no fixture strings survive `npm run build`).
-  const steps = import.meta.env.DEV && mockTools ? interleaveMockTools(textSteps) : textSteps;
+  const segments = segmentReasoning(reasoning);
+  const { open } = segments;
+  const merged: ReasoningStep[] = mergeToolSteps(segments, segments.bounds ?? [], tools);
+  const steps: ReasoningStep[] = open ? [...merged, open] : merged;
   const hasSteps = steps.length > 0;
   // Only the trailing step is still being written, and only while the turn is in flight.
-  // Identity, not `length - 1`: with the DEV tool preview on, an interleaved tool row
-  // can be the trailing entry, and the spinner/cursor belongs on the text step that is
-  // actually still being written.
+  // Identity, not `length - 1`: a late-arriving tool mark can interleave in as the
+  // trailing entry, and the spinner/cursor belongs on the text step that is actually
+  // still being written, not on whichever entry happens to be last.
   const activeIndex = running && open ? steps.lastIndexOf(open) : -1;
 
   const windowed = running && !showAll && steps.length > LIVE_STEP_WINDOW;
@@ -189,29 +193,6 @@ export function ReasoningCard({ reasoning, running }: { reasoning: string; runni
             ? t("agentThread.thinking")
             : t("agentThread.reasoningStepCount").replace("{count}", String(steps.length))}
         </span>
-        {import.meta.env.DEV && (
-          <button
-            type="button"
-            title="dev only — preview the tool row with no backend channel"
-            onClick={(e) => {
-              e.stopPropagation();
-              setMockTools((v) => !v);
-            }}
-            style={{
-              marginLeft: 8,
-              background: "transparent",
-              border: `1px dashed ${T.bd2}`,
-              borderRadius: 3,
-              color: mockTools ? T.a : T.ink3,
-              font: `500 9px ${T.mono}`,
-              letterSpacing: ".08em",
-              padding: "2px 5px",
-              cursor: "pointer",
-            }}
-          >
-            {`TOOLS:${mockTools ? "ON" : "OFF"}`}
-          </button>
-        )}
         {hasSteps && (
           <span
             style={{

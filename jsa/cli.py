@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import faulthandler
+import json
 import logging
 import re
 import shutil
@@ -24,7 +25,7 @@ from jsa.db.repo import recovery_sweep, upsert_job
 from jsa.ingest.csv_loader import load_csv
 from jsa.pipeline.infer_structure import InferError, run_infer
 from jsa.server import create_app, make_backend_factory
-from jsa.store import cv_structure
+from jsa.store import cv_decks
 
 # Dump a per-thread Python traceback to stderr on native crashes (e.g. a
 # SIGSEGV inside a C extension like WeasyPrint's fontconfig/pango stack)
@@ -92,8 +93,8 @@ def main(
         None,
         "--cv",
         help=(
-            "CV file (.pdf or .docx) — used once to seed the CV structure "
-            "(~/.jsa/cv_structure.json) if none exists yet; ignored afterwards. "
+            "CV file (.pdf or .docx) — used once to seed your first base CV "
+            "(~/.jsa/cv_decks/) if none exists yet; ignored afterwards. "
             "The CV Structure Editor is the source of truth from then on."
         ),
         exists=True,
@@ -111,7 +112,7 @@ def main(
     dev_tunnel: bool = typer.Option(False, "--dev-tunnel", help="Start a cloudflared quick tunnel for remote/phone access. WARNING: exposes the unauthenticated API publicly — dev use only."),
     dev_auto: bool = typer.Option(False, "--dev-auto", help="Dev-only: auto-answer NEED_INPUT gates via DEV_ANSWERS.json pattern matching.", is_flag=True),
     select_language: bool = typer.Option(False, "--select-language", help="Show a full-screen language picker + boot sequence before the dashboard on first run.", is_flag=True),
-    prompt_caching: Optional[bool] = typer.Option(None, "--prompt-caching/--no-prompt-caching", help="Enable/disable provider prompt-caching request fields (mistral, openrouter, gemini, opencode-go). Defaults to on."),
+    prompt_caching: Optional[bool] = typer.Option(None, "--prompt-caching/--no-prompt-caching", help="Enable/disable provider prompt-caching request fields (anthropic, mistral, openrouter, gemini, opencode-go). Defaults to on."),
 ) -> None:
     """Run JSA: process a CSV of job listings with a CV file."""
     # Validate --csv extension
@@ -217,23 +218,45 @@ def main(
 
 
 async def _bootstrap_cv_structure(settings: Settings, cv_path: Optional[Path]) -> None:
-    """Seed ``cv_structure.json`` from ``--cv`` exactly once, if it doesn't exist yet.
+    """Seed a first base-CV deck from ``--cv`` exactly once, if none exists yet.
 
     The CV Structure Editor is the single source of truth for CV content from then on:
-    - structure already exists + ``--cv`` given → note that ``--cv`` is ignored.
-    - structure missing + ``--cv`` given        → infer + save it (one LLM call).
-    - structure missing + no ``--cv``           → proceed; jobs stay pending until the
-      user sets up their CV in the editor (see Orchestrator.run()'s gate).
+    - a usable base CV already exists + ``--cv`` given → note that ``--cv`` is ignored.
+    - none + ``--cv`` given                           → infer + save it (one LLM call).
+    - none + no ``--cv``                              → proceed; jobs stay pending until
+      the user sets up their CV in the editor (see Orchestrator.run()'s gate).
+
+    "Already exists" is asked of ``cv_decks.resolve_path``, not of the legacy
+    ``cv_structure.json``: on a pre-decks install that read migrates the legacy file into
+    a deck and answers yes, so an existing user is never re-seeded; on a fresh install it
+    is ``None`` and the seed writes into a brand-new deck. The legacy file is never
+    written here again -- a second source of truth is what decks removed.
 
     Factored out of ``_preflight`` so it can be exercised directly with a
     ``FakeAgentBackend`` in tests.
     """
-    structure_exists = await asyncio.to_thread(settings.cv_structure_path.exists)
+    try:
+        existing = await cv_decks.resolve_path(settings, None)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        # `resolve_path` reads the deck index with a plain `json.loads`, where the check it
+        # replaced (`cv_structure_path.exists()`) could not raise at all. A crash-truncated
+        # or hand-broken cv_decks.json would otherwise make `jsa` unbootable with a raw
+        # traceback. Bailing out is deliberate: every seeding path below goes through
+        # `load_index` too, so "proceed anyway" would only crash a few lines later -- and a
+        # store-level "treat corrupt as empty" would let create_deck overwrite the user's
+        # real deck list.
+        typer.echo(
+            f"Error: your CV deck index at {cv_decks.index_path(settings)} is unreadable "
+            f"({exc}).\nRepair or remove that file and re-run — removing it re-seeds from "
+            f"{settings.cv_structure_path} if that legacy file is still present.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
-    if structure_exists:
+    if existing is not None:
         if cv_path is not None:
             typer.echo(
-                f"Note: CV structure already exists at {settings.cv_structure_path}; "
+                f"Note: a base CV already exists at {existing}; "
                 "--cv is ignored. Edit your CV in the app's Structure Editor."
             )
         return
@@ -268,7 +291,16 @@ async def _bootstrap_cv_structure(settings: Settings, cv_path: Optional[Path]) -
             err=True,
         )
         raise typer.Exit(code=1)
-    await cv_structure.save(settings, cv)
+    # Reuse the existing default deck rather than always minting a new one, mirroring
+    # `routes_cv_structure.put_cv_structure`'s idiom. Safe by construction: `existing` is
+    # None above, which means no deck in `{default_id} u decks` has a file on disk, so a
+    # set `default_id` here is guaranteed empty and nothing can be overwritten. Always
+    # creating instead would leave the seeded CV in a NON-default deck whenever the user
+    # had already made an empty slot in the editor -- `GET /api/cv-structure` reads the
+    # default deck, so the editor would show its empty state right after a successful seed.
+    index = await cv_decks.load_index(settings)
+    deck_id = index.default_id or (await cv_decks.create_deck(settings)).id
+    await cv_decks.save_deck(settings, deck_id, cv)
 
 
 async def _preflight(settings: Settings, csv_path: Path, cv_path: Optional[Path]) -> None:

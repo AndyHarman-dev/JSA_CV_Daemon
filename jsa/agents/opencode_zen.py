@@ -33,8 +33,12 @@ from jsa.agents.base import (
     OnChunk,
     OnRetry,
     SessionHandle,
+    ToolCall,
+    ToolResult,
+    ToolsUnsupported,
 )
 from jsa.agents.protocol import ProtocolError, parse_reply
+from jsa.agents.tool_spec import ToolSpec, to_openai_tools
 from jsa.schema.turn_models import parse_structured_reply_for_schema
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,135 @@ class _TransientOpenCodeError(Exception):
     """Internal only: signals a single attempt's retryable overload/gateway
     failure to the retry loop in _call_api. Never escapes this module —
     _call_api converts an exhausted retry budget into AgentBackendUnavailable."""
+
+
+class _ToolsRejected(ToolsUnsupported):
+    """A permanent 4xx from ``_call_api_once`` while native tool definitions were
+    actually present in the payload (``tools`` + ``tool_choice``).
+
+    This file's own copy of the class ``_openai_compat.py`` defines under the same
+    name — deliberately duplicated, never imported from there, exactly like
+    ``_TransientOpenCodeError`` above (see this module's docstring and CLAUDE.md's
+    "the four multi-backend-model-select backends": ``opencode_zen.py`` keeps its own
+    independent copy of the shared machinery rather than being wired onto that base).
+
+    **Subclasses ``ToolsUnsupported``, NOT ``AgentBackendUnavailable``** — and unlike
+    every other degrade in this codebase it is NOT caught-and-retried-clean in-process.
+    The revision-tool-use plan's Phase 3 preamble sketches the ``_CacheRejected`` mirror
+    (subclass ``AgentBackendUnavailable``, catch it locally, retry once without the
+    field); that analogy is wrong here, for two independent reasons:
+
+    1. Caching and reasoning are optional enrichments with NO functional fallback, so
+       they must shed in-backend. Tool mode DOES have a fallback, and it is owned by a
+       different layer entirely — ``jsa/pipeline/tool_loop.py``'s native -> prompt rung
+       ladder, which re-establishes the session with a tool-contract system prompt and
+       no wire tools at all. Retrying clean in-process would instead send a
+       tool-contract system prompt with no tools attached and hand the resulting
+       sentinel reply back to the loop: semantically incoherent.
+    2. If this subclassed ``AgentBackendUnavailable``, an escaped instance would tell
+       BF-19 to advance the whole job to the next configured backend over a tools-only
+       degrade — exactly the loss the rung ladder exists to prevent. See
+       ``ToolsUnsupported``'s docstring in ``jsa/agents/base.py``.
+
+    Consequence: ``_call_api``'s ``_MAX_ATTEMPTS`` retry loop needs **no** change and
+    must never grow a branch for this. ``retry_transient``-style loops re-raise
+    non-transient exceptions, this one is raised from ``_call_api_once`` outside the
+    ``_TransientOpenCodeError`` family, and this backend has no local degrade loop to
+    teach — so it simply propagates out of the backend to ``tool_loop.py``, which
+    downgrades that turn to the prompt rung.
+    """
+
+
+def _permanent_4xx(
+    detail: str, *, tools_present: bool
+) -> AgentBackendUnavailable | _ToolsRejected:
+    """The exception for a permanent (unretryable) 4xx: ``_ToolsRejected`` when native
+    tool fields were actually in the payload, plain ``AgentBackendUnavailable``
+    otherwise.
+
+    Gated on the payload shape actually sent, never on a capability flag — a non-tool
+    turn's bad-model/auth 4xx must keep engaging BF-19 exactly as it did before native
+    tools existed. See ``_call_api_once``'s docstring for why this diverges from the
+    structured-output 4xx, which is deliberately NOT special-cased.
+    """
+    if tools_present:
+        return _ToolsRejected(detail)
+    return AgentBackendUnavailable(detail)
+
+
+def _reject_tools_with_schema(
+    tools: tuple[ToolSpec, ...] | None, structured_schema: dict[str, Any] | None
+) -> None:
+    """Tool mode and structured mode are mutually exclusive per request.
+
+    The terminal tool's arguments ARE the structured output, so a session that has
+    tools must never also carry a ``response_format`` — nobody has probed how this
+    proxy behaves with both, and no configuration ever wants both (the prompt rung IS
+    the sentinel path). Raised at session-establishment time so a caller bug surfaces
+    with a name rather than as a confusing wire-level 4xx; ``_call_api_once`` asserts
+    the same invariant per request, at the payload it actually builds.
+    """
+    if tools is not None and structured_schema is not None:
+        raise ValueError(
+            "OpenCodeZenBackend: native tools and structured_schema are mutually "
+            "exclusive — the terminal tool's arguments are the structured output"
+        )
+
+
+def _tool_calls_from_wire(wire_calls: list[Any]) -> list[ToolCall]:
+    """Normalize an OpenAI-shape ``message.tool_calls`` array into ``ToolCall``s.
+
+    Each entry carries ``id`` and ``function.{name, arguments}``, where ``arguments`` is
+    a JSON **string** on this wire shape — decoded here so ``ToolCall.arguments`` is
+    always a plain dict, never a string awaiting a second parse (see ``ToolCall``'s
+    docstring in ``jsa/agents/base.py``). The provider-issued ``id`` is preserved
+    verbatim; ``call_{i}`` is synthesized only if the proxy omitted one.
+
+    A malformed entry raises ``ProtocolError`` — the model sent something unusable, the
+    transport was fine, so this is deliberately NOT a transient/limit/unavailable
+    signal and never touches the retry loop.
+    """
+    calls: list[ToolCall] = []
+    for i, entry in enumerate(wire_calls):
+        function = entry.get("function") if isinstance(entry, dict) else None
+        if not isinstance(function, dict):
+            raise ProtocolError(f"malformed tool_calls entry {i}: no 'function' object")
+        name = function.get("name")
+        if not isinstance(name, str) or not name:
+            raise ProtocolError(f"malformed tool_calls entry {i}: missing tool name")
+        raw_args = function.get("arguments")
+        if raw_args is None or raw_args == "":
+            arguments: Any = {}
+        elif isinstance(raw_args, dict):
+            # Some proxies hand back an already-decoded object rather than a string.
+            arguments = raw_args
+        elif isinstance(raw_args, str):
+            try:
+                arguments = json.loads(raw_args)
+            except ValueError as exc:
+                raise ProtocolError(
+                    f"malformed tool_calls entry {i} ({name}): arguments is not valid "
+                    f"JSON ({exc})"
+                ) from exc
+        else:
+            raise ProtocolError(
+                f"malformed tool_calls entry {i} ({name}): arguments must be a JSON "
+                "object (or a JSON-object string)"
+            )
+        if not isinstance(arguments, dict):
+            raise ProtocolError(
+                f"malformed tool_calls entry {i} ({name}): arguments must decode to an "
+                "object"
+            )
+        call_id = entry.get("id")
+        calls.append(
+            ToolCall(
+                id=call_id if isinstance(call_id, str) and call_id else f"call_{i}",
+                name=name,
+                arguments=arguments,
+            )
+        )
+    return calls
 
 _NUDGE_TEXT = (
     "Your previous response was missing the required sentinel block. "
@@ -105,6 +238,15 @@ class OpenCodeZenSessionHandle(SessionHandle):
     # unconditionally, or a restored session would claim structured mode while
     # stages.py may have replayed sentinel-form history into it.
     structured_enabled: bool = False
+    # Native tool vocabulary for this session (revision-tool-use plan, Phase 3/E3).
+    # None = ordinary sentinel/structured session, byte-identical to pre-tool
+    # behavior. When set, every POST in this session carries `tools` +
+    # `tool_choice: "required"` and NEVER `response_format` (the two are mutually
+    # exclusive per request — the terminal tool's arguments ARE the structured
+    # output), so structured_schema/structured_enabled above stay inert: a
+    # tool-mode session was never in structured mode and can never downgrade out
+    # of it.
+    tools: tuple[ToolSpec, ...] | None = None
 
 
 def _reasoning_only(on_chunk: OnChunk | None) -> OnChunk | None:
@@ -146,6 +288,10 @@ class OpenCodeZenBackend(AgentBackend):
     # module deliberately keeps its own copy rather than sharing that base (see the
     # module docstring). Never attempted in structured mode.
     supports_streaming = True
+    # Native `tools` + `tool_choice: "required"` on the /chat/completions shape.
+    # Contract (jsa/agents/base.py): tools= is accepted on start_session and
+    # restore_session, and send_tool_results is overridden below.
+    supports_native_tools = True
 
     def __init__(self, model: str = "nemotron-3-ultra-free", timeout: float = 180.0) -> None:
         self._model = model
@@ -158,10 +304,34 @@ class OpenCodeZenBackend(AgentBackend):
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
         on_retry: OnRetry | None = None,
+        tools: tuple[ToolSpec, ...] | None = None,
     ) -> tuple[OpenCodeZenSessionHandle, AgentReply]:
-        """Open a fresh session: send the initial user message and return the handle + first reply."""
+        """Open a fresh session: send the initial user message and return the handle + first reply.
+
+        ``tools`` is accepted for the ``supports_native_tools`` contract in
+        ``jsa/agents/base.py``; in practice ``tool_loop.py`` always restores rather
+        than starts (revisions replay history), so this branch exists for completeness
+        and for any future caller, not because the pipeline uses it today.
+        """
         messages: list[dict] = [{"role": "user", "content": initial_user_msg}]
+        if tools is not None:
+            _reject_tools_with_schema(tools, structured_schema)
+            reply, assistant_msg = await self._tool_turn(system_prompt, messages, tools)
+            messages.append(assistant_msg)
+            return (
+                OpenCodeZenSessionHandle(
+                    id=str(uuid.uuid4()),
+                    external_id=None,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    structured_schema=None,
+                    structured_enabled=False,
+                    tools=tools,
+                ),
+                reply,
+            )
         raw = await self._call_api(system_prompt, messages, structured_schema, on_chunk, on_retry)
+        assert isinstance(raw, str)  # no tools were sent, so never a tool_calls array
         reply, structured_enabled = await self._parse_structured_with_downgrade(
             system_prompt, messages, raw, structured_schema, on_chunk, on_retry
         )
@@ -182,6 +352,7 @@ class OpenCodeZenBackend(AgentBackend):
         history: list[HistoryTurn],
         external_id: str | None,
         structured_schema: dict[str, Any] | None = None,
+        tools: tuple[ToolSpec, ...] | None = None,
     ) -> OpenCodeZenSessionHandle:
         """Reconstruct a previously-ended session from persisted message history.
 
@@ -189,7 +360,13 @@ class OpenCodeZenBackend(AgentBackend):
         The session's structured mode is (re)established here from the caller's
         schema argument, mirroring AnthropicSessionHandle — never defaulted to
         True unconditionally (see OpenCodeZenSessionHandle.structured_enabled).
+
+        ``tools`` (``jsa/pipeline/tool_loop.py``'s native rung) puts the session in
+        native tool mode instead: structured mode is left off for its whole life, since
+        the two are mutually exclusive per request. Supplying both is a caller bug, not
+        a degrade — it raises rather than silently picking one.
         """
+        _reject_tools_with_schema(tools, structured_schema)
         messages = [{"role": turn.role, "content": turn.content} for turn in history]
         handle = OpenCodeZenSessionHandle(
             id=str(uuid.uuid4()),
@@ -198,6 +375,7 @@ class OpenCodeZenBackend(AgentBackend):
             messages=messages,
             structured_schema=structured_schema,
             structured_enabled=structured_schema is not None,
+            tools=tools,
         )
         return handle
 
@@ -220,9 +398,25 @@ class OpenCodeZenBackend(AgentBackend):
             raise TypeError(
                 f"expected OpenCodeZenSessionHandle, got {type(handle).__name__}"
             )
+        if handle.tools is not None:
+            # Native tool mode. Deliberately shares nothing with the structured path
+            # below: no response_format (mutually exclusive per request), no
+            # _parse_structured_with_downgrade, and no _parse_with_nudge — a tool-mode
+            # session was never in structured mode, so `structured_enabled` is not a
+            # meaningful thing to downgrade here, and a sentinel nudge would be
+            # answering a contract this session was never given.
+            pending_tool_messages = handle.messages + [{"role": "user", "content": text}]
+            reply, assistant_msg = await self._tool_turn(
+                handle.system_prompt, pending_tool_messages, handle.tools
+            )
+            # Mutate only after success, same discipline as the sentinel path below.
+            handle.messages.append({"role": "user", "content": text})
+            handle.messages.append(assistant_msg)
+            return reply
         schema = _active_schema(handle, structured_schema)
         pending_messages = handle.messages + [{"role": "user", "content": text}]
         raw = await self._call_api(handle.system_prompt, pending_messages, schema, on_chunk, on_retry)
+        assert isinstance(raw, str)  # no tools were sent, so never a tool_calls array
         reply, structured_enabled = await self._parse_structured_with_downgrade(
             handle.system_prompt, pending_messages, raw, schema, on_chunk, on_retry
         )
@@ -230,6 +424,98 @@ class OpenCodeZenBackend(AgentBackend):
         handle.structured_enabled = structured_enabled
         handle.messages.append({"role": "user", "content": text})
         handle.messages.append({"role": "assistant", "content": reply.raw})
+        return reply
+
+    async def _tool_turn(
+        self,
+        system_prompt: str,
+        pending_messages: list[dict],
+        tools: tuple[ToolSpec, ...],
+    ) -> tuple[AgentReply, dict]:
+        """One POST in native tool mode. Returns ``(reply, assistant_message)`` — the
+        caller appends that message to ``handle.messages`` only on success.
+
+        Never passes ``on_chunk``: tool mode never streams (the revision-tool-use
+        plan's Phase 2 finding #1), which is what makes reassembling a fragmented
+        ``delta.tool_calls[].function.arguments`` in ``_consume_sse`` unreachable
+        rather than merely unimplemented — see the comment at ``use_stream``.
+
+        A reply with no tool calls at all is returned as a nominal ``kind="final"``
+        carrying the model's prose verbatim, NOT run through ``parse_reply``: a
+        tool-mode session was told to answer with tools, so prose is a broken tool
+        turn, and ``tool_loop.py`` discards any non-``tool_calls`` reply (downgrading
+        to the prompt rung at loop entry, or abandoning to rung 3 mid-loop). Parsing
+        it would only add a raise path to a reply that is discarded either way.
+        """
+        raw = await self._call_api(system_prompt, pending_messages, None, None, None, tools=tools)
+        if isinstance(raw, list):
+            calls = _tool_calls_from_wire(raw)
+            # Canonical, provider-neutral text — the same JSON array shape the prompt
+            # rung's <<<TOOL_CALLS>>> body carries (jsa/agents/protocol.py), never the
+            # OpenCode Zen envelope. The wire entries themselves go back on the
+            # assistant message, which is what the next POST must replay.
+            content = json.dumps([{"name": c.name, "arguments": c.arguments} for c in calls])
+            reply = AgentReply(raw=content, content=content, kind="tool_calls", tool_calls=calls)
+            return reply, {"role": "assistant", "content": None, "tool_calls": raw}
+        return AgentReply(raw=raw, content=raw, kind="final"), {
+            "role": "assistant",
+            "content": raw,
+        }
+
+    async def send_tool_results(
+        self, handle: SessionHandle, results: list[ToolResult]
+    ) -> AgentReply:
+        """Continue a native tool-mode session with the outcomes of the last round of
+        tool calls (``jsa/agents/base.py``'s ``supports_native_tools`` contract).
+
+        Appends one ``{"role": "tool", "tool_call_id": ..., "content": ...}`` message
+        per result, in order and unfiltered — ``tool_loop.py`` synthesizes a result for
+        every call it saw, including ``not_executed``/``budget_exhausted`` ones, and a
+        strict proxy 400s if any ``tool_call_id`` from the assistant turn goes
+        unanswered. ``call_id`` is used verbatim, never re-derived. The assistant turn
+        carrying ``tool_calls`` is already in ``handle.messages`` (appended by
+        ``send_message``/``_tool_turn`` on the round that produced these calls), so it
+        precedes these rows on the wire, as this shape requires.
+        """
+        if not isinstance(handle, OpenCodeZenSessionHandle):
+            raise TypeError(
+                f"expected OpenCodeZenSessionHandle, got {type(handle).__name__}"
+            )
+        if handle.tools is None:
+            # Never silently POST tool results with no tools attached — that would be
+            # an incoherent request, and it would hide the real bug (a caller that
+            # reached the tool loop through a session opened without tools).
+            raise RuntimeError(
+                "send_tool_results called on an OpenCode Zen session that was not "
+                "opened with tools"
+            )
+        if not (handle.messages and handle.messages[-1].get("tool_calls")):
+            # `role: "tool"` rows are only legal on this wire shape immediately after
+            # an assistant turn carrying the matching tool_call_ids. tool_loop.py can
+            # never violate this (it only calls here from inside a
+            # `while reply.kind == "tool_calls"` round), but without this check the
+            # violation would surface as a strict proxy's 400 — classified as
+            # _ToolsRejected and silently degrading to the prompt rung for entirely
+            # the wrong reason.
+            raise RuntimeError(
+                "send_tool_results requires the preceding assistant turn to carry "
+                "tool_calls; none found on this OpenCode Zen session"
+            )
+        tool_messages = [
+            {
+                "role": "tool",
+                "tool_call_id": result.call_id,
+                "content": json.dumps(result.content),
+            }
+            for result in results
+        ]
+        pending_messages = handle.messages + tool_messages
+        reply, assistant_msg = await self._tool_turn(
+            handle.system_prompt, pending_messages, handle.tools
+        )
+        # Mutate only after a successful call, matching send_message's discipline.
+        handle.messages.extend(tool_messages)
+        handle.messages.append(assistant_msg)
         return reply
 
     async def _parse_structured_with_downgrade(
@@ -359,9 +645,13 @@ class OpenCodeZenBackend(AgentBackend):
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
         on_retry: OnRetry | None = None,
-    ) -> str:
+        tools: tuple[ToolSpec, ...] | None = None,
+    ) -> str | list[Any]:
         """POST to the OpenCode Zen endpoint, retrying transient overload/gateway
         failures on THIS backend up to _MAX_ATTEMPTS before giving up.
+
+        Returns the reply text, or — in native tool mode only — the raw
+        ``message.tool_calls`` array (normalized one layer up, in _tool_turn).
 
         A rate limit (AgentLimitReached), a timeout (AgentTimeout), or a permanent
         config/client error (AgentBackendUnavailable — bad model, bad key, malformed
@@ -376,6 +666,15 @@ class OpenCodeZenBackend(AgentBackend):
         (see _parse_structured_with_downgrade), so a malformed structured reply never
         burns retry budget here and a transient HTTP failure never touches the
         downgrade flag.
+
+        ``tools`` is likewise forwarded unchanged to every attempt. This loop needs
+        **no** branch for _ToolsRejected and must never grow one: it catches only
+        _TransientOpenCodeError, so a tools-present permanent 4xx propagates straight
+        out of the backend after exactly one attempt, to tool_loop.py's native ->
+        prompt rung ladder. That ladder — a different layer, re-establishing the
+        session with a tool-contract prompt and no wire tools — is the degrade;
+        re-issuing the same request here without tools would be incoherent. See
+        _ToolsRejected's docstring.
         """
         # response_format + stream:true is a normal combination on this wire shape
         # (see _call_api_once) and some routed models expose a genuine
@@ -391,7 +690,9 @@ class OpenCodeZenBackend(AgentBackend):
         last_exc: _TransientOpenCodeError | None = None
         for attempt in range(_MAX_ATTEMPTS):
             try:
-                return await self._call_api_once(system_prompt, messages, structured_schema, stream_cb)
+                return await self._call_api_once(
+                    system_prompt, messages, structured_schema, stream_cb, tools=tools
+                )
             except _TransientOpenCodeError as exc:
                 last_exc = exc
                 if attempt < _MAX_ATTEMPTS - 1:
@@ -449,9 +750,13 @@ class OpenCodeZenBackend(AgentBackend):
         messages: list[dict],
         structured_schema: dict[str, Any] | None = None,
         on_chunk: OnChunk | None = None,
-    ) -> str:
+        tools: tuple[ToolSpec, ...] | None = None,
+    ) -> str | list[Any]:
         """Single POST to the OpenCode Zen chat-completions endpoint; classifies
         and raises on any failure. Never retries itself — see _call_api.
+
+        Returns the reply text, or the raw ``message.tool_calls`` array when native
+        tools were sent and the model answered with calls.
 
         The client is created per-call and explicitly closed in a finally block,
         matching AnthropicAPIBackend's connection-pool hygiene. `await
@@ -472,6 +777,26 @@ class OpenCodeZenBackend(AgentBackend):
         response_format at the wire level takes the whole backend out of the
         fallback chain instead. Flagged for Phase 6's integration tests to observe
         whether this actually occurs against the free-tier proxy in practice.
+
+        A tools-present 4xx **is** special-cased, and the divergence from the
+        paragraph above is deliberate, not an inconsistency. The classification
+        problem is identical — the JSON error body gives no reliable marker
+        distinguishing "this model doesn't do tool calling" from a bad model name —
+        but the right *answer* differs, because the available fallbacks differ.
+        ``response_format`` failing means structured mode is simply dead for that
+        model, and there is nothing better to do than hand the backend to BF-19. Tool
+        mode has a strictly better LOCAL answer that did not exist when the paragraph
+        above was written: rung 2, the prompt rung, on the SAME backend with the SAME
+        session material, re-established by ``jsa/pipeline/tool_loop.py``. So a
+        permanent 4xx here raises ``_ToolsRejected`` (a ``ToolsUnsupported``, NOT an
+        ``AgentBackendUnavailable``) whenever tool fields were actually in the payload
+        — spending one same-backend rung instead of a whole BF-19 hop. If that turns
+        out not to have been the cause, the prompt-rung retry sends no tools, hits the
+        same 4xx, and gets the ordinary ``AgentBackendUnavailable`` — so a
+        misclassification costs one round-trip, never a BF-19 slot. Gating is on the
+        payload actually sent (``tools is not None``), never on the capability flag:
+        every non-tool turn's classification is byte-identical to what it was before
+        native tools existed.
         """
         api_key = os.environ.get("OPENCODE_API_KEY", "")
         payload: dict[str, Any] = {
@@ -494,7 +819,27 @@ class OpenCodeZenBackend(AgentBackend):
                     "schema": structured_schema,
                 },
             }
-        use_stream = on_chunk is not None
+        if tools is not None:
+            # Tool mode and structured mode are mutually exclusive per request: the
+            # terminal tool's arguments ARE the structured output. Asserted at the
+            # payload we actually build, in addition to the session-establishment
+            # guard in _reject_tools_with_schema.
+            assert structured_schema is None, (
+                "OpenCode Zen: tools and response_format must never be sent together"
+            )
+            payload["tools"] = to_openai_tools(tools)
+            # "required" = the model must call at least one tool this turn. The
+            # tool_loop's contract needs a call every round (finalize/ask_user are
+            # themselves tools), so this is the forcing equivalent of Anthropic's
+            # tool_choice {"type": "any"}.
+            payload["tool_choice"] = "required"
+        # Tool mode never streams (revision-tool-use plan, Phase 2 finding #1). No
+        # caller passes on_chunk on the tool path, and `tools is None` makes that
+        # structural rather than incidental: _consume_sse therefore never has to
+        # reassemble a fragmented `delta.tool_calls[].function.arguments` — that
+        # reassembly is UNREACHABLE by construction, not merely unimplemented. Do not
+        # "fix" _consume_sse to parse tool_calls deltas.
+        use_stream = on_chunk is not None and tools is None
         if use_stream:
             payload["stream"] = True
         headers = {
@@ -574,7 +919,7 @@ class OpenCodeZenBackend(AgentBackend):
                 detail = f"OpenCode Zen API error {response.status_code}: {response.text[:500]}"
                 if response.status_code >= 500:
                     raise _TransientOpenCodeError(detail) from None
-                raise AgentBackendUnavailable(detail) from None
+                raise _permanent_4xx(detail, tools_present=tools is not None) from None
 
         if "error" in body:
             err = body["error"]
@@ -592,14 +937,16 @@ class OpenCodeZenBackend(AgentBackend):
             # string for "this one's actually transient too" risks silently
             # treating an unrecognized transient shape as permanent instead.
             if 400 <= response.status_code < 500:
-                raise AgentBackendUnavailable(f"OpenCode Zen API error: {message}")
+                raise _permanent_4xx(
+                    f"OpenCode Zen API error: {message}", tools_present=tools is not None
+                )
             raise _TransientOpenCodeError(f"OpenCode Zen API error: {message}")
 
         if response.status_code >= 400:
             detail = f"OpenCode Zen API error {response.status_code}: {response.text[:500]}"
             if response.status_code >= 500:
                 raise _TransientOpenCodeError(detail)
-            raise AgentBackendUnavailable(detail)
+            raise _permanent_4xx(detail, tools_present=tools is not None)
 
         choices = body.get("choices")
         if not choices:
@@ -612,7 +959,20 @@ class OpenCodeZenBackend(AgentBackend):
             raise _TransientOpenCodeError(
                 f"OpenCode Zen API returned no choices: {response.text[:500]}"
             )
-        content = choices[0].get("message", {}).get("content")
+        message = choices[0].get("message") or {}
+        if tools is not None:
+            # Extracted BEFORE the null-content check below, deliberately: a tool-call
+            # reply legitimately carries `content: null` on this wire shape, and that
+            # check would otherwise classify a perfectly good tool call as a transient
+            # null-content failure and burn all _MAX_ATTEMPTS retries on it. Gated on
+            # `tools is not None` so a non-tool turn's classification is untouched;
+            # tools sent but no calls returned still falls through (a tools-present
+            # null content with no calls is a genuine transient failure and must still
+            # retry).
+            wire_calls = message.get("tool_calls")
+            if isinstance(wire_calls, list) and wire_calls:
+                return wire_calls
+        content = message.get("content")
         if content is None:
             # Reasoning models can return a null content when the reply is all
             # `reasoning` (e.g. truncated by max_tokens before any final answer).

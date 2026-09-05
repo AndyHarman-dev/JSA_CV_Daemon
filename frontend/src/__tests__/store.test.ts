@@ -9,6 +9,11 @@ vi.mock("../api", () => ({
     getPreferences: vi.fn().mockResolvedValue({ language: "en" }),
     putPreferences: vi.fn().mockResolvedValue({ language: "en" }),
     config: vi.fn().mockResolvedValue({ languages: [] }),
+    listCvDecks: vi.fn().mockResolvedValue({ decks: [], default_id: null }),
+    putJobBaseCv: vi.fn(),
+    putJobInjection: vi.fn(),
+    getInjectionPresets: vi.fn(),
+    putInjectionPresets: vi.fn(),
   },
 }));
 
@@ -41,6 +46,15 @@ beforeEach(() => {
     languages: [],
     cvStructureExists: null,
     toasts: [],
+    editorOpen: false,
+    cvDecks: [],
+    cvDecksDefaultId: null,
+    cvPickerJobId: null,
+    cvPickerPos: { x: 0, y: 0 },
+    injectorJobId: null,
+    injectorPos: { x: 0, y: 0 },
+    injectionPresets: [],
+    presetsHydrated: false,
   });
   vi.clearAllMocks();
 });
@@ -349,5 +363,279 @@ describe("setLanguage", () => {
     await useStore.getState().setLanguage("xx");
 
     expect(useStore.getState().language).toBe("en");
+  });
+});
+
+describe("applyEvent - agent_tool event", () => {
+  beforeEach(() => {
+    useStore.setState({ streamBuffers: {} });
+  });
+
+  it("appends a tool mark anchored at the reasoning buffer's current length", () => {
+    useStore.setState({
+      streamBuffers: {
+        job1: { stage: "cv_adjust", content: "", reasoning: "Reading the JD.", tools: [] },
+      },
+    });
+
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cv_adjust",
+      seq: 1,
+      call_id: "call_1",
+      name: "read_file",
+      summary: "~/.jsa/cv_structure.json",
+      status: "ok",
+      detail: "",
+    });
+
+    expect(useStore.getState().streamBuffers.job1.tools).toEqual([
+      { name: "read_file", detail: "~/.jsa/cv_structure.json", ok: true, at: "Reading the JD.".length },
+    ]);
+    // content/reasoning are untouched by an agent_tool event.
+    expect(useStore.getState().streamBuffers.job1.reasoning).toBe("Reading the JD.");
+  });
+
+  it("falls back to `detail` when `summary` is empty, and records ok:false on a failed call", () => {
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cv_adjust",
+      seq: 1,
+      call_id: "call_1",
+      name: "run_patch",
+      summary: "",
+      status: "error",
+      detail: "patch rejected: hunk mismatch",
+    });
+
+    expect(useStore.getState().streamBuffers.job1.tools).toEqual([
+      { name: "run_patch", detail: "patch rejected: hunk mismatch", ok: false, at: 0 },
+    ]);
+  });
+
+  it("resets the buffer (and its tools) when the event's stage differs from the existing one", () => {
+    useStore.setState({
+      streamBuffers: {
+        job1: { stage: "cv_adjust", content: "", reasoning: "stale", tools: [{ name: "old", detail: "", ok: true, at: 0 }] },
+      },
+    });
+
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cover_letter",
+      seq: 1,
+      call_id: "call_2",
+      name: "web_search",
+      summary: "query",
+      status: "ok",
+      detail: "",
+    });
+
+    const buf = useStore.getState().streamBuffers.job1;
+    expect(buf.stage).toBe("cover_letter");
+    expect(buf.reasoning).toBe("");
+    expect(buf.tools).toEqual([{ name: "web_search", detail: "query", ok: true, at: 0 }]);
+  });
+
+  it("preserves accumulated tools across a subsequent agent_chunk event", () => {
+    useStore.getState().applyEvent({
+      type: "agent_tool",
+      job_id: "job1",
+      stage: "cv_adjust",
+      seq: 1,
+      call_id: "call_1",
+      name: "read_file",
+      summary: "cv_structure.json",
+      status: "ok",
+      detail: "",
+    });
+    useStore.getState().applyEvent({
+      type: "agent_chunk",
+      job_id: "job1",
+      stage: "cv_adjust",
+      kind: "reasoning",
+      text: "more thinking",
+    });
+
+    const buf = useStore.getState().streamBuffers.job1;
+    expect(buf.reasoning).toBe("more thinking");
+    expect(buf.tools).toEqual([{ name: "read_file", detail: "cv_structure.json", ok: true, at: 0 }]);
+  });
+});
+
+describe("hydrateCvDecks", () => {
+  it("populates cvDecks and cvDecksDefaultId from GET /api/cv-decks", async () => {
+    vi.mocked(api.listCvDecks).mockResolvedValueOnce({
+      decks: [{ id: "d1", name: null, auto_title: "Jane Doe", has_cv: true, is_default: true }],
+      default_id: "d1",
+    });
+
+    await useStore.getState().hydrateCvDecks();
+
+    expect(useStore.getState().cvDecks).toHaveLength(1);
+    expect(useStore.getState().cvDecksDefaultId).toBe("d1");
+  });
+
+  it("leaves the existing deck list untouched on failure", async () => {
+    useStore.setState({ cvDecks: [{ id: "d1", name: null, auto_title: null, has_cv: true, is_default: true }] });
+    vi.mocked(api.listCvDecks).mockRejectedValueOnce(new Error("network error"));
+
+    await useStore.getState().hydrateCvDecks();
+
+    expect(useStore.getState().cvDecks).toHaveLength(1);
+  });
+});
+
+describe("setEditorOpen", () => {
+  it("re-hydrates the deck list when the editor closes", async () => {
+    vi.mocked(api.listCvDecks).mockResolvedValueOnce({
+      decks: [{ id: "d1", name: null, auto_title: "Jane Doe", has_cv: true, is_default: true }],
+      default_id: "d1",
+    });
+
+    useStore.getState().setEditorOpen(false);
+    // Flush the fire-and-forget hydrateCvDecks() call (setEditorOpen doesn't await it) —
+    // a macrotask tick, not just one microtask, since the mocked promise's own resolution
+    // is itself a queued microtask ahead of hydrateCvDecks's `await` continuation.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(api.listCvDecks).toHaveBeenCalled();
+    expect(useStore.getState().cvDecks).toHaveLength(1);
+  });
+
+  it("does not re-hydrate when the editor opens", () => {
+    useStore.getState().setEditorOpen(true);
+    expect(api.listCvDecks).not.toHaveBeenCalled();
+  });
+});
+
+describe("openCvPicker / closeCvPicker", () => {
+  const job = makeJob({ id: "job1", state: "queued" });
+
+  it("opens the picker for a queued job, clamped to the viewport", () => {
+    useStore.getState().openCvPicker(job, { clientX: 100, clientY: 200 });
+    const state = useStore.getState();
+    expect(state.cvPickerJobId).toBe("job1");
+    expect(state.cvPickerPos).toEqual({ x: 100, y: 214 });
+  });
+
+  it("is a no-op for a non-queued job", () => {
+    useStore.getState().openCvPicker(makeJob({ id: "job2", state: "pending" }), {
+      clientX: 0,
+      clientY: 0,
+    });
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+  });
+
+  it("closes the picker", () => {
+    useStore.getState().openCvPicker(job, { clientX: 0, clientY: 0 });
+    useStore.getState().closeCvPicker();
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+  });
+});
+
+describe("assignBaseCv", () => {
+  it("patches the job in the store and closes the picker on success", async () => {
+    const updated = makeJob({ id: "job1", base_cv_id: "d2" });
+    vi.mocked(api.putJobBaseCv).mockResolvedValueOnce(updated);
+    useStore.setState({ cvPickerJobId: "job1" });
+
+    await useStore.getState().assignBaseCv("job1", "d2");
+
+    expect(api.putJobBaseCv).toHaveBeenCalledWith("job1", "d2");
+    expect(useStore.getState().jobs["job1"]).toEqual(updated);
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+  });
+
+  it("closes the picker and toasts the server's detail on failure", async () => {
+    vi.mocked(api.putJobBaseCv).mockRejectedValueOnce(
+      new Error('HTTP 422: {"detail":"deck is not assignable"}')
+    );
+    useStore.setState({ cvPickerJobId: "job1", jobs: { job1: makeJob({ id: "job1" }) } });
+
+    await useStore.getState().assignBaseCv("job1", "bad-deck");
+
+    expect(useStore.getState().cvPickerJobId).toBeNull();
+    const toasts = useStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("error");
+    expect(toasts[0].message).toBe("deck is not assignable");
+  });
+});
+
+describe("saveInjection", () => {
+  it("patches the job in the store and closes the panel on success", async () => {
+    const updated = makeJob({ id: "job1", injection: { prefix: "p", postfix: "", first_msg: "" } });
+    vi.mocked(api.putJobInjection).mockResolvedValueOnce(updated as never);
+    useStore.setState({ injectorJobId: "job1" });
+
+    await useStore.getState().saveInjection("job1", { prefix: "p", postfix: "", first_msg: "" });
+
+    expect(api.putJobInjection).toHaveBeenCalledWith("job1", {
+      prefix: "p",
+      postfix: "",
+      first_msg: "",
+    });
+    expect(useStore.getState().jobs["job1"]).toEqual(updated);
+    expect(useStore.getState().injectorJobId).toBeNull();
+  });
+
+  it("toasts the server's detail on failure instead of failing silently", async () => {
+    // The real 400: LAUNCH ALL moved the job off `queued` between opening the vial and
+    // pressing SAVE. Leaving the panel open is not enough — the WS state change unmounts
+    // it (PromptInjector returns null off `queued`), so without this toast the rejected
+    // write is invisible. Mirrors assignBaseCv's gate-rejection toast above.
+    vi.mocked(api.putJobInjection).mockRejectedValueOnce(
+      new Error('HTTP 400: {"detail":"Job \'job1\' is in state \'pending\', expected \'queued\'"}')
+    );
+    useStore.setState({ injectorJobId: "job1", jobs: { job1: makeJob({ id: "job1" }) } });
+
+    await useStore.getState().saveInjection("job1", { prefix: "p", postfix: "", first_msg: "" });
+
+    const toasts = useStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("error");
+    expect(toasts[0].jobId).toBe("job1");
+    expect(toasts[0].message).toBe("Job 'job1' is in state 'pending', expected 'queued'");
+    // The panel deliberately stays open so the draft survives when it is still mountable.
+    expect(useStore.getState().injectorJobId).toBe("job1");
+  });
+});
+
+describe("injection presets — the hydration gate", () => {
+  it("flips presetsHydrated only on a successful load", async () => {
+    vi.mocked(api.getInjectionPresets).mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    await useStore.getState().hydrateInjectionPresets();
+    expect(useStore.getState().presetsHydrated).toBe(false);
+    expect(useStore.getState().injectionPresets).toEqual([]);
+
+    vi.mocked(api.getInjectionPresets).mockResolvedValueOnce({ presets: [] } as never);
+    await useStore.getState().hydrateInjectionPresets();
+    expect(useStore.getState().presetsHydrated).toBe(true);
+  });
+
+  it("refuses to PUT before a successful load, so an empty list can't overwrite the library", async () => {
+    // `injectionPresets: []` means both "empty" and "load failed"; only the flag tells
+    // them apart, and every write here is a whole-list replace.
+    const ok = await useStore.getState().saveInjectionPresets([
+      { id: "a", name: "A", prefix: "p", postfix: "", first_msg: "", saved_at: "" },
+    ]);
+    expect(ok).toBe(false);
+    expect(api.putInjectionPresets).not.toHaveBeenCalled();
+    expect(useStore.getState().injectionPresets).toEqual([]);
+  });
+
+  it("reverts the optimistic list and reports false when the PUT fails", async () => {
+    const existing = { id: "x", name: "X", prefix: "", postfix: "", first_msg: "", saved_at: "" };
+    useStore.setState({ presetsHydrated: true, injectionPresets: [existing] });
+    vi.mocked(api.putInjectionPresets).mockRejectedValueOnce(new Error("HTTP 422"));
+
+    const ok = await useStore.getState().saveInjectionPresets([]);
+
+    expect(ok).toBe(false);
+    expect(useStore.getState().injectionPresets).toEqual([existing]);
   });
 });

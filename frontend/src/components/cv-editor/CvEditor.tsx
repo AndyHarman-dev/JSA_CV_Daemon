@@ -6,23 +6,32 @@
 // — dark chamfered panels, red accent (EDITOR_THEME), cyan "system/live" signals. The
 // Document/Split paper preview is intentionally NOT reskinned (see PaperSheet.tsx).
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { api } from "../../api";
 import { useEditorStore, type EditorView } from "../../editorStore";
 import { useStore } from "../../store";
 import { useT } from "../../i18n/useT";
 import { panelBase, cornerMarks } from "../../theme/chrome";
 import { Icon, type IconName } from "../../theme/Icon";
-import { EDITOR_THEME, paperT } from "../../theme/tokens";
+import { EDITOR_THEME, SHELL_THEME, paperT } from "../../theme/tokens";
 import { BlocksView } from "./BlocksView";
 import { DocumentView } from "./PaperSheet";
 import { JsonDrawer } from "./JsonDrawer";
 import { LanguagePill } from "./LanguagePill";
 import { SplitView } from "./SplitView";
+import { DeckRail } from "./DeckRail";
 
 const T = EDITOR_THEME;
 
-function tbtnStyle(primary: boolean, disabled?: boolean): CSSProperties {
+// `accent` overrides the editor's red only for the OPEN JSON button, which the design
+// carries in the shell's amber — see SHELL_THEME in theme/tokens.ts.
+//
+// `--a` is re-declared per button, not just used for the inline background: `.cvprimary:hover`
+// (index.css) paints `color-mix(in srgb, var(--a) 85%, #fff)`, and `--a` is set once at the
+// editor root to the editor's red — so without this the amber button would flip red the
+// moment the pointer touched it, which is the one thing this accent exists to prevent. An
+// inline custom property wins over :root for this element, and is a no-op when accent === T.a.
+function tbtnStyle(primary: boolean, disabled?: boolean, accent: string = T.a): CSSProperties {
   return {
+    ["--a" as string]: accent,
     display: "inline-flex",
     alignItems: "center",
     gap: 7,
@@ -33,43 +42,58 @@ function tbtnStyle(primary: boolean, disabled?: boolean): CSSProperties {
     font: `600 12px ${T.disp}`,
     letterSpacing: ".04em",
     color: primary ? "#06080B" : T.ink,
-    background: primary ? T.a : T.surface,
+    background: primary ? accent : T.surface,
     opacity: disabled ? 0.5 : 1,
-    boxShadow: primary ? `0 1px 14px ${T.a}55` : "none",
+    boxShadow: primary ? `0 1px 14px ${accent}55` : "none",
   };
 }
 
+// One hidden-input dance for both file entry points (inference and JSON import). The
+// `e.target.value = ""` reset is load-bearing: without it, picking the SAME file twice in a
+// row fires no change event and the second click looks dead.
 function FileButton({
   label,
   primary,
   disabled,
+  accept = ".pdf,.docx,.txt,.md",
+  icon = "spark",
+  accent,
+  testId,
+  onFile,
 }: {
   label: string;
   primary?: boolean;
   disabled?: boolean;
+  accept?: string;
+  icon?: IconName;
+  accent?: string;
+  testId?: string;
+  onFile?: (f: File) => void;
 }) {
   const inferFromFile = useEditorStore((s) => s.inferFromFile);
   const ref = useRef<HTMLInputElement>(null);
+  const handle = onFile ?? ((f: File) => void inferFromFile(f));
   return (
     <>
       <button
         type="button"
         onClick={() => ref.current?.click()}
         disabled={disabled}
+        data-testid={testId}
         className={primary ? "cvprimary" : "cvghost"}
-        style={tbtnStyle(!!primary, disabled)}
+        style={tbtnStyle(!!primary, disabled, accent)}
       >
-        <Icon name="spark" size={14} />
+        <Icon name={icon} size={14} />
         {label}
       </button>
       <input
         ref={ref}
         type="file"
-        accept=".pdf,.docx,.txt,.md"
+        accept={accept}
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) void inferFromFile(f);
+          if (f) handle(f);
           e.target.value = "";
         }}
       />
@@ -79,6 +103,8 @@ function FileButton({
 
 function EmptyState() {
   const startBlank = useEditorStore((s) => s.startBlank);
+  const importFromJsonFile = useEditorStore((s) => s.importFromJsonFile);
+  const importError = useEditorStore((s) => s.importError);
   const t = useT();
   return (
     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, position: "relative", zIndex: 1 }}>
@@ -105,6 +131,15 @@ function EmptyState() {
         </p>
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
           <FileButton label={t("cvEditor.runInference")} primary />
+          <FileButton
+            label={t("cvEditor.openJson")}
+            primary
+            accept=".json,application/json"
+            icon="braces"
+            accent={SHELL_THEME.a}
+            testId="open-json"
+            onFile={(f) => void importFromJsonFile(f)}
+          />
           <button
             type="button"
             onClick={startBlank}
@@ -127,6 +162,23 @@ function EmptyState() {
             {t("cvEditor.initBlank")}
           </button>
         </div>
+        {importError && (
+          <div
+            data-testid="import-error"
+            role="alert"
+            style={{
+              marginTop: 16,
+              padding: "8px 12px",
+              border: `1px solid ${T.danger}55`,
+              background: `${T.danger}1A`,
+              color: T.danger,
+              font: `400 13px/1.5 ${T.ui}`,
+              borderRadius: T.btnRadius,
+            }}
+          >
+            {importError}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -298,18 +350,12 @@ export function CvEditor() {
     return () => clearInterval(id);
   }, []);
 
-  // Load the saved structure once when the editor opens.
+  // Load the deck index + the active deck's CV once when the editor opens. hydrateDecks
+  // replaces the pre-decks single getCvStructure() fetch and handles its own failures
+  // (falling back to the empty state), so there is nothing to catch here.
   useEffect(() => {
     let alive = true;
-    api
-      .getCvStructure()
-      .then((saved) => {
-        if (!alive) return;
-        if (saved) st.load(saved);
-        else st.reset(); // 404 → empty state
-      })
-      .catch(() => alive && st.reset())
-      .finally(() => alive && setLoading(false));
+    st.hydrateDecks().finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
@@ -524,6 +570,7 @@ export function CvEditor() {
 
       {/* Body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative", zIndex: 1 }}>
+        <DeckRail />
         <main style={{ flex: 1, minWidth: 0, overflow: "auto", position: "relative" }}>
           {loading ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: T.ink3, fontSize: 13 }}>

@@ -1,7 +1,14 @@
 import { create } from "zustand";
-import type { JobDTO, TranscriptTurn, WSEvent } from "./types";
+import type {
+  CvDeckDTO,
+  InjectionPresetDTO,
+  JobDTO,
+  PromptInjectionDTO,
+  TranscriptTurn,
+  WSEvent,
+} from "./types";
 import { api } from "./api";
-import { useEditorStore } from "./editorStore";
+import { useEditorStore, detailOf } from "./editorStore";
 
 interface BackendSwitchEvent {
   job_id: string;
@@ -17,9 +24,13 @@ export interface ToastItem {
   id: string;
   jobId: string;
   jobLabel: string; // "{company} — {role}", or jobId if the job isn't in the local map
-  kind: "backend" | "model";
+  kind: "backend" | "model" | "error";
   from: string;
   to: string;
+  // Set only for kind === "error" — a server-detail-or-fallback string (see
+  // editorStore.detailOf), shown verbatim rather than through a translated template since
+  // it's the server's own text, not app copy (same convention as job.error/fit_reason).
+  message?: string;
 }
 
 interface Store {
@@ -66,7 +77,33 @@ interface Store {
   // retry/nudge/self-heal path replayed the whole turn and this buffer is stale).
   // Not persisted anywhere — a page reload loses an in-flight stream, same as today's
   // "loading" state until the next transcript fetch lands.
-  streamBuffers: Record<string, { stage: string; content: string; reasoning: string }>;
+  streamBuffers: Record<
+    string,
+    { stage: string; content: string; reasoning: string; tools: { name: string; detail: string; ok: boolean; at: number }[] }
+  >;
+  // Phase 6 (CV Decks) — the job-row base-CV picker. `cvDecks`/`cvDecksDefaultId` mirror
+  // GET /api/cv-decks (every deck, empty slots included; filtering has_cv is the picker's
+  // job, not the store's). `cvPickerJobId` null means the popover is closed.
+  cvDecks: CvDeckDTO[];
+  cvDecksDefaultId: string | null;
+  cvPickerJobId: string | null;
+  cvPickerPos: { x: number; y: number };
+  // PROMPT_INJECTOR — which job's vial panel is open (null = closed), and where to pin it.
+  // Open state lives here rather than in JobList because the panel is rendered as an
+  // App.tsx sibling: the job row sits inside an `overflow-y: auto` aside, where a
+  // position:fixed child would be clipped by the scroll container.
+  injectorJobId: string | null;
+  injectorPos: { x: number; y: number };
+  // Global "dose" library (GET/PUT /api/injection-presets). Hydrated once on boot.
+  injectionPresets: InjectionPresetDTO[];
+  // True only once a GET has actually succeeded. `injectionPresets: []` is ambiguous —
+  // it is both "the library is empty" and "the load failed" — and every write here is a
+  // whole-list replace, so writing under the second reading PUTs one entry over the
+  // user's entire server-side library. Hydration runs once at mount and never retries,
+  // so a single transient failure (dev mode's split origin, or a tab outliving a `jsa`
+  // restart) would otherwise leave that tab one save away from destroying the library.
+  // This flag, not the array's emptiness, is what gates `saveInjectionPresets`.
+  presetsHydrated: boolean;
   upsertJob(j: JobDTO): void;
   selectJob(id: string | undefined): void;
   setViewedStage(stage: Store["viewedStage"]): void;
@@ -86,6 +123,33 @@ interface Store {
   // --- Manual job launch (jobs are parked as `queued` until explicitly launched) ---
   launchJob(id: string): Promise<void>;
   launchAll(): Promise<void>;
+  // --- Base-CV picker (Phase 6) ---
+  hydrateCvDecks(): Promise<void>;
+  // `e` is duck-typed (not React.MouseEvent) so store.ts doesn't need a React import just
+  // for this type. No-op unless `job.state === "queued"` — the picker is pre-launch only.
+  openCvPicker(job: JobDTO, e: { clientX: number; clientY: number }): void;
+  closeCvPicker(): void;
+  assignBaseCv(jobId: string, deckId: string | null): Promise<void>;
+  // --- Per-job prompt injection (pre-launch only; the API 400s off `queued`) ---
+  openInjector(jobId: string, x: number, y: number): void;
+  closeInjector(): void;
+  saveInjection(jobId: string, draft: PromptInjectionDTO): Promise<void>;
+  hydrateInjectionPresets(): Promise<void>;
+  // Resolves false when the write was refused or failed, so the caller can keep the
+  // user's input instead of clearing it against a save that never landed.
+  saveInjectionPresets(presets: InjectionPresetDTO[]): Promise<boolean>;
+}
+
+// Panel geometry, needed here (not in the component) because the clamp below runs at open
+// time against the live viewport. `w` is 400 for a 380px panel — the extra 20px is the
+// design's intentional right margin; keep it.
+const INJECTOR_W = 400;
+const INJECTOR_MARGIN = 12;
+export function injectorPanelHeight(viewportHeight: number): number {
+  // Must track the panel's actual CSS cap (`maxHeight: "80vh"` in PromptInjector.tsx) —
+  // a flat 560px cap under-reserves on viewports taller than 700px, where a panel full of
+  // saved presets can render taller than 560px and push the footer buttons below the fold.
+  return Math.min(viewportHeight * 0.8, viewportHeight - 24);
 }
 
 export const useStore = create<Store>((set, get) => ({
@@ -105,6 +169,14 @@ export const useStore = create<Store>((set, get) => ({
   viewedStage: null,
   transcripts: {},
   streamBuffers: {},
+  cvDecks: [],
+  cvDecksDefaultId: null,
+  cvPickerJobId: null,
+  cvPickerPos: { x: 0, y: 0 },
+  injectorJobId: null,
+  injectorPos: { x: 0, y: 0 },
+  injectionPresets: [],
+  presetsHydrated: false,
 
   upsertJob(j: JobDTO) {
     set((state) => ({
@@ -126,6 +198,14 @@ export const useStore = create<Store>((set, get) => ({
 
   setEditorOpen(open: boolean) {
     set({ editorOpen: open });
+    // The editor is the only place decks are created/renamed/deleted — reload the picker's
+    // list every time it closes so a newly-created deck (or a rename/delete) is reflected
+    // without a page reload. Not on open: nothing about the picker's data changes then.
+    if (!open) {
+      get().hydrateCvDecks().catch((err: unknown) => {
+        console.error("hydrateCvDecks failed:", err);
+      });
+    }
   },
 
   setCvStructureExists(exists: boolean) {
@@ -260,7 +340,7 @@ export const useStore = create<Store>((set, get) => ({
       case "agent_chunk":
         set((state) => {
           const existing = state.streamBuffers[e.job_id];
-          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "" };
+          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "", tools: [] };
           return {
             streamBuffers: {
               ...state.streamBuffers,
@@ -268,6 +348,25 @@ export const useStore = create<Store>((set, get) => ({
                 stage: e.stage,
                 content: e.kind === "content" ? base.content + e.text : base.content,
                 reasoning: e.kind === "reasoning" ? base.reasoning + e.text : base.reasoning,
+                tools: base.tools,
+              },
+            },
+          };
+        });
+        break;
+      case "agent_tool":
+        // Anchor the mark at the reasoning buffer's length AT ARRIVAL — that offset is
+        // what ReasoningCard/mergeToolSteps use to interleave it against the segmented
+        // reasoning text in the right position.
+        set((state) => {
+          const existing = state.streamBuffers[e.job_id];
+          const base = existing && existing.stage === e.stage ? existing : { stage: e.stage, content: "", reasoning: "", tools: [] };
+          return {
+            streamBuffers: {
+              ...state.streamBuffers,
+              [e.job_id]: {
+                ...base,
+                tools: [...base.tools, { name: e.name, detail: e.summary || e.detail, ok: e.status === "ok", at: base.reasoning.length }],
               },
             },
           };
@@ -377,6 +476,146 @@ export const useStore = create<Store>((set, get) => ({
       await get().refetchAll();
     } catch (err) {
       console.error("launchAll failed:", err);
+    }
+  },
+
+  async hydrateCvDecks() {
+    try {
+      const { decks, default_id } = await api.listCvDecks();
+      set({ cvDecks: decks, cvDecksDefaultId: default_id });
+    } catch (err) {
+      console.error("hydrateCvDecks failed:", err);
+    }
+  },
+
+  openCvPicker(job: JobDTO, e: { clientX: number; clientY: number }) {
+    if (job.state !== "queued") return;
+    // Same clamp-from-click-point math as ChatBox's MentionDropdown, sized for this
+    // popover's fixed 280x360 footprint.
+    const w = 280;
+    const maxH = 360;
+    const x = Math.min(Math.max(8, e.clientX), window.innerWidth - w - 8);
+    const y = Math.min(Math.max(8, e.clientY + 14), window.innerHeight - maxH - 8);
+    set({ cvPickerJobId: job.id, cvPickerPos: { x, y } });
+  },
+
+  closeCvPicker() {
+    set({ cvPickerJobId: null });
+  },
+
+  async assignBaseCv(jobId: string, deckId: string | null) {
+    try {
+      const job = await api.putJobBaseCv(jobId, deckId);
+      get().upsertJob(job);
+    } catch (err) {
+      console.error("assignBaseCv failed:", err);
+      const store = get();
+      set({
+        toasts: [
+          ...store.toasts,
+          {
+            id: `basecv-${jobId}-${Date.now()}`,
+            jobId,
+            jobLabel: store.jobLabelFor(jobId),
+            kind: "error" as const,
+            from: "",
+            to: "",
+            message: detailOf(err, "Could not assign base CV"),
+          },
+        ].slice(-5),
+      });
+    } finally {
+      get().closeCvPicker();
+    }
+  },
+
+  openInjector(jobId: string, x: number, y: number) {
+    // Clamp ported verbatim from the design handoff. Reserving a flat margin from the
+    // bottom is NOT enough — the panel's *actual* height has to be subtracted, or a click
+    // near the bottom edge renders the footer buttons off-screen and unreachable.
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const panelH = injectorPanelHeight(vh);
+    set({
+      injectorJobId: jobId,
+      injectorPos: {
+        x: Math.max(INJECTOR_MARGIN, Math.min(x, vw - INJECTOR_W - INJECTOR_MARGIN)),
+        y: Math.max(INJECTOR_MARGIN, Math.min(y, vh - panelH - INJECTOR_MARGIN)),
+      },
+    });
+  },
+
+  closeInjector() {
+    set({ injectorJobId: null });
+  },
+
+  async saveInjection(jobId: string, draft: PromptInjectionDTO) {
+    try {
+      // The PUT returns the full, server-normalized job row — no optimistic write; that
+      // response is what lights (or unlights) the trigger. An all-blank draft normalizes
+      // to null server-side, which is how "clear this job's injection" is expressed.
+      const job = await api.putJobInjection(jobId, draft);
+      get().upsertJob(job);
+      get().closeInjector();
+    } catch (err) {
+      // Leave the panel open with the draft intact so the edit isn't silently lost —
+      // but that alone is NOT enough on the failure this route actually produces. The
+      // 400 fires when the job left `queued` (a concurrent LAUNCH ALL) between opening
+      // the vial and pressing SAVE, and the WS state change then unmounts the panel
+      // (`PromptInjector` returns null off `queued`), taking the "intact" draft with it.
+      // So surface it the same way the sibling `assignBaseCv` above surfaces its own
+      // pre-launch-gate rejection.
+      console.error("saveInjection failed:", err);
+      const store = get();
+      set({
+        toasts: [
+          ...store.toasts,
+          {
+            id: `injection-${jobId}-${Date.now()}`,
+            jobId,
+            jobLabel: store.jobLabelFor(jobId),
+            kind: "error" as const,
+            from: "",
+            to: "",
+            message: detailOf(err, "Could not save the prompt injection"),
+          },
+        ].slice(-5),
+      });
+    }
+  },
+
+  async hydrateInjectionPresets() {
+    try {
+      const { presets } = await api.getInjectionPresets();
+      // `presetsHydrated` flips only here, on an actual success — see its declaration.
+      set({ injectionPresets: presets, presetsHydrated: true });
+    } catch (err) {
+      // Presets are a convenience — a failed load must never block the boot path. It
+      // leaves `presetsHydrated` false instead, which blocks writes rather than the boot.
+      console.error("hydrateInjectionPresets failed:", err);
+    }
+  },
+
+  async saveInjectionPresets(presets: InjectionPresetDTO[]) {
+    if (!get().presetsHydrated) {
+      // Refuse rather than overwrite. Deliberately NOT self-healing with a re-hydrate
+      // fired from here: that would land a fresh list under a caller still holding the
+      // stale empty snapshot it computed `presets` from, and the very next write would
+      // do exactly the damage this guard exists to prevent. Recovery is an explicit
+      // RELOAD in the panel, so the component re-renders before it composes a new list.
+      console.error("saveInjectionPresets refused: presets were never loaded");
+      return false;
+    }
+    const previous = get().injectionPresets;
+    set({ injectionPresets: presets });
+    try {
+      // Whole-list replace: add, delete and reorder are all just a new array.
+      await api.putInjectionPresets(presets);
+      return true;
+    } catch (err) {
+      console.error("saveInjectionPresets failed, reverting:", err);
+      set({ injectionPresets: previous });
+      return false;
     }
   },
 }));

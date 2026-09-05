@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jsa.agents import model_catalog, model_costs
@@ -112,6 +114,14 @@ def _wrap_factory(backend_factory: Callable) -> Callable[[str, str | None], Agen
     return lambda name, model=None: backend_factory(name)
 
 
+# A job's ``base_cv_id`` (``None`` for an unassigned job, and for the dispatch gate's
+# "is any deck usable" question) -> the base-CV file to read, or ``None`` when no deck on
+# disk can serve it. Injected rather than imported: this module cannot import ``Settings``
+# (server.py imports the orchestrator, so the reverse is circular) -- same reason
+# ``model_resolver`` is a callable. ``server.make_base_cv_resolver`` is the production one.
+BaseCvResolver = Callable[[str | None], Awaitable[Path | None]]
+
+
 class Orchestrator:
     """Dispatcher loop that manages concurrent pipeline stages.
 
@@ -144,6 +154,7 @@ class Orchestrator:
         fit_backend_factory: Callable | None = None,
         output_dir: Path | None = None,
         cv_structure_path: Path | None = None,
+        base_cv_resolver: BaseCvResolver | None = None,
         preferences_path: Path | None = None,
         max_parallel_per_backend: int = 0,
         dispatch_stagger_seconds: float = 0.0,
@@ -170,7 +181,20 @@ class Orchestrator:
         )
         self._backends = backends if backends is not None else ["claude-cli"]
         self._output_dir = output_dir
-        self._cv_structure_path = cv_structure_path
+        # One internal code path for base-CV resolution. A caller that passes only the
+        # legacy `cv_structure_path` (every existing test, and any pre-decks caller) is
+        # wrapped into a resolver that ignores the deck id and always returns that one
+        # path -- byte-for-byte today's behaviour, so `cv_structure_path=` needs no
+        # branch of its own in the gate or at the dispatch site. Passing neither leaves
+        # the resolver `None`, which keeps the gate inert exactly as before.
+        if base_cv_resolver is None and cv_structure_path is not None:
+
+            async def base_cv_resolver(  # noqa: ARG001
+                _deck_id: str | None, _path: Path = cv_structure_path
+            ) -> Path | None:
+                return _path
+
+        self._base_cv_resolver = base_cv_resolver
         self._preferences_path = preferences_path
         # Model-first fallback ladder (Phase 4 of the model-fallback-ladder plan). Both
         # default to None -> ladder disabled, which is what every existing test/caller
@@ -251,6 +275,41 @@ class Orchestrator:
             return True
         return False
 
+    async def _base_cv_for_gate(self) -> tuple[Path | None, bool]:
+        """Resolve the default base CV for the dispatch gate below.
+
+        Returns ``(path, index_unreadable)``. **Gate-only on purpose — do not reuse this at
+        the dispatch site.** The resolver reads the deck index (``cv_decks.json``) with a
+        plain ``json.loads``, so a torn write (the editor's save runs in a ``to_thread``
+        worker while this loop reads) or a crash-truncated / hand-broken index raises
+        ``JSONDecodeError``/``ValidationError`` straight out of ``run()``'s un-wrapped loop
+        body. That kills the dispatch task silently for the whole process lifetime — the
+        server keeps serving HTTP and never picks up another job. The legacy single-file
+        gate could not do this: it went through ``stages._read_base_structure``, which
+        catches exactly these two and is documented to keep jobs ``pending``, never failed.
+
+        Only those two are caught — a permissions/OS error must still surface rather than
+        be silently logged as data corruption (same taxonomy as ``cv_decks.migrate_legacy``).
+
+        The fix deliberately lives here and NOT in ``cv_decks.load_index``: making that
+        return an empty ``DeckIndex()`` on a corrupt read would let the next ``create_deck``
+        write a fresh index straight over the user's real deck list.
+
+        The dispatch site keeps raising: returning ``None`` there would hand ``run_stage``
+        no base CV at all, and the stage would quietly tailor a CV against nothing — worse
+        than the visible ``mark_failed`` its generic handler produces.
+        """
+        assert self._base_cv_resolver is not None
+        try:
+            return await self._base_cv_resolver(None), False
+        except (json.JSONDecodeError, ValidationError) as exc:
+            logger.warning(
+                "base-CV deck index is unreadable (%s: %s) — holding every job pending",
+                type(exc).__name__,
+                exc,
+            )
+            return None, True
+
     async def run(self) -> None:
         """Main dispatch loop.
 
@@ -279,31 +338,36 @@ class Orchestrator:
             # until some unrelated event kicks the loop again.
             self.wakeup.clear()
 
-            # Gate: cv_structure is the single source of truth for CV content. Inert
-            # when _cv_structure_path is None (tests / legacy callers) — production
-            # always passes it (see server.py). Checks loadability, not just existence,
-            # so a present-but-corrupt file (bad hand-edit, or a save that raced a crash)
-            # blocks dispatch the same as a missing one — jobs stay pending, never failed.
-            # The editor's PUT calls kick() on save so this unblocks without a restart.
-            if self._cv_structure_path is not None and (
-                await stages._read_base_structure(self._cv_structure_path)
-            ) is None:
-                if not cv_gate_blocked_announced:
-                    cv_gate_blocked_announced = True
-                    await bus.publish(
-                        event_to_dict(
-                            LogEvent(
-                                job_id="",
-                                level="info",
-                                text=(
-                                    "No usable CV structure — jobs stay pending until you set "
-                                    "up your CV in the Structure Editor."
-                                ),
-                            )
+            # Gate: a base CV is the single source of truth for CV content. Asks the
+            # resolver for the *default* deck (deck_id=None), i.e. "is any deck usable" —
+            # a per-job assignment can only narrow that, never widen it, so a job whose
+            # own deck is missing still falls back through resolve_path at dispatch.
+            # Inert when _base_cv_resolver is None (tests passing neither a path nor a
+            # resolver) — production always passes one (see server.py). Checks
+            # loadability, not just existence, so a present-but-corrupt file (bad
+            # hand-edit, or a save that raced a crash) blocks dispatch the same as a
+            # missing one — jobs stay pending, never failed. The editor's PUT calls
+            # kick() on save so this unblocks without a restart.
+            if self._base_cv_resolver is not None:
+                gate_path, index_unreadable = await self._base_cv_for_gate()
+                if await stages._read_base_structure(gate_path) is None:
+                    if not cv_gate_blocked_announced:
+                        cv_gate_blocked_announced = True
+                        # A corrupt index gets its own text: telling a user who *has* set
+                        # up their CV to go set it up is the one message guaranteed not
+                        # to help.
+                        text = (
+                            "Your CV deck index (cv_decks.json) is unreadable — jobs stay "
+                            "pending until it is repaired or removed."
+                            if index_unreadable
+                            else "No usable CV structure — jobs stay pending until you set "
+                            "up your CV in the Structure Editor."
                         )
-                    )
-                await self.wakeup.wait()
-                continue
+                        await bus.publish(
+                            event_to_dict(LogEvent(job_id="", level="info", text=text))
+                        )
+                    await self.wakeup.wait()
+                    continue
             cv_gate_blocked_announced = False
 
             async with self._db_session_factory() as session:
@@ -470,7 +534,11 @@ class Orchestrator:
                     job, backend, stage, session,
                     fit_backend=fit_backend,
                     output_dir=self._output_dir,
-                    cv_structure_path=self._cv_structure_path,
+                    cv_structure_path=(
+                        await self._base_cv_resolver(job.base_cv_id)
+                        if self._base_cv_resolver is not None
+                        else None
+                    ),
                     preferences_path=self._preferences_path,
                 )
 

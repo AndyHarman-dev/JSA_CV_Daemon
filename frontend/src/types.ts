@@ -5,6 +5,42 @@ export type JobState =
 export type Stage =
   | "fit_assessment" | "cv_adjust" | "cover_letter" | "revising_cv" | "revising_cl";
 
+// One row of the base-CV deck index (GET /api/cv-decks). `is_default` is server-computed
+// against the index's `default_id`; the editor store also tracks `defaultDeckId` from the
+// same response, and that store field — not this flag — is the deck rail's source of truth,
+// so a local set-default reflects before the index round-trips.
+export interface CvDeckDTO {
+  id: string;
+  name: string | null;
+  auto_title: string | null;
+  has_cv: boolean;
+  is_default: boolean;
+  // How many jobs currently hold this deck (repo.DECK_LOCK_STATES). Non-zero => DELETE
+  // answers 409 and the rail's trash icon is disabled.
+  in_use_by: number;
+}
+
+
+// Per-job prompt overrides (jsa/schema/injection.py::PromptInjection). Server-normalized:
+// the API returns either null or an object whose fields are already stripped, so "has an
+// injection" is plain truthiness here — never a re-check for all-blank.
+export interface PromptInjectionDTO {
+  prefix: string;
+  postfix: string;
+  first_msg: string;
+}
+
+// One saved "dose" from the global preset library (jsa/store/injection_presets.py).
+// `saved_at` is client-supplied ISO-8601, display only — the server never generates it.
+export interface InjectionPresetDTO {
+  id: string;
+  name: string;
+  prefix: string;
+  postfix: string;
+  first_msg: string;
+  saved_at: string;
+}
+
 export interface JobDTO {
   id: string;
   company: string;
@@ -23,10 +59,15 @@ export interface JobDTO {
   effective_model: string | null;
   language: string | null;
   fit_reason: string | null;
+  // Null unless the user attached pre-launch prompt overrides (PUT .../injection).
+  injection: PromptInjectionDTO | null;
   error: string | null;
   retry_count: number;
   updated_at: string;
   created_at: string;
+  // Assigned base-CV deck id (GET /api/cv-decks), or null for "use the default deck".
+  // Writable only pre-launch — PUT /api/jobs/{id}/base-cv 409s once state != "queued".
+  base_cv_id: string | null;
 }
 
 export interface FollowUpDTO {
@@ -79,6 +120,20 @@ export type WSEvent =
   // server-side (jsa/pipeline/streaming.py::ChunkAccumulator). Mirrors
   // jsa/events/schema.py::AgentChunkEvent exactly.
   | { type: "agent_chunk"; job_id: string; stage: string; kind: "content" | "reasoning"; text: string }
+  // One tool call's execution outcome, part of the revision-patching tool loop.
+  // Published AFTER execution, so `status` is already known. Mirrors
+  // jsa/events/schema.py::AgentToolEvent exactly.
+  | {
+      type: "agent_tool";
+      job_id: string;
+      stage: string;
+      seq: number;
+      call_id: string;
+      name: string;
+      summary: string;
+      status: "ok" | "error" | "not_executed" | "budget_exhausted";
+      detail: string;
+    }
   // Marks the end of one streamed turn. superseded=true means discard the buffer outright
   // (a retry/nudge/self-heal path replayed the whole turn). Mirrors
   // jsa/events/schema.py::AgentTurnEndEvent exactly.
@@ -161,4 +216,15 @@ export interface TranscriptTurn {
   follow_up_id: number | null;
   suggested_replies: string[] | null;
   reasoning: string | null;
+  // Persisted tool-call marks for this turn, same shape as the live `agent_tool` WS
+  // event once accumulated (see store.ts's streamBuffers). Populated by
+  // jsa/api/transcript.py, which folds a revision turn's role="tool" Message rows into
+  // the FOLLOWING assistant turn (always a `plumbing` turn — its text is the raw JSON
+  // envelope). Null on every other turn, and the REASONING card degrades gracefully
+  // (no tool rows) when it's absent.
+  //
+  // `at` is the mark's INDEX within its turn here, not a reasoning-buffer offset:
+  // tool mode never streams, so a settled tool turn has no buffer to anchor against
+  // and mergeToolSteps' trailing-append preserves exactly the persisted call order.
+  tools?: { name: string; detail: string; ok: boolean; at: number }[] | null;
 }

@@ -1,0 +1,60 @@
+BASE CV STRUCTURE (the candidate's base CV, curated in the Structure Editor):
+{
+  "contact": {
+    "name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "phone": "+1-555-867-5309",
+    "location": "Berlin, DE",
+    "links": []
+  },
+  "sections": [
+    {
+      "name": "Summary",
+      "text": "Backend engineer with a decade on distributed systems.",
+      "items": [],
+      "entries": []
+    },
+    {
+      "name": "Experience",
+      "text": null,
+      "items": [],
+      "entries": [
+        {
+          "heading": "Senior Engineer",
+          "subheading": "Acme",
+          "dates": "2019-present",
+          "location": null,
+          "text": null,
+          "bullets": [
+            "Built a distributed payment pipeline",
+            "Cut p95 checkout latency by 40%"
+          ],
+          "links": []
+        }
+      ]
+    },
+    {
+      "name": "Open Source Leadership",
+      "text": null,
+      "items": [
+        "Maintainer of Foo"
+      ],
+      "entries": []
+    },
+    {
+      "name": "Skills",
+      "text": null,
+      "items": [
+        "Python",
+        "Go",
+        "PostgreSQL"
+      ],
+      "entries": []
+    }
+  ]
+}
+
+JOB DESCRIPTION:
+Job description text
+
+TIER: A

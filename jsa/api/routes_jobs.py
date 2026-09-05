@@ -26,6 +26,8 @@ from jsa.events.schema import (
 )
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
+from jsa.schema.injection import PromptInjection, parse_injection
+from jsa.store import cv_decks
 from jsa.store import preferences as preferences_store
 from jsa.util import slugify as _slugify
 
@@ -104,8 +106,13 @@ def _job_to_dict(
         "backend_name": job.backend_name,
         "model_name": job.model_name,
         "effective_model": effective_model,
+        "base_cv_id": job.base_cv_id,
         "language": job.language,
         "fit_reason": job.fit_reason,
+        # Parsed object (or null), never the raw JSON string — the frontend must
+        # never parse JSON out of a JSON field. parse_injection normalizes, so an
+        # all-blank stored row reads back as null here too.
+        "injection": parse_injection(job.injection),
         "error": job.error,
         "retry_count": job.retry_count,
         "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -144,6 +151,10 @@ class ReviseBody(BaseModel):
 
 class ExportBody(BaseModel):
     format: str  # "pdf" | "docx"
+
+
+class BaseCvBody(BaseModel):
+    deck_id: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +566,100 @@ async def ignore_fit(request: Request, job_id: str):
     request.app.state.orchestrator.kick()
 
     return job_dict
+
+
+@router.put("/api/jobs/{job_id}/base-cv")
+async def set_job_base_cv(request: Request, job_id: str, body: BaseCvBody):
+    """Assign or clear the job's base-CV deck (pre-launch only).
+
+    404 unknown job. 409 unless `job.state == queued` -- assigning after launch would
+    silently not take effect for stages already replayed (CLAUDE.md's `queued` is the
+    hand-off's "pending: fresh ingest, parked until LAUNCH"). 422 when `deck_id` is not
+    `None` and either no such deck exists in the index or that deck has `has_cv=False`
+    (an empty, never-saved slot must not be assignable -- otherwise
+    `cv_decks.resolve_path` finds no file at stage time and silently falls back to the
+    default deck, i.e. the user picks deck B and the model gets deck A, with only a log
+    line to show it). Emits nothing on the event bus -- the frontend patches its own
+    store optimistically, same as other job mutations.
+    """
+    sf = _session_factory(request)
+    settings = request.app.state.settings
+
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.queued:
+            raise HTTPException(
+                status_code=409,
+                detail="base CV can only be assigned before launch",
+            )
+
+        if body.deck_id is not None:
+            index = await cv_decks.load_index(settings)
+            meta = next((m for m in index.decks if m.id == body.deck_id), None)
+            if meta is None or not meta.has_cv:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"deck {body.deck_id!r} is not assignable (unknown, or has no saved CV yet)",
+                )
+
+        await repo.set_job_base_cv(session, job, body.deck_id)
+
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        return _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
+
+
+@router.put("/api/jobs/{job_id}/injection")
+async def set_job_injection(request: Request, job_id: str, body: PromptInjection):
+    """Attach (or clear) this job's per-job prompt overrides. Pre-launch only.
+
+    Gated on `queued`, the state that renders the LAUNCH control — NOT `pending`.
+    `pending` is post-launch here: the orchestrator can dispatch it between a GET and
+    this PUT, so allowing it would mean silently editing the prompt of a job that is
+    already mid-flight. The UI hides the trigger off `queued` too; this 400 is the
+    enforcement.
+
+    An all-blank (or whitespace-only) body normalizes to None and stores SQL NULL,
+    which is the design's "clearing the injection" — and is what keeps a blank-typed
+    job byte-identical to an uninjected one for prompt-cache purposes
+    (CLAUDE.md -> "Prompt caching"). Normalization lives in one place,
+    `PromptInjection.normalized()`; the stripped model is what gets persisted.
+
+    No state transition happens here, so this is a plain field write + commit, NOT
+    `repo.checkpoint` (CLAUDE.md's checkpoint rule covers writes that change job
+    state). Nothing consumes an injection change, so there is no event and no
+    orchestrator kick either.
+
+    Note the deliberate status-code divergence from the sibling `/base-cv` route above,
+    which 409s on the same pre-launch gate: each was specified against its own design
+    hand-off and each is pinned by its own tests. Not an inconsistency to "fix" without
+    updating both test suites.
+    """
+    sf = _session_factory(request)
+
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        if job.state != JobState.queued:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id!r} is in state {job.state.value!r}, expected 'queued'",
+            )
+
+        normalized = body.normalized()
+        job.injection = normalized.model_dump_json() if normalized is not None else None
+        await session.commit()
+
+    async with sf() as session:
+        job = await _fetch_job_with_relations(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        return _job_to_dict(job, full=True, model_resolver=_model_resolver_for(request))
 
 
 @router.post("/api/jobs/{job_id}/launch")

@@ -50,6 +50,23 @@ describe("Toast", () => {
     expect(alert.textContent).toContain("kimi-k2.6");
   });
 
+  it("renders an error toast's message verbatim, not through an interpolated template", () => {
+    useStore.setState({
+      toasts: [
+        makeToast({
+          id: "basecv-job1-1",
+          kind: "error",
+          from: "",
+          to: "",
+          message: "deck 'd9' is not assignable (unknown, or has no saved CV yet)",
+        }),
+      ],
+    });
+    render(<Toast />);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("deck 'd9' is not assignable (unknown, or has no saved CV yet)");
+  });
+
   it("dismiss button removes only that toast from the store", () => {
     useStore.setState({
       toasts: [makeToast({ id: "t1", jobId: "job1" }), makeToast({ id: "t2", jobId: "job2" })],

@@ -66,6 +66,13 @@ class GoogleCliBackend(AgentBackend):
     # the pipeline shows a plain "working..." indicator for this backend instead.
     supports_streaming = False
 
+    # False: `restore_session` here ignores both `system_prompt` and `history` — `agy`
+    # CLI holds the conversation on disk and it is resumed by id
+    # (`--conversation <uuid>`), and `send_message` passes no system-prompt flag. A new system prompt handed to
+    # `restore_session` therefore never reaches the model, which rules this backend out
+    # of jsa/pipeline/tool_loop.py's prompt rung. See the flag's docstring in base.py.
+    restore_applies_system_prompt = False
+
     def __init__(self, timeout: float = 120.0) -> None:
         self._timeout = timeout
 

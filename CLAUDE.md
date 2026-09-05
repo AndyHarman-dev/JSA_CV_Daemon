@@ -594,42 +594,209 @@ the pipeline.
 
 ---
 
-## CV structure — single source of truth
+## Base CVs (decks) — single source of truth
 
-`cv_structure.json` (`jsa/store/cv_structure.py`, edited via the CV Structure Editor,
-`Settings.cv_structure_path` — `~/.jsa/cv_structure.json` by default) is the **only**
-source of *base* CV content for the pipeline — i.e. for the stages that haven't yet
-produced their own tailored CV. Both `fit_assessment` and `cv_adjust` read it at stage
-time (`jsa/pipeline/stages.py::run_stage`) and inject it into their prompts — `cv_adjust`
-as the `BASE CV STRUCTURE` JSON skeleton, `fit_assessment` as `cv_to_markdown(structure)`
-under a `CV:` header. Neither stage reads `Job.cv_text`. **`cover_letter` is the
-exception**: it reads the approved, tailored `cv_adjust` Document instead (falling back to
-this base structure only if that Document is somehow missing) — see "Two-lane pipeline /
-CV gate" below. Do not "fix" the cover-letter lane back onto `cv_structure.json`; that
-would defeat the two-lane split's entire point (writing the letter against what will
-actually be submitted).
+JSA maintains **many** base CVs ("decks"), and each job picks one. A deck is a standalone
+`CVDocument` JSON file at `Settings.cv_decks_dir / "<uuid4().hex>.json"`
+(`~/.jsa/cv_decks/`), plus one small index at `Settings.cv_decks_path`
+(`~/.jsa/cv_decks.json`) holding order, user-given names, a denormalized `auto_title`
+cache and `default_id`. The store is `jsa/store/cv_decks.py`; the routes are
+`jsa/api/routes_cv_decks.py`. `CVDocument` itself gained **no** id/name field — it stays
+the pipeline's wire schema and the editor's export format, and deck identity lives
+entirely in the index plus the filename.
 
-**`Job.cv_text` is DEPRECATED.** It is never populated (the CLI's `--cv` no longer
-stamps it) and never read by any prompt. The column still exists only because
+Both `fit_assessment` and `cv_adjust` still read exactly one base CV at stage time
+(`jsa/pipeline/stages.py::run_stage`) and inject it — `cv_adjust` as the `BASE CV
+STRUCTURE` JSON skeleton, `fit_assessment` as `cv_to_markdown(structure)` under a `CV:`
+header. Neither reads `Job.cv_text`. **`cover_letter` is still the exception**: it reads
+the approved, tailored `cv_adjust` Document instead (falling back to the base structure
+only if that Document is somehow missing) — see "Two-lane pipeline / CV gate" below. Do
+not "fix" the cover-letter lane onto a deck; that would defeat the two-lane split's point
+(writing the letter against what will actually be submitted).
+
+**`stages.py` knows nothing about decks — and that is deliberate, not an oversight.**
+`run_stage(..., cv_structure_path=<path>)` already took a path to one JSON file holding
+one `CVDocument`, and a deck file *is* exactly that format. So the resolution happens one
+level up: `Orchestrator._run_one` calls `cv_structure_path=await
+self._base_cv_resolver(job.base_cv_id)` at the `run_stage` call site, and
+`_read_base_structure` / `_base_structure_cv_block` / `_build_fit_user_msg` are reused
+verbatim. **Do not "simplify" this into a `run_stage` signature change that takes a deck
+id** — beyond being a much larger diff, it would drag deck-store knowledge into the
+pipeline layer, which is what keeps `stages.py` out of the way of concurrent feature work
+and what makes `tests/backend/test_cv_decks_parity.py` (below) a meaningful gate at all.
+
+**`Job.base_cv_id` is read live at stage time, never snapshotted at launch.** It is a
+plain nullable `String(32)` column (`jsa/db/models.py`, added via `init_db`'s additive
+`ALTER TABLE` block — there is no FK and no column-drop path), and `_run_one` resolves it
+on **every** dispatch. So a deck edited between two stages of the same job feeds the newer
+content into the later stage; that is intended, and it is the same behavior the
+single-file store had.
+
+**Resolution and fallback live entirely in `cv_decks.resolve_path`, and nothing there is
+fatal.** It returns the first *existing* file among: the requested deck → the index's
+`default_id` → index order; `None` if there is none. It does pure `.exists()` checks —
+loadability/corruption stays `stages._read_base_structure`'s job, exactly as for the
+legacy single file. It logs a warning whenever the deck actually used is not the one asked
+for, **including the `deck_id=None` case** (where "asked for" means `default_id`) — a
+silent fall-through there is the genuinely confusing one: the rail shows deck B starred as
+DEFAULT while every unassigned job runs against deck A. The `"falling back to deck"`
+substring is asserted on by `tests/backend/test_cv_decks_pipeline.py`; keep it.
+
+**The index is a cache; the deck files are the source of truth.** `GET /api/cv-decks`
+feeds the per-job picker, so it must be **one** index read and must never fan out into one
+file read per deck. `auto_title` (= `cv.contact.name`) and `has_cv` are therefore
+denormalized into the index and refreshed by `save_deck` on every write.
+`tests/backend/test_cv_decks_api.py` pins the no-fan-out property by counting
+`cv_structure.read` calls — do not add a per-deck read to that endpoint to "get fresher
+titles".
+
+**A `has_cv: False` deck is a real, reachable state** (the rail's "NEW BASE CV" slot,
+created before anything is saved into it) and it must never be assignable to a job.
+`PUT /api/jobs/{id}/base-cv` rejects it with 422, and the frontend picker filters
+`d.has_cv`. Without that, `resolve_path` would find no file and silently fall back to the
+default — i.e. the user picks deck B, the model gets deck A, and only a log line says so.
+
+**Assignment is pre-launch only.** `PUT /api/jobs/{id}/base-cv` (body `{"deck_id": str |
+null}`) returns 409 unless `job.state == queued`; 404 for an unknown job; 422 for an
+unknown deck id or an empty slot. Assigning later would silently not affect stages that
+already replayed.
+
+**A deck a job still holds cannot be deleted — 409, not a silent fallback.**
+`DELETE /api/cv-decks/{id}` first counts holders via `repo.count_jobs_holding_deck` and
+refuses with 409 if there are any. `repo.DECK_LOCK_STATES` is the single source of truth
+for "holds", and the rule behind it is **"can this job still open a FRESH session against
+the deck file?"**, not "is it running right now" — because a stage only re-reads the deck
+when it has no `Message` rows for that job+stage (`stages.py`'s fresh-vs-resume branch).
+So a mid-flight job is immune to the file vanishing *until* something wipes its Messages,
+which `backend_switch_reset` does on a BF-19 backend switch or a model-ladder hop. Hence
+`pending` holds (it is that rewind's landing state) and `failed` holds (a re-run resets it
+to `pending` and re-dispatches fresh); `queued`, `approved` and `dismissed` release.
+Without this, deleting a deck under a running job left `base_cv_id` naming a file that no
+longer existed, and the next fresh session resolved to the **default** deck instead — the
+job genuinely rebuilt from a different base CV, with only a `resolve_path` warning to show
+for it. Approving, dismissing or deleting the holder is the intended way out; the rail
+disables its trash icon and says how many jobs hold the deck, from `in_use_by` on the deck
+DTO (`GET /api/cv-decks`, one grouped `jobs` query for all decks — not one per row).
+**Editing is deliberately NOT gated**: a job that has already started has the CV baked
+into its `Message` rows, so a `PUT` cannot reach it mid-flight anyway.
+
+**Deleting an unheld deck still clears the assignment on undispatched jobs.**
+`repo.clear_base_cv_assignments(session, deck_id)` nulls `base_cv_id` where `state IN
+(queued, pending)` and returns the count; graduated rows keep their value as a record of
+which base CV built them. `pending` stays in that WHERE clause even though the lock above
+makes it unreachable through the route — it closes the window between the holder count and
+`delete_deck`, where a `queued` job can be LAUNCHed into `pending`. Routes never write raw
+SQL for this — go through `jsa/db/repo.py`.
+
+**Zero decks is a legal state — there is deliberately no backend last-deck guard.**
+`DELETE /api/cv-decks/{id}` will happily remove the only deck. That is not an oversight:
+the orchestrator's gate tolerates zero decks (jobs stay `pending`, never `failed`, and the
+gate banner tells the user to open the editor), and two tests pin the behavior end to end —
+`tests/backend/test_cv_decks_api.py::TestKickWiring::test_delete_kicks` and
+`::TestConfigSignal::test_toggles_false_true_false_across_create_save_delete`. The only
+friction against reaching zero is UI-level (`DeckRail`'s `canDelete={decks.length > 1}`,
+plus a `confirm()`). A 409 "cannot delete your last deck" was drafted during review and
+**rejected** — adding one means rewriting those two tests.
+
+**Index writes are serialized and atomic; readers never take a lock.** Every index mutator
+(`create_deck`/`ensure_default_deck`/`save_deck`/`rename_deck`/`set_default`/
+`duplicate_deck`/`delete_deck`) is a load-mutate-write over the whole index file held
+behind the `"index"` lock — two overlapping mutations would otherwise have the later write
+silently drop the earlier one. `_save_index_sync` writes to a fixed-name temp file beside
+the target and `os.replace`s it, so a concurrent reader can never see a torn file; **that
+fixed temp name is only safe because writers cannot overlap** — a new mutator added
+*outside* the `"index"` lock breaks the argument and needs a unique temp name. The locks
+are keyed per running event loop through `_lock(name)` (a `WeakKeyDictionary`), **not**
+module-level singletons: `asyncio.Lock` binds to a loop on its first contended acquire, and
+each pytest-asyncio test gets a fresh loop, so a singleton would be poisoned by the first
+test that actually contends it and would then fail unrelated tests with an inscrutable
+`RuntimeError`. Do not "simplify" these back to two module-level `asyncio.Lock()` objects.
+
+`ensure_default_deck` exists so no caller writes `load_index` → `if default_id is None:
+create_deck` itself — that shape is a check-then-act *above* the lock, and two concurrent
+callers on a fresh install would each mint a deck with the second `save_index` clobbering
+the first, orphaning a deck file with no index entry.
+
+**Errors are typed so routes don't re-derive the store's rules.** `InvalidDeckId`
+(malformed id / path traversal, raised by `deck_path`) → 400; `UnknownDeckId` (well-formed
+but absent from the index) → 404. Both subclass `ValueError`, so a caller catching
+`ValueError` keeps working. `deck_path` re-validates `^[0-9a-f]{32}$` on **every** path
+derivation — it is the sole path-traversal guard between a client-supplied id and
+`cv_decks_dir`, and ids are always server-minted (`uuid4().hex`), never client-supplied.
+
+**The legacy `cv_structure.json` is migrated by copy and then left alone, forever.**
+`migrate_legacy` runs from `load_index` the first time no index file exists: if the legacy
+file exists and parses, it mints a deck id, **copies** the bytes into `cv_decks/<id>.json`,
+and writes an index with that deck as default. The legacy file is never deleted and never
+rewritten — it is an inert backup of the pre-decks state. A corrupt legacy file is treated
+as absent (warning logged). With no legacy file, `migrate_legacy` returns an empty
+`DeckIndex()` **without** writing anything, so a fresh install has no state until the user
+creates something. The migration write re-checks the index file's existence *inside*
+`_lock("migrate")`, because two first-boot callers on the same loop (`GET /api/config` and
+the orchestrator's dispatch gate) must mint exactly **one** deck, not two.
+
+**`/api/cv-structure` GET/PUT survive as thin default-deck aliases** — same paths, same
+response shapes, same 404/422/`kick()` semantics. `GET` reads the default deck (404 when
+there is none or it has no CV yet); `PUT` saves into the default deck, creating one first
+via `ensure_default_deck` if the index is empty. `POST /api/cv-structure/infer` is
+**unchanged** — it is stateless and deck-agnostic, returning an unsaved structure the
+editor then PUTs into whichever deck is active.
+
+**`cv_structure_exists` on `/api/config` now means "at least one deck has a usable CV"**
+(`bool(await cv_decks.resolve_path(settings, None))`), not `cv_structure_path.exists()`.
+The field name is kept because the frontend store reads it; `cv_deck_count` sits alongside
+it for the picker's empty-state copy. Re-pointing this mattered: after migration the legacy
+file is inert, so an `exists()` check on it would be `true` forever, including with zero
+decks.
+
+**No prompt-caching impact.** The base CV goes into the *user message*
+(`_build_fit_user_msg` / `_build_initial_user_msg`), never into the system prefix built by
+`prompt_assembly.assemble_system_prompt`. Per-job decks therefore do not violate the
+cross-job system-prefix invariant — see "Prompt caching (HTTP API backends)" above;
+`tests/backend/test_prompt_prefix_stability.py` stays untouched and green.
+
+**`Job.cv_text` is DEPRECATED.** It is never populated (the CLI's `--cv` no longer stamps
+it) and never read by any prompt. The column still exists only because
 `jsa/db/engine.py`'s migration story is `create_all` + additive `ALTER TABLE` — there is
 no column-drop path, and existing sqlite DBs have it `NOT NULL`. Do not read or write it
 in new code; do not "fix" this by reintroducing a `CV TEXT:` block into a prompt.
 
 **`--cv` is optional and bootstrap-only.** `jsa/cli.py::_bootstrap_cv_structure` seeds
-`cv_structure.json` from `--cv` exactly once, if the file doesn't exist yet (via the same
-`jsa/pipeline/infer_structure.py::run_infer` the editor's "infer" button uses). If a
-structure already exists, `--cv` is ignored (a note is printed). If neither `--cv` nor a
-saved structure exists, startup proceeds anyway — see the gate below.
+the user's **first** deck from `--cv` exactly once, if no deck with a usable CV exists yet
+(via the same `jsa/pipeline/infer_structure.py::run_infer` the editor's "infer" button
+uses) — `create_deck` + `save_deck`, **not** `cv_structure.save`. Do not "fix" a failing
+bootstrap test by dual-writing the legacy file; that resurrects the second source of truth
+the migration decision removed. If a deck already exists, `--cv` is ignored (a note is
+printed). If neither `--cv` nor a saved deck exists, startup proceeds anyway — see the gate
+below.
 
-**CV structure gate.** `Orchestrator.run()` (`jsa/pipeline/orchestrator.py`) checks
-`cv_structure_path.exists()` at the top of every dispatch cycle when a path was given
-(production always passes one via `server.py`; tests passing `cv_structure_path=None`
-are exempt — the gate is inert for them). While the file is missing, the loop skips
-dispatch entirely and jobs stay `pending` (never `failed`); a one-shot `LogEvent`
-announces the block. `PUT /api/cv-structure` calls `orchestrator.kick()` on save, and
-`GET /api/config`'s `cv_structure_exists` field drives the frontend's gate banner
-(`frontend/src/components/JobList.tsx`) — so saving a structure in the editor unblocks
-pending jobs live, no restart required.
+**Base-CV gate.** `Orchestrator.run()` (`jsa/pipeline/orchestrator.py`) checks at the top
+of every dispatch cycle whether *any* deck is usable, via `await
+self._base_cv_resolver(None)` fed to `stages._read_base_structure`. While none is, the
+loop skips dispatch entirely and jobs stay `pending` (never `failed`); a one-shot
+`LogEvent` announces the block. Every deck write route calls `orchestrator.kick()`, so
+saving a deck in the editor unblocks pending jobs live, no restart required.
+
+The resolver is **injected**, never constructed in the pipeline: `server.py`'s
+`make_base_cv_resolver(settings)` (beside `make_model_resolver`) returns
+`Callable[[str | None], Awaitable[Path | None]]` and is passed as
+`Orchestrator(base_cv_resolver=...)`. The orchestrator cannot import `Settings` — that is
+circular via `server.py`. `Orchestrator(cv_structure_path=<path>)` is still accepted and
+is wrapped in `__init__` into a resolver that ignores the deck id, so every pre-decks
+caller (and every test that passes only a path) keeps today's behavior byte-for-byte and
+there is exactly one internal code path. Passing neither leaves the gate inert.
+
+One known rough edge, not new surface: if the **default** deck's file goes corrupt, the
+gate blocks every job and assignment is `queued`-only, so the fix is the editor — which is
+exactly what the gate banner says. A corrupt *non-default* deck assigned to a job yields
+`None` from `_read_base_structure` at stage time and that job simply runs with no CV block,
+same as a corrupt single file did before decks.
+
+**Parity gate.** `tests/backend/test_cv_decks_parity.py` pins that a legacy install (only
+`cv_structure.json`, no index) produces **byte-identical** `fit_assessment` and `cv_adjust`
+user messages to what pre-decks `main` produced; the golden fixtures were captured on
+`main` before any decks code existed. This is a permanent regression gate, not a one-time
+migration check.
 
 ---
 
@@ -786,10 +953,11 @@ prompt_assembly.py`) builds the system prompt from only the on-disk prompt file,
 the language code, the stage's JSON schema, and (see "Current-date directive" below)
 the calendar day — **no per-job bytes** (JD, company, role, CV structure, research
 brief) ever land in it; those go into the initial user message
-(`_build_initial_user_msg`/`_build_fit_user_msg`). So every job at a given (stage,
-language, structured-mode) dispatched on the same calendar day sends a
-**byte-identical system prefix**, which is what makes prompt caching worth doing
-here: cache the system prompt, not the message tail. `tests/backend/
+(`_build_initial_user_msg`/`_build_fit_user_msg`) — **with exactly one opt-in
+exception, the per-job prompt injection described below.** So every job at a given
+(stage, language, structured-mode) dispatched on the same calendar day **and carrying
+no injection** sends a **byte-identical system prefix**, which is what makes prompt
+caching worth doing here: cache the system prompt, not the message tail. `tests/backend/
 test_prompt_prefix_stability.py` pins this two ways — same-input determinism
 (including across `PYTHONHASHSEED` values, since schema generation must never
 iterate a `set`) and cross-job identity (two jobs with different JD/company/role
@@ -799,6 +967,42 @@ day the tests happen to run on. Do not add a message-tail cache breakpoint — t
 is separated by human answer latency (`awaiting_input` → user answers), so it's
 usually cold, and it would collide with `adapt_history`/`_parse_with_nudge` rewriting
 message content.
+
+**What a per-job injection costs the prefix — narrowed, not abandoned.** Caching here
+is a pure prefix match with **exactly one breakpoint**, at the end of the system block
+(see the per-backend table below), so the cost is much narrower than "injection breaks
+prompt caching":
+
+| Reuse | Effect |
+|---|---|
+| **Intra-job** — a job's turn 1 → its turns 2, 3, 4… | **Unaffected.** The injection is frozen pre-launch (`queued`-only) and never edited, so an injected job's system prompt is byte-stable across its own turns: turn 1 writes an entry, later turns read it. |
+| **Cross-job, uninjected → uninjected** | **Unaffected.** `injection=None` — and an all-blank triple, which `normalized()` collapses **to** `None` — is byte-identical to the pre-feature output, so uninjected jobs keep sharing one entry exactly as before. An injected job running between two uninjected ones does **not** evict it: entries are keyed by prefix, not by a single slot. |
+| **Cross-job, into an injected job** | **Forfeited, deliberately.** An injected job cannot read the shared entry and writes its own instead. |
+
+Only the third row is a real loss: ~4.4k tokens (`cv_adjust`) or ~2.9k
+(`cover_letter`) at full price for turn 1 instead of a 0.1× cached read, plus the
+1.25× write premium on the entry it creates, once per injected job. (`fit_assessment`
+at ~1.4k is already under every provider's minimum cacheable size — see "Known
+non-caching cases" — so it never cached either way.) This is why the blank-normalizes-
+to-`None` rule in `PromptInjection.normalized()` is load-bearing and **must not be
+"simplified" into storing empty strings**: without it, a user who types one space into
+one box silently drops that job out of the shared cache for the rest of its life.
+`tests/backend/test_prompt_prefix_stability.py` still gates the uninjected path with
+its existing cases unedited — that is the proof the invariant was narrowed rather than
+broken.
+
+**Rejected alternative — the two-block system split.** Even a postfix-only injection
+loses the shared read, because the single breakpoint sits at the *end* of the system
+block, so any difference inside it diverges there. Splitting the system into
+`[shared prompt + runtime sections, cache_control]` + `[per-job injection, no
+cache_control]` would recover the shared hit for postfix-only injections. Rejected on
+three counts: it works only on `anthropic`, `openrouter` and `opencode-go`'s `/chat`
+(block-shaped system) — Mistral's mechanism is a top-level `prompt_cache_key` hash and
+Gemini's is implicit whole-`systemInstruction` matching, so neither benefits; a
+**pre**-fix sits at position 0 by definition, so no breakpoint placement can save it;
+and it would force the postfix *after* the structured contract, the position the
+assembly order deliberately reserves for machine-authored sections. Do not re-derive
+this as a "fix".
 
 **Current-date directive.** `assemble_system_prompt`'s `now` kwarg (every real call
 site in `stages.py` passes `now=datetime.utcnow()`) appends a day-granularity
@@ -958,6 +1162,98 @@ applicable here.
 
 ---
 
+## Per-job prompt injection
+
+A job may carry an optional per-job override of the system prompt and the first user
+message, set from the UI's syringe/"vial" panel before launch. The whole feature is
+opt-in and inert when unused: a job with no injection produces byte-identical output
+to the pre-feature pipeline.
+
+**Storage is one nullable JSON column, not three.** `jobs.injection`
+(`jsa/db/models.py`) holds either SQL `NULL` or `{"prefix", "postfix", "first_msg"}`.
+The domain shape is "absent, or all three together" — three separate columns would let
+a half-written triple exist. `jsa/schema/injection.py::PromptInjection.normalized()`
+strips each field and returns **`None` when nothing survives**, and `parse_injection`
+is the only reader. Do not "simplify" blank handling into storing empty strings: an
+all-blank injection must be indistinguishable from no injection, or a stray space
+silently costs that job the shared prompt cache forever (see "Prompt caching" above).
+
+**`queued`-only, enforced server-side.** `PUT /api/jobs/{id}/injection`
+(`jsa/api/routes_jobs.py`) 400s unless `job.state == JobState.queued` — the state that
+renders the LAUNCH control, **not** `pending`. The injection is frozen at launch, so a
+running job's prompt can never change under it mid-flight. The frontend hides the
+trigger off `queued` as well, but that is convenience; the 400 is the actual gate. This
+is also what makes the intra-job caching row above true.
+
+**Assembly order is `prefix + prompt_text + postfix`, and the machine sections keep
+final position.** `assemble_system_prompt` (`jsa/pipeline/prompt_assembly.py`) composes
+`base` first, then every branch — structured contract, sentinel, and the `for_resume`
+early return — builds from `base`, never from the raw `prompt_text`. The structured
+contract and the current-date directive are appended **after** the postfix, deliberately:
+they are machine-authored sections whose precedence rules (schema, sentinel-vs-JSON
+ordering) must not be overridable by user text. Do not move the postfix after them.
+
+**`for_resume=True` returns `base`, not `prompt_text`.** A resumed session must resend
+the same wrapper the fresh session was built with; returning `prompt_text` there would
+silently drop the injection on every resume after the first follow-up answer, which is
+exactly the shape of the bug this line exists to prevent. (Two narrowings, both
+learned after that line was written: on `claude-cli`/`google-cli`, `restore_session`
+discards the `system_prompt` entirely when `external_id` is set — see
+`AgentBackend.restore_applies_system_prompt` under "Tool use (revision patching)" —
+so that path is not what this protects; what it protects is a structured-capable
+backend running in **sentinel** mode, which takes this same branch and does resend.)
+
+**The `base` substitution is an invariant, and it is the one thing to check if you
+touch this function.** Below the `base = prompt_text` block, `prompt_text` must NEVER
+be read again — every branch composes from `base`. This is not stylistic. The
+`tool_model` branch (see "Tool use (revision patching)") was added on a different
+branch, in a different region of the same function, and the two merged **cleanly with
+no conflict**: keeping both verbatim computed `base` and then returned `prompt_text`,
+silently dropping the user's wrapper from every tool-mode revision while every test on
+both branches stayed green. Pinned by
+`tests/backend/test_prompt_assembly.py::TestToolContractCarriesTheInjection`.
+
+**There are FOUR `assemble_system_prompt` call sites, and all four must be passed the
+SAME single `injection` resolution.** `run_stage` resolves `injection =
+parse_injection(job.injection)` exactly once per invocation and threads it to:
+`resume_system_prompt`, `fresh_system_prompt`, `_run_fit_assessment`'s site, and
+`_tool_system_prompt` (the closure feeding `run_tool_loop`). The fourth arrived with the
+tool-use feature and is the easy one to miss — on the prompt rung, that system prompt is
+the *only* transport the model ever sees, so omitting it there is completely silent.
+Same rule as the `structured_schema` / `adapt_history(structured=...)` pairing: one
+decision, threaded everywhere, never a second `parse_injection()` downstream. Gated by
+`tests/backend/test_feature_integration.py::TestInjectionSurvivesAToolModeRevision`.
+
+**Known asymmetry, not a bug:** the tool-mode branch appends no current-date directive,
+because it returns before that section. Tool mode only runs on backends that resend the
+system prompt every call, so the argument that puts the date on the structured-resume
+path applies here too — it is simply not wired yet. Adding it changes assembled prompt
+bytes, so it wants its own change, not a drive-by.
+
+**Single resolution, all call sites.** `stages.py::run_stage` calls `parse_injection`
+**once** (one site) and threads the resulting object to all three assembly call sites —
+resume, fresh, and fit. Never add a second `parse_injection()` downstream: two parses
+can disagree if the row changes between them, and the single-resolution property is what
+guarantees one job's turns share a byte-stable prefix.
+
+**Fit-gate carve-out: system yes, `first_msg` no.** `_run_fit_assessment` gets the
+prefix/postfix wrapper like every other stage, but `_build_fit_user_msg` is deliberately
+**not** given `first_msg`. The fit gate is a cheap one-shot FIT/UNFIT pre-check whose
+reply is parsed by first-line verdict matching; letting arbitrary user instructions into
+its user message invites a reply that no longer starts with `FIT`/`UNFIT`, and
+`_parse_fit_verdict` fails **closed** to the `unfit` modal — so a stray instruction there
+would park the user's job as "not a fit" over a formatting accident. Only
+`_build_initial_user_msg` appends `first_msg`, under an `ADDITIONAL INSTRUCTIONS FROM THE
+USER` header.
+
+**Preset ("dose") ids are not unique.** The global preset library is a flat list
+persisted server-side; nothing enforces `id` uniqueness across entries. Any client-side
+delete must therefore key off the **array index**, never the id — `PromptInjector.tsx`
+does, and a regression test seeds two presets sharing one id to pin it. Using the id as a
+React key *and* a delete handle deletes the wrong chip.
+
+---
+
 ## Reasoning / thinking stream (streaming backends)
 
 The chat UI's REASONING card is fed by `AgentChunk(kind="reasoning", ...)`. Whether a
@@ -1083,19 +1379,126 @@ The running card additionally windows to the last `LIVE_STEP_WINDOW` (5) steps b
 "+N earlier" toggle — chunking separates a long trace but does not **bound** it, and an
 unbounded card inflating into a wall is the behaviour this card exists to stop.
 
-**`TurnBubble` renders `turn.reasoning`.** That field was already persisted and served
-(`jsa/api/transcript.py`) but never rendered, so a turn's reasoning used to vanish the
-moment the live stream buffer was cleared.
+**`TurnBubble` renders `turn.reasoning` — but nothing reaches it.** The component reads
+the field; `jsa/api/transcript.py` attaches `reasoning` at exactly ONE place, the
+plumbing branch, and a `plumbing` turn renders as `PlumbingLine` (no card) behind the
+"show internals" toggle. `question`/`answer` turns, the ones that DO reach `TurnBubble`,
+come from `FollowUp` rows, which have no reasoning column. So a settled turn's reasoning
+is still invisible in practice, except on the one path below. This is a known gap left
+by the step-chunking work, not a regression — do not "fix" the symptom by attaching
+`reasoning` to question turns, which would attribute one Message row's thinking to a
+different turn.
 
-**Tool rows are frontend-only today.** `ReasoningStep` is a discriminated union
+**Tool rows have a real backend channel.** `ReasoningStep` is a discriminated union
 (`{kind:"text"} | {kind:"tool"}`) so tool calls render through the same row renderer and
-separator idiom. **No backend channel exists** — `AgentChunk.kind` is
-`"content" | "reasoning"` (`jsa/agents/base.py`) and nothing emits a tool call. The only
-way to see the row is the `import.meta.env.DEV`-guarded toggle in the card header, fed by
-`frontend/src/lib/reasoningMock.ts`. The `import.meta.env.DEV &&` guard on the
-`interleaveMockTools` call is **required, not redundant** — without it Rollup cannot
-prove the runtime `mockTools` state is never set and the fixture ships in the production
-bundle. When a real channel lands it replaces that call and nothing else.
+separator idiom as prose, live and settled:
+
+- **Live** — `AgentToolEvent` (`jsa/events/schema.py`), published per executed call by
+  `jsa/pipeline/tool_loop.py` and fanned out generically by `jsa/api/ws.py`, accumulated
+  into `streamBuffers[job].tools` by `store.ts`'s `case "agent_tool"` with
+  `at = reasoning.length` at arrival. **Three literals move in lockstep** or the reducer
+  silently no-ops: the `streamBuffers` type, the `base` reset, and `AgentThread.tsx`'s
+  `isJobRunning` fallback.
+- **Settled** — `TranscriptTurn.tools`, folded out of `role="tool"` Message rows onto the
+  FOLLOWING assistant turn by `transcript.py::_tool_mark`. That turn is always a
+  `plumbing` turn, so `AgentThread`'s map **hoists its `ReasoningCard` OUT of the
+  `showInternals` gate** while leaving the raw machine text gated. Removing that hoist
+  makes the whole persisted channel dead code — the card would never render.
+  `at` is the row's index within the turn there, not a buffer offset: tool mode never
+  streams, so there is no buffer, and `mergeToolSteps`' trailing append preserves the
+  persisted call order.
+
+`frontend/src/lib/reasoningMock.ts` and its `import.meta.env.DEV`-guarded card toggle are
+**gone** — the real channel replaced them, exactly as planned.
+
+---
+
+## Tool use (revision patching)
+
+`revising_cv`/`revising_cl` patch the existing document through a bounded tool loop
+instead of re-emitting it. **`docs/TOOLS.md` is the reference** — every tool, schema,
+error code, the ID discipline, and the rung matrix live there, and
+`tests/backend/test_tools_doc_sync.py` fails if that doc drifts from
+`jsa/agents/tool_spec.py`. Only the non-derivable conventions are repeated here.
+
+**The ladder is native → prompt → rewrite**, and rung 3 (today's full-document rewrite)
+is permanent, not transitional. `jsa/pipeline/tool_loop.py` owns rungs 1–2 and signals
+"give up" by returning `None`; the caller (`stages.py`'s revision branch) owns rung 3.
+`ToolMode` is `Literal["native", "prompt"]` — there is no third member, because rung 3
+is the absence of the loop, not a mode inside it.
+
+**Both rungs get a prompt contract, not just the prompt rung.** A provider enforces the
+*shape* of a call and says nothing about when to call `get_cv` versus `finalize`. This
+repo already paid for that lesson once (see `prompt_assembly.py`'s docstring on the
+`longcat-2.0` job that re-asked its opening question forever while emitting
+schema-valid JSON). Do not "simplify" the native rung to wire-schemas-only.
+
+**`_tool_contract` is single-sourced from `tool_spec.py`, NOT from `docs/TOOLS.md`.** The
+plan said "generated from docs/TOOLS.md"; that was deliberately not implemented, because
+it would let a missing or malformed markdown file break the runtime pipeline. The
+anti-drift guarantee lives in the doc-sync test instead. Do not "fix" this by making the
+prompt path read the doc.
+
+**Two capability flags, both read off the INSTANCE, never the class**
+(`OpenCodeGoBackend` sets both per-instance in `__init__` — same trap as
+`supports_structured_output`):
+- `supports_native_tools` — rung 1 is available.
+- `restore_applies_system_prompt` (default `True`, `False` on `claude-cli`/`google-cli`)
+  — rung 2 is available. Those two backends resume a **provider-held** conversation by id
+  and discard the `system_prompt`/`history` handed to `restore_session`; `send_message`
+  passes no `--system-prompt`. Since the prompt rung's ONLY transport is that system
+  prompt, it cannot work there. `stages.py::_tools_for` returns `None` when NEITHER flag
+  holds, so those backends skip the loop and keep byte-identical pre-feature behavior.
+  Without that gate every revision on them burns a wasted model turn AND leaves the
+  instruction in the persisted conversation twice. Do not remove the gate, and do not
+  flip the flag `True` for a resume-by-id CLI backend without first giving its
+  `send_message` a real system-prompt channel.
+
+**A tools-only rejection must never cost a BF-19 slot.** Every backend's `_ToolsRejected`
+subclasses **`ToolsUnsupported`**, never `AgentBackendUnavailable` — the latter routes
+into `_advance_backend_or_fail` and would advance the whole job over a degrade that
+should only cost this turn its tools. `_ToolsRejected` also stays OUT of `_call_api`'s
+existing `_CacheRejected`/`_ReasoningRejected` degrade loop: unlike caching and
+reasoning, the tool ladder is the pipeline's decision, not the backend's, so the backend
+must report the rejection upward rather than silently retrying clean. Pinned by
+`test_tools_doc_sync.py::TestExclusionClaimsAreTrue`.
+
+**Three mutual exclusions, all load-bearing:**
+- **Tool mode never streams.** `tool_loop.py` passes no `on_chunk`/`on_retry`, so every
+  backend call degrades to non-streaming by construction (asserted in the doc-sync test).
+- **Tool mode and structured mode are mutually exclusive per request** — the terminal
+  tool's arguments ARE the structured output. A tool session never receives a
+  `structured_schema`, and its history is adapted with `structured=False`, computed as a
+  **separate** decision from rung 3's own `adapt_history(structured=structured)`. The two
+  must never share one variable (see the canonical-form invariant above).
+- **Tool mode skips `_self_heal_final`.** `finalize()` already ran the same
+  `_validate_final_content` gate, so re-validating is a no-op — but the soft "CV missing
+  a Summary section" nudge under it is not: it sends a bare correction into a session with
+  no sentinel/structured contract, and a native session may answer with another tool call,
+  which `run_stage`'s `reply.kind == "tool_calls"` guard then hard-fails on. The loop's own
+  `reemit_hint` retry is this reply's self-heal equivalent.
+
+**Persistence: `role="tool"` Message rows, and NO migration.** `Message.role` is a plain
+`String(16)` with no enum or CHECK constraint, so the new role needs no schema change.
+Rows are written in one atomic `repo.checkpoint` as
+`[user instruction, *tool rows, assistant reply]` — that ORDER is load-bearing.
+`_load_history` filters `role.in_(["user", "assistant"])`, so tool rows are excluded from
+every replay (they are a log, not conversation); `transcript.py` folds them into the
+FOLLOWING assistant turn's `tools` field rather than emitting them as turns. Widening
+either one breaks the other.
+
+**Accepted cost.** On a backend that CAN reach a rung but whose model ignores the tool
+contract, a revision costs one extra model round trip before rung 3 runs. That is
+inherent to the ladder — there is no way to know the model won't use the tools without
+asking. It is not a bug and does not need "optimizing" with a per-model allowlist.
+
+**Parity gate.** `tests/backend/test_patch_parity.py` is **permanent**, like
+`test_mode_parity.py`: a patched revision and a full-rewrite revision must produce a
+byte-identical `Document.markdown`, an equal-as-parsed-JSON `Document.structured`, and
+the same `Job.state`. Deliberately NOT asserted: that the two produce the same *prose* —
+two runs of a generative step differ and that diff never closes. It also pins the
+UNPATCHED regions against the original seed, since equality between the two lanes alone
+would not catch a field both lanes drop.
 
 ---
 
@@ -1143,9 +1546,9 @@ npm test           # runs: vitest run
 # Verify basic invocation prints the scaffold message
 jsa --csv /path/to/jobs.csv --cv /path/to/resume.pdf
 
-# --cv is optional — it only seeds cv_structure.json once, if none exists yet.
-# Jobs stay pending (gated, not failed) until a structure exists — see CLAUDE.md
-# → "CV structure gate".
+# --cv is optional — it only seeds your FIRST base CV deck once, if none exists yet.
+# Jobs stay pending (gated, not failed) until some deck has a usable CV — see CLAUDE.md
+# → "Base CVs (decks) — single source of truth" → "Base-CV gate".
 jsa --csv /path/to/jobs.csv
 
 # Verify validation rejects bad inputs (the --cv extension check only fires when --cv is given)

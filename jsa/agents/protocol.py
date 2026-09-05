@@ -1,21 +1,29 @@
-"""Sentinel grammar parser: NEED_INPUT / FINAL block detection and ProtocolError."""
+"""Sentinel grammar parser: NEED_INPUT / FINAL / TOOL_CALLS block detection and
+ProtocolError."""
 
+import json
 import logging
 import re
 from typing import Literal
 
-from jsa.agents.base import AgentReply
+from jsa.agents.base import AgentReply, ToolCall
 
 logger = logging.getLogger(__name__)
 
-# Matches complete sentinel blocks (non-greedy so multiple blocks are found separately)
+# Matches complete sentinel blocks (non-greedy so multiple blocks are found separately).
+# TOOL_CALLS is the revision-tool-use plan's prompt-rung (rung 2) transport — a model
+# whose backend has no native tool-calling channel signals a batch of tool calls as a
+# JSON array inside this block instead. Only revising_cv/revising_cl sessions ever
+# instruct a model to emit it (jsa/pipeline/prompt_assembly.py's tool contract, Phase 4)
+# — see run_stage's guard (jsa/pipeline/stages.py) for what happens if one shows up
+# spontaneously in a non-tool session.
 _BLOCK_RE = re.compile(
-    r"<<<(NEED_INPUT|FINAL)>>>(.*?)<<<END>>>",
+    r"<<<(NEED_INPUT|FINAL|TOOL_CALLS)>>>(.*?)<<<END>>>",
     re.DOTALL,
 )
 
 # Matches any open sentinel marker (to detect unterminated blocks)
-_OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL)>>>")
+_OPEN_MARKER_RE = re.compile(r"<<<(?:NEED_INPUT|FINAL|TOOL_CALLS)>>>")
 
 # Optional suggestions block inside a NEED_INPUT body: everything from the marker to
 # the end of the (already-extracted) content is the suggestion list, one per line.
@@ -57,6 +65,38 @@ class ProtocolError(Exception):
     pass
 
 
+def _parse_tool_calls_block(raw: str, content: str) -> AgentReply:
+    """Parse a TOOL_CALLS block body as a JSON array of ``{"name", "arguments"}``
+    objects, synthesizing ``call_0``, ``call_1``, ... ids (the prompt rung has no
+    provider-issued call id — see ``jsa.agents.base.ToolCall``'s docstring).
+
+    Raises ``ProtocolError`` on invalid JSON, a non-array/empty body, or any item
+    that isn't ``{"name": str, "arguments": dict}`` — mirrors the strictness of the
+    NEED_INPUT/FINAL branches: a malformed tool-call batch fails loudly rather than
+    silently executing a partial or misread set of calls.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(f"malformed TOOL_CALLS block: invalid JSON ({exc})") from exc
+    if not isinstance(data, list) or not data:
+        raise ProtocolError("malformed TOOL_CALLS block: expected a non-empty JSON array")
+    calls: list[ToolCall] = []
+    for i, item in enumerate(data):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not item["name"]
+            or not isinstance(item.get("arguments"), dict)
+        ):
+            raise ProtocolError(
+                f"malformed TOOL_CALLS block: item {i} must be an object with a "
+                "non-empty string 'name' and an object 'arguments'"
+            )
+        calls.append(ToolCall(id=f"call_{i}", name=item["name"], arguments=item["arguments"]))
+    return AgentReply(raw=raw, content=content, kind="tool_calls", tool_calls=calls)
+
+
 def parse_reply(raw: str) -> AgentReply:
     """Parse a raw agent reply and return an AgentReply.
 
@@ -64,7 +104,9 @@ def parse_reply(raw: str) -> AgentReply:
     1. Scan for complete <<<NEED_INPUT>>>...<<<END>>> and <<<FINAL>>>...<<<END>>> blocks.
     2. Exactly one block → valid; classify by kind, content is the inside text.
     3. Zero complete blocks → check for unterminated markers; raise accordingly.
-    4. Multiple complete blocks → take the last; log a warning.
+    4. Multiple complete blocks → take the last; log a warning. EXCEPTION: a
+       NEED_INPUT/FINAL block always outranks a TOOL_CALLS block regardless of
+       position — see the precedence note below.
     5. Unclosed sentinel (open marker without <<<END>>>) → raise ProtocolError("unterminated block").
     6. Nested sentinels not supported; <<<END>>> is always a literal terminator.
     """
@@ -83,13 +125,39 @@ def parse_reply(raw: str) -> AgentReply:
             len(matches),
         )
 
-    # Take the last complete block
-    marker, inner = matches[-1]
+    # Take the last complete block — except that a NEED_INPUT/FINAL block always
+    # outranks a TOOL_CALLS block, whatever the order.
+    #
+    # Why the exception: TOOL_CALLS is matched unconditionally, for EVERY session on
+    # every backend, because parse_reply has no way to know whether its caller is
+    # inside a tool session (the prompt rung passes no `tools=` kwarg, so a
+    # sentinel-only backend like claude-cli gets no signal at all). Left as a plain
+    # "take the last", that means a non-tool session (cv_adjust, cover_letter,
+    # fit_assessment) whose reply happens to end with text shaped like
+    # <<<TOOL_CALLS>>>...<<<END>>> would have its legitimate FINAL/NEED_INPUT block
+    # silently outvoted, land as kind="tool_calls", and hard-fail on run_stage's
+    # unexpected-tool-call guard.
+    #
+    # This ordering rule fixes that without any cross-cutting session plumbing, and it
+    # must NOT be "fixed" by narrowing _BLOCK_RE back to NEED_INPUT|FINAL: a prompt-rung
+    # (rung 2) reply consisting ONLY of a TOOL_CALLS block would then raise
+    # ProtocolError("no sentinel block"), which claude_cli/opencode_zen's
+    # _parse_with_nudge keys on — burning a nudge turn re-prompting for a sentinel the
+    # model was correctly told not to emit, before tool_loop.py ever sees the reply.
+    #
+    # Residual, deliberately accepted: a non-tool session emitting ONLY a TOOL_CALLS
+    # block (and no FINAL/NEED_INPUT at all) still reaches run_stage's guard. That
+    # requires the model to spontaneously invent a verb that appears nowhere in its
+    # prompt, and the guard's message is diagnosable.
+    non_tool = [m for m in matches if m[0] != "TOOL_CALLS"]
+    marker, inner = non_tool[-1] if non_tool else matches[-1]
     content = inner.strip()
 
     if marker == "FINAL":
         content = _strip_change_log(content)
         return AgentReply(raw=raw, content=content, kind="final", question=None)
+    elif marker == "TOOL_CALLS":
+        return _parse_tool_calls_block(raw, content)
     else:  # NEED_INPUT
         suggested_replies: list[str] | None = None
         suggestions_match = _SUGGESTIONS_RE.search(content)

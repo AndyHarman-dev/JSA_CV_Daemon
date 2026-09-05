@@ -3,6 +3,9 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { useStore } from "../store";
 import { JobList } from "../components/JobList";
 import type { JobDTO } from "../types";
+import { SHELL_THEME } from "../theme/tokens";
+
+const T = SHELL_THEME;
 
 function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   return {
@@ -17,6 +20,7 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     error: null,
     updated_at: "2026-01-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
+    base_cv_id: null,
     ...overrides,
   };
 }
@@ -51,6 +55,8 @@ beforeEach(() => {
     selectedId: undefined,
     wsStatus: "connecting",
     cvStructureExists: null,
+    cvPickerJobId: null,
+    cvPickerPos: { x: 0, y: 0 },
   });
 });
 
@@ -468,5 +474,109 @@ describe("JobList", () => {
 
     fireEvent.click(screen.getByText("Open CV editor"));
     expect(useStore.getState().editorOpen).toBe(true);
+  });
+});
+
+describe("JobList — base-CV trigger (Phase 6)", () => {
+  it("renders the base-CV trigger on a queued row", () => {
+    const job = makeJob({ id: "j1", state: "queued" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.getByTitle("Assign base CV")).toBeInTheDocument();
+  });
+
+  it("does not render the base-CV trigger on non-queued rows", () => {
+    for (const state of ["pending", "running", "review", "approved"] as const) {
+      const job = makeJob({ id: `j-${state}`, state });
+      useStore.setState({ jobs: { [`j-${state}`]: job } });
+
+      const { unmount } = render(<JobList />);
+      expect(screen.queryByTitle("Assign base CV")).toBeNull();
+      expect(screen.queryByTitle("Change base CV")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("shows 'Change base CV' and accent styling once a deck is assigned", () => {
+    const job = makeJob({ id: "j1", state: "queued", base_cv_id: "deck-1" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    const trigger = screen.getByTitle("Change base CV");
+    expect(trigger).toBeInTheDocument();
+    expect(screen.queryByTitle("Assign base CV")).toBeNull();
+    expect(trigger).toHaveStyle({ color: T.a });
+  });
+
+  it("shows no accent styling when unassigned", () => {
+    const job = makeJob({ id: "j1", state: "queued", base_cv_id: null });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.getByTitle("Assign base CV")).toHaveStyle({ color: T.ink3 });
+  });
+
+  it("clicking the trigger opens the picker for that job without selecting the row", () => {
+    const job = makeJob({ id: "j1", state: "queued" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    fireEvent.click(screen.getByTitle("Assign base CV"));
+
+    expect(useStore.getState().cvPickerJobId).toBe("j1");
+    expect(useStore.getState().selectedId).toBeUndefined();
+  });
+});
+
+describe("JobList — queued-row control cluster (cross-feature merge gate)", () => {
+  /**
+   * `feat/cv-decks` and `feat/prompt-injection` each replaced the SAME line — the
+   * queued row's `state === "queued" ? <LaunchButton/> : <StatusBadge/>` branch — with
+   * their own wrapper holding their own trigger. Whichever merged second could trivially
+   * have dropped the other's control, and neither branch's own suite could tell: each
+   * only ever asserts on its own trigger.
+   *
+   * cv-decks left the middle slot free on purpose (its plan's collision map cites the
+   * hand-off's ordering: cvTriggerBtn, injectTriggerBtn, launchSlot). This pins that
+   * all three survived, in that order, inside ONE wrapper.
+   */
+  it("renders the base-CV trigger, the syringe and LAUNCH together, in the hand-off's order", () => {
+    const job = makeJob({ id: "j1", state: "queued" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    const deck = screen.getByTitle("Assign base CV");
+    const syringe = screen.getByTitle("Inject a prompt for this job (pre-launch only)");
+    const launch = screen.getByText("LAUNCH");
+
+    // Document order, which is what the user sees left-to-right in the flex row.
+    expect(deck.compareDocumentPosition(syringe) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(syringe.compareDocumentPosition(launch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // All three share one wrapper. That wrapper must not be a <div>: the whole job row
+    // is a <button>, whose content model is phrasing, so a div there is invalid HTML and
+    // trips React's validateDOMNesting warning. cv-decks used a div, prompt-injection a
+    // span; the span is the one that survived the merge.
+    const wrapper = deck.parentElement!;
+    expect(wrapper).toBe(syringe.parentElement);
+    expect(wrapper).toBe(launch.closest("span")!.parentElement);
+    expect(wrapper.tagName).toBe("SPAN");
+  });
+
+  it("drops all three together on a non-queued row", () => {
+    const job = makeJob({ id: "j1", state: "running" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.queryByTitle("Assign base CV")).toBeNull();
+    expect(screen.queryByTitle("Inject a prompt for this job (pre-launch only)")).toBeNull();
+    expect(screen.queryByText("LAUNCH")).toBeNull();
   });
 });

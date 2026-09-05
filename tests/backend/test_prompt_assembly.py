@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from jsa.agents.tool_spec import tools_for
 from jsa.pipeline.prompt_assembly import assemble_system_prompt
 from jsa.schema.turn_models import json_schema_for
 from jsa.db.models import Stage
@@ -239,3 +240,188 @@ class TestCurrentDateDirective:
         )
         assert "not an error" in result
         assert "training" in result
+
+
+class TestToolContract:
+    """revision-tool-use plan, Phase 4 — `_tool_contract` + the `tool_model=` kwarg.
+
+    Both rungs get a contract (the plan is explicit that this is NOT "native = wire only,
+    prompt = prompt only"): a provider enforces the SHAPE of a call but says nothing about
+    when to call `get_cv` versus `finalize`, or that a question must precede any edit (D8).
+    """
+
+    @staticmethod
+    def _specs(stage: Stage = Stage.revising_cv):
+        return tools_for(stage)
+
+    def test_no_tool_model_is_byte_identical_to_before(self):
+        """The golden-parity path. `structured_model=None, tool_model=None` must be
+        untouched by this feature."""
+        for lang in ("en", "fr", "de"):
+            assert assemble_system_prompt(
+                "BASE", language=lang
+            ) == assemble_system_prompt("BASE", language=lang, tool_model=None)
+
+    def test_both_rungs_carry_the_semantic_contract(self):
+        for native in (True, False):
+            out = assemble_system_prompt(
+                "BASE", language="en", tool_model=self._specs(), native_tools=native
+            )
+            assert "## Revision tool contract" in out
+            assert "get_cv" in out and "finalize" in out and "ask_user" in out
+            # D8: ask_user discards mutations, so questions must precede edits.
+            assert "DISCARDS" in out
+            # D1's budget.
+            assert "10 tool calls" in out
+            # The id discipline.
+            assert "never invent one" in out
+
+    def test_all_six_error_codes_are_documented_in_both_rungs(self):
+        for native in (True, False):
+            out = assemble_system_prompt(
+                "BASE", language="en", tool_model=self._specs(), native_tools=native
+            )
+            for code in (
+                "unknown_id", "stale_id", "bad_argument",
+                "validation_failed", "budget_exhausted", "not_executed",
+            ):
+                assert code in out, f"{code} missing from native={native} contract"
+
+    def test_native_rung_omits_the_grammar_and_the_inlined_schemas(self):
+        """Schemas ride the wire in `tools` on the native rung — inlining them there
+        would duplicate the provider's own enforcement for no benefit."""
+        out = assemble_system_prompt(
+            "BASE", language="en", tool_model=self._specs(), native_tools=True
+        )
+        assert "<<<TOOL_CALLS>>>" not in out
+        assert "Tool schemas" not in out
+
+    def test_prompt_rung_carries_the_grammar_and_every_schema(self):
+        specs = self._specs()
+        out = assemble_system_prompt(
+            "BASE", language="en", tool_model=specs, native_tools=False
+        )
+        assert "<<<TOOL_CALLS>>>" in out
+        assert "### Tool schemas" in out
+        for spec in specs:
+            assert f"#### {spec.name}" in out
+
+    def test_prompt_rung_supersedes_the_sentinel_instructions(self):
+        out = assemble_system_prompt(
+            "BASE", language="en", tool_model=self._specs(), native_tools=False
+        )
+        assert "SUPERSEDES" in out
+
+    def test_cl_stage_gets_the_letter_vocabulary_not_the_cv_one(self):
+        out = assemble_system_prompt(
+            "BASE", language="en", tool_model=self._specs(Stage.revising_cl)
+        )
+        assert "get_letter" in out and "replace_paragraph" in out
+        assert "replace_summary" not in out
+
+    def test_structured_and_tool_model_together_raises(self):
+        """Phase 3: tool mode and structured mode are mutually exclusive per request —
+        the terminal tool's arguments ARE the structured output."""
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            assemble_system_prompt(
+                "BASE",
+                language="en",
+                structured_model={"type": "object"},
+                tool_model=self._specs(),
+            )
+
+    def test_language_and_for_resume_do_not_alter_the_tool_contract(self):
+        """run_tool_loop only ever restores (revisions never start_session), so the tool
+        path is always the for_resume shape and a resumed session already committed to
+        its language."""
+        base = assemble_system_prompt("BASE", language="en", tool_model=self._specs())
+        for lang in ("fr", "de"):
+            for resume in (True, False):
+                assert assemble_system_prompt(
+                    "BASE", language=lang, tool_model=self._specs(), for_resume=resume
+                ) == base
+
+
+class TestToolContractCarriesTheInjection:
+    """Cross-feature gate: `feat/revision-tool-use` x `feat/prompt-injection`.
+
+    These two features were built on separate branches and merged cleanly into
+    `assemble_system_prompt` WITHOUT a conflict on the tool branch's return statement.
+    prompt-injection computes `base` (prefix + prompt_text + postfix) at the top of the
+    function and rewrites every branch to compose from it; revision-tool-use adds a new
+    FIRST branch that returned `prompt_text`. Taking both verbatim compiles, keeps every
+    test on both branches green, and silently drops the user's per-job wrapper from every
+    tool-mode revision — on the prompt rung, that system prompt is the ONLY transport the
+    contract and the wrapper have.
+
+    Neither branch could have owned this test: neither one's tree contains both features.
+    """
+
+    @staticmethod
+    def _specs(stage: Stage = Stage.revising_cv):
+        return tools_for(stage)
+
+    @staticmethod
+    def _inj(**kw):
+        from jsa.schema.injection import PromptInjection
+
+        return PromptInjection(**{"prefix": "", "postfix": "", "first_msg": "", **kw})
+
+    @pytest.mark.parametrize("native", [True, False])
+    def test_prefix_and_postfix_bracket_the_prompt_on_both_rungs(self, native):
+        out = assemble_system_prompt(
+            "BASE PROMPT",
+            language="en",
+            tool_model=self._specs(),
+            native_tools=native,
+            injection=self._inj(prefix="ALWAYS ANSWER IN THE PAST TENSE.", postfix="NEVER HEDGE."),
+        )
+        assert "ALWAYS ANSWER IN THE PAST TENSE." in out
+        assert "NEVER HEDGE." in out
+        # Order: prefix, then the prompt file, then postfix, then the machine-authored
+        # contract — the same precedence rule the structured path is held to, because a
+        # postfix landing after the contract becomes the last word over it.
+        assert (
+            out.index("ALWAYS ANSWER IN THE PAST TENSE.")
+            < out.index("BASE PROMPT")
+            < out.index("NEVER HEDGE.")
+            < out.index("## Revision tool contract")
+        )
+
+    @pytest.mark.parametrize("native", [True, False])
+    def test_no_injection_is_byte_identical_to_no_injection_kwarg(self, native):
+        """The uninjected path must not shift by a single byte — that is what keeps the
+        cross-job prompt-cache prefix shared for every job without an injection."""
+        specs = self._specs()
+        bare = assemble_system_prompt("BASE", language="en", tool_model=specs, native_tools=native)
+        for injection in (None, self._inj(), self._inj(prefix="   ", postfix="\n\t")):
+            assert (
+                assemble_system_prompt(
+                    "BASE",
+                    language="en",
+                    tool_model=specs,
+                    native_tools=native,
+                    injection=injection,
+                )
+                == bare
+            )
+
+    def test_the_cover_letter_stage_vocabulary_carries_it_too(self):
+        out = assemble_system_prompt(
+            "BASE",
+            language="en",
+            tool_model=self._specs(Stage.revising_cl),
+            injection=self._inj(prefix="PFX", postfix="SFX"),
+        )
+        assert "get_letter" in out
+        assert out.index("PFX") < out.index("BASE") < out.index("SFX")
+
+    def test_first_msg_alone_never_touches_the_system_prompt(self):
+        """`first_msg` is a USER-message field (`_build_initial_user_msg`), never a system
+        one — and the fit gate never gets it at all (locked decision 2). A job carrying
+        only a first_msg must produce the byte-identical shared system prefix."""
+        specs = self._specs()
+        assert assemble_system_prompt(
+            "BASE", language="en", tool_model=specs,
+            injection=self._inj(first_msg="mention 6 years of Rust"),
+        ) == assemble_system_prompt("BASE", language="en", tool_model=specs)

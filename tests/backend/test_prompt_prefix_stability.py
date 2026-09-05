@@ -183,3 +183,92 @@ class TestCrossJobSystemPromptIdentity:
         for job in (job_a, job_b):
             assert job.jd not in system_prompt
             assert job.company not in system_prompt
+
+
+# ---------------------------------------------------------------------------
+# Per-job prompt injection vs. the cross-job prefix invariant.
+#
+# The whole point of this file is that no per-job bytes reach the system prompt.
+# The injection feature is the ONE deliberate exception: a job carrying a
+# prefix/postfix knowingly buys itself a private cache entry. Everything below
+# pins both halves of that trade so neither can drift silently — a job WITHOUT an
+# injection must be bit-for-bit what it was before the feature existed, and a job
+# WITH one must actually differ (a documented, intended cost, not an accident).
+#
+# These operate on assemble_system_prompt directly, mirroring
+# TestCrossJobSystemPromptIdentity's deliberate refusal to thread a Job through a
+# function that does not take one. `now` is never passed, same as every other test
+# here, so the comparisons stay date-independent.
+# ---------------------------------------------------------------------------
+
+
+from jsa.schema.injection import PromptInjection  # noqa: E402
+
+
+def _prefix_for(prompt_name: str, stage: Stage, injection=None) -> str:
+    return assemble_system_prompt(
+        read_prompt(prompt_name),
+        language="en",
+        structured_model=json_schema_for(stage),
+        injection=injection,
+    )
+
+
+class TestInjectionAndTheCrossJobPrefix:
+    @pytest.mark.parametrize("prompt_name,stage", _CASES)
+    def test_two_jobs_with_no_injection_are_still_identical(self, prompt_name, stage):
+        job_a = _prefix_for(prompt_name, stage, injection=None)
+        job_b = _prefix_for(prompt_name, stage, injection=None)
+        assert job_a == job_b
+
+    @pytest.mark.parametrize("prompt_name,stage", _CASES)
+    def test_two_all_blank_injections_are_identical_and_equal_the_no_injection_prefix(
+        self, prompt_name, stage
+    ):
+        """normalized() collapses an all-blank triple to None, so a job whose
+        injection was saved-then-cleared (or saved as whitespace) must stay inside the
+        shared cache entry rather than silently owning a private one forever."""
+        baseline = _prefix_for(prompt_name, stage, injection=None)
+        blank_a = _prefix_for(prompt_name, stage, injection=PromptInjection())
+        blank_b = _prefix_for(
+            prompt_name,
+            stage,
+            injection=PromptInjection(prefix="   ", postfix="\n\t ", first_msg="  \n"),
+        )
+        assert blank_a == blank_b == baseline
+
+    @pytest.mark.parametrize("prompt_name,stage", _CASES)
+    def test_a_first_msg_only_injection_also_stays_on_the_shared_prefix(
+        self, prompt_name, stage
+    ):
+        """first_msg rides the initial USER message, never the system prompt — so it
+        must not cost the job its shared cache entry."""
+        baseline = _prefix_for(prompt_name, stage, injection=None)
+        assert (
+            _prefix_for(prompt_name, stage, injection=PromptInjection(first_msg="do X"))
+            == baseline
+        )
+
+    @pytest.mark.parametrize("prompt_name,stage", _CASES)
+    def test_a_real_injection_deliberately_differs(self, prompt_name, stage):
+        """Asserted, not merely tolerated: a prefix/postfix job leaves the shared
+        cross-job prefix by design (the user asked for different instructions), and
+        that trade must be visible here rather than discovered as a cache-miss
+        mystery later. If this ever starts passing by accident — i.e. the injection
+        stops reaching the system prompt — that is the regression."""
+        baseline = _prefix_for(prompt_name, stage, injection=None)
+        for injection in (
+            PromptInjection(prefix="LEAD WITH PAYMENTS"),
+            PromptInjection(postfix="KEEP IT TO ONE PAGE"),
+            PromptInjection(prefix="BEFORE", postfix="AFTER"),
+        ):
+            assert _prefix_for(prompt_name, stage, injection=injection) != baseline
+
+    @pytest.mark.parametrize("prompt_name,stage", _CASES)
+    def test_the_same_injection_is_still_deterministic(self, prompt_name, stage):
+        """Two jobs sharing an identical injection still share a prefix — the feature
+        costs a cache partition, not cache determinism."""
+        inj = PromptInjection(prefix="BEFORE", postfix="AFTER")
+        assert _prefix_for(prompt_name, stage, injection=inj) == _prefix_for(
+            prompt_name, stage, injection=PromptInjection(prefix="BEFORE", postfix="AFTER")
+        )

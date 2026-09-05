@@ -95,6 +95,26 @@ class Settings(BaseSettings):
         DB, derived from ``db_path`` the same way ``preferences_path`` is."""
         return self.db_path.parent / "backend_models.json"
 
+    @property
+    def cv_decks_path(self) -> Path:
+        """The CV-decks index (order, names, denormalized auto-titles, ``default_id``).
+        Lives next to the DB, derived from ``db_path`` the same way ``cv_structure_path``
+        is, so a test that points ``db_path`` at a tmp dir is automatically isolated."""
+        return self.db_path.parent / "cv_decks.json"
+
+    @property
+    def cv_decks_dir(self) -> Path:
+        """Directory holding one ``CVDocument`` JSON file per deck (filename ``<id>.json``).
+        Lives next to the DB, derived from ``db_path`` the same way ``cv_decks_path`` is."""
+        return self.db_path.parent / "cv_decks"
+
+    @property
+    def injection_presets_path(self) -> Path:
+        """Global library of named prompt-injection presets ("doses"). Lives next to the DB,
+        derived from ``db_path`` the same way ``backend_models_path`` is. Global, not per-job —
+        the per-job injection itself rides the ``Job`` row, not this file."""
+        return self.db_path.parent / "injection_presets.json"
+
     @field_validator("backends", mode="before")
     @classmethod
     def _parse_backends(cls, v: object) -> list[str]:

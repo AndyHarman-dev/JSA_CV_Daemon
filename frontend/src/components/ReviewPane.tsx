@@ -29,6 +29,18 @@ interface DocPaths {
 
 const emptyPaths: DocPaths = { pdfUrl: null, docxUrl: null, version: 1 };
 
+/** The CSV `link` column is free text, never validated as a URL — guard against a
+ * `javascript:`/`data:` etc. scheme executing in the app's origin on click. Only
+ * http(s) (and a bare protocol-relative or path-relative link) render as a real link. */
+function isSafeJobLink(link: string): boolean {
+  try {
+    const url = new URL(link, window.location.origin);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /** Convert an absolute filesystem path stored in the DB to a /api/files/<relpath> URL. */
 function toFileUrl(absPath: string | null | undefined): string | null {
   if (!absPath) return null;
@@ -40,6 +52,7 @@ function toFileUrl(absPath: string | null | undefined): string | null {
 export function ReviewPane({ jobId, mode = "final" }: Props) {
   const state = useStore((s) => s.jobs[jobId]?.state as JobState | undefined);
   const currentStage = useStore((s) => s.jobs[jobId]?.current_stage);
+  const jobLink = useStore((s) => s.jobs[jobId]?.link);
   const viewedStage = useStore((s) => s.viewedStage);
   const setViewedStage = useStore((s) => s.setViewedStage);
   const [localActiveTab, setLocalActiveTab] = useState<TabKey>("cv");
@@ -172,6 +185,37 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
       <div style={{ display: "flex", borderBottom: `1px solid ${T.bd}` }}>
         {tabButton("cv", t("reviewPane.cvTab"))}
         {mode === "final" && tabButton("cl", t("reviewPane.clTab"))}
+        {/* An <a>, not a button + window.open() — keeps middle-click, cmd-click and
+            "copy link address". The CSV `link` column is free text and is never
+            validated as a URL, so an empty one must render nothing at all rather
+            than an <a href=""> that quietly navigates to the app's own root. */}
+        {jobLink?.trim() && isSafeJobLink(jobLink.trim()) && (
+          <a
+            href={jobLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t("reviewPane.jobPostingTitle")}
+            style={{
+              marginLeft: "auto",
+              alignSelf: "center",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "5px 10px",
+              marginBottom: 4,
+              border: `1px solid ${T.bd2}`,
+              borderRadius: T.btnRadius,
+              background: "transparent",
+              color: T.ink2,
+              font: `600 10px ${T.mono}`,
+              letterSpacing: ".06em",
+              textDecoration: "none",
+            }}
+          >
+            <Icon name="link" size={11} />
+            {t("reviewPane.jobPosting")}
+          </a>
+        )}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
