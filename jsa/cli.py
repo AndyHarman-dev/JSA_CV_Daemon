@@ -112,7 +112,7 @@ def main(
     dev_tunnel: bool = typer.Option(False, "--dev-tunnel", help="Start a cloudflared quick tunnel for remote/phone access. WARNING: exposes the unauthenticated API publicly — dev use only."),
     dev_auto: bool = typer.Option(False, "--dev-auto", help="Dev-only: auto-answer NEED_INPUT gates via DEV_ANSWERS.json pattern matching.", is_flag=True),
     select_language: bool = typer.Option(False, "--select-language", help="Show a full-screen language picker + boot sequence before the dashboard on first run.", is_flag=True),
-    prompt_caching: Optional[bool] = typer.Option(None, "--prompt-caching/--no-prompt-caching", help="Enable/disable provider prompt-caching request fields (mistral, openrouter, gemini, opencode-go). Defaults to on."),
+    prompt_caching: Optional[bool] = typer.Option(None, "--prompt-caching/--no-prompt-caching", help="Enable/disable provider prompt-caching request fields (anthropic, mistral, openrouter, gemini, opencode-go). Defaults to on."),
 ) -> None:
     """Run JSA: process a CSV of job listings with a CV file."""
     # Validate --csv extension
