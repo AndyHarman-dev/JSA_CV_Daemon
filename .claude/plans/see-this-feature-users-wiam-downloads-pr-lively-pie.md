@@ -701,10 +701,13 @@ with no retry, and the next dose save whole-list-PUTs one entry over the server 
 for that finding is wrong for the bundled path but right for `npm run dev`'s split
 origin and for a tab outliving a `jsa` restart; its corrupt-file trigger is weak, since
 overwriting an unparseable file with one valid entry is closer to recovery than loss.
-Also recorded here because it was not accounted for at merge time: this branch carried
-two commits unrelated to prompt injection that the merge brought onto the integration
-branch — `60e3420` (cap Gemini's `thinkingBudget`) and `e3c686b` (the ReviewPane JOB
-POSTING link, folded in as Phase 5). verification — **verified**: frontend 458 passed
+Also recorded here: this branch carried two commits unrelated to prompt injection that
+the merge brought onto the integration branch — `60e3420` (cap Gemini's
+`thinkingBudget`) and `e3c686b` (the ReviewPane JOB POSTING link, folded in as Phase 5,
+plus its `dd225b3` follow-up adding an `http:`/`https:`-only href scheme guard). Surfaced
+to the user as a completeness item; they confirmed these stay in the merge. Verified
+landed complete rather than partially resolved: `test_gemini_api.py` 70 passed,
+`ReviewPane.test.tsx` + `PromptInjector.test.tsx` 41 passed. verification — **verified**: frontend 458 passed
 across 28 files, `tsc --noEmit` clean, `npm run build` clean (bundle rebuilt); backend
 untouched by the applied fix. Zero merge defects were found by the review — it
 independently confirmed all four `assemble_system_prompt` call sites thread
