@@ -282,6 +282,76 @@ class TestInjectionSurvivesAToolModeRevision:
         assert _FIRST_MSG not in a
 
 
+class TestADeckAssignmentDoesNotLeakIntoARevision:
+    """`feat/cv-decks` x `feat/revision-tool-use` — the third pair, and the one where the
+    correct answer is "nothing happens".
+
+    cv-decks resolves a per-job deck into `run_stage(..., cv_structure_path=...)`, which
+    `fit_assessment` and `cv_adjust` read as the BASE CV. A revision reads neither: it
+    builds its working copy from `_latest_document_object` — the already-tailored
+    Document — and patches that. So a revision on a deck-assigned job must be byte-for-byte
+    unaffected by which deck the job holds.
+
+    Worth pinning precisely because it is the pair a reader would assume needs wiring: the
+    two features share `run_stage`'s signature, and "the revision should use the job's
+    deck" is a plausible-sounding change that would in fact reintroduce the whole-document
+    rewrite the tool loop exists to avoid.
+    """
+
+    async def test_the_revision_patches_the_document_not_the_deck(self, tmp_path, session_factory):
+        settings = Settings(db_path=tmp_path / "jsa.sqlite")
+        deck = await cv_decks.create_deck(settings, name="unrelated")
+        await cv_decks.save_deck(
+            settings,
+            deck.id,
+            CVDocument.model_validate(_cv("Deck Person", "A summary that must never appear.")),
+        )
+        deck_path = await make_base_cv_resolver(settings)(deck.id)
+
+        rev = TestInjectionSurvivesAToolModeRevision()
+        async with session_factory() as session:
+            job = await _insert_job(session, uuid4().hex[:16], state=JobState.pending,
+                                    base_cv_id=deck.id)
+            transition(job, JobState.running, Stage.cv_adjust)
+            await session.commit()
+            await run_stage(
+                job,
+                FakeAgentBackend([_structured_final(rev._cv_payload)]),
+                Stage.cv_adjust,
+                session,
+                cv_structure_path=deck_path,
+            )
+            job = await repo.get_job(session, job.id)
+            session.add(
+                RevisionRequest(job_id=job.id, target=Stage.cv_adjust,
+                                instruction="Tighten the summary.", origin_state="cv_review")
+            )
+            await session.commit()
+
+            transition(job, JobState.running, Stage.revising_cv)
+            await session.commit()
+            await run_stage(
+                job,
+                FakeAgentBackend([
+                    _tool_calls([("get_cv", {})]),
+                    _tool_calls([("replace_summary", {"text": rev._REVISED})]),
+                    _tool_calls([("finalize", {"change_log": "Rewrote the summary."})]),
+                ]),
+                Stage.revising_cv,
+                session,
+                cv_structure_path=deck_path,   # the deck is still resolved and passed in
+            )
+
+            docs = await repo.get_documents(session, job.id, stage=Stage.cv_adjust)
+            latest = max(docs, key=lambda d: d.version)
+
+        assert latest.version == 2
+        assert rev._REVISED in latest.markdown          # the patch landed
+        assert "Jane Doe" in latest.markdown            # the tailored document's identity
+        assert "Deck Person" not in latest.markdown     # the base deck never leaked in
+        assert "must never appear" not in latest.markdown
+
+
 # --------------------------------------------------- 2. injection x deck, same job
 
 class TestInjectionAndDeckOnTheSameJob:
