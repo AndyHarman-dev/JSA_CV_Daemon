@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "Tetapkan sebagai default",
   "cvDecks.untitled": "Tanpa Judul",
   "cvEditor.commit": "KOMIT",
-  "cvEditor.emptyBody": "Jalankan inferensi pada dokumen yang diunggah, atau inisialisasi struktur kosong. JSON adalah sumber kebenaran — setiap perubahan di sini langsung ditulis.",
+  "cvEditor.emptyBody": "Jalankan inferensi terhadap dokumen yang diunggah, buka CV JSON yang sudah Anda miliki, atau inisialisasi struktur kosong. JSON adalah sumber kebenaran — setiap perubahan di sini ditulis langsung ke dalamnya.",
   "cvEditor.emptyTitle": "TIDAK_ADA_STRUKTUR_TERDETEKSI",
   "cvEditor.hideSrc": "SEMBUNYIKAN_SRC",
   "cvEditor.importBadJson": "File tersebut bukan JSON yang valid — tidak dapat diurai.",

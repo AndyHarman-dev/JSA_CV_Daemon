@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "Använd som standard",
   "cvDecks.untitled": "Namnlös",
   "cvEditor.commit": "COMMIT",
-  "cvEditor.emptyBody": "Kör inferens mot ett uppladdat dokument, eller initiera en tom struktur. JSON är sanningen — varje ändring här skrivs direkt igenom det.",
+  "cvEditor.emptyBody": "Kör inferens mot ett laddat dokument, öppna en befintlig CV JSON eller initiera en tom struktur. JSON är källan till sanningen — varje ändring här skrivs direkt till den.",
   "cvEditor.emptyTitle": "INGEN STRUKTUR UPPTÄCKT",
   "cvEditor.hideSrc": "DÖLJ SRC",
   "cvEditor.importBadJson": "Filen är inte giltig JSON — den kunde inte tolkas.",

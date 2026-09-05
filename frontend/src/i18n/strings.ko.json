@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "기본값으로 설정",
   "cvDecks.untitled": "제목 없음",
   "cvEditor.commit": "커밋",
-  "cvEditor.emptyBody": "업로드된 문서에 대해 추론을 실행하거나 빈 구조를 초기화하세요. JSON은 기본 데이터입니다. 여기서의 모든 변경사항이 바로 적용됩니다.",
+  "cvEditor.emptyBody": "업로드된 문서에 대해 추론을 실행하거나, 기존 CV JSON을 열거나, 빈 구조를 초기화하세요. JSON이 진실의 원천입니다 — 여기서의 모든 변경사항이 직접 기록됩니다.",
   "cvEditor.emptyTitle": "구조 감지 안 됨",
   "cvEditor.hideSrc": "소스 숨기기",
   "cvEditor.importBadJson": "파일이 유효한 JSON이 아닙니다 — 파싱할 수 없습니다.",

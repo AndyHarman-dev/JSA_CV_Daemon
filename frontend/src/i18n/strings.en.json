@@ -12,7 +12,7 @@
   "cvEditor.saving": "SAVING…",
   "cvEditor.saveError": "Couldn't save: {reason}",
   "cvEditor.emptyTitle": "NO STRUCTURE DETECTED",
-  "cvEditor.emptyBody": "Run inference against an uploaded document, or initialize a blank structure. The JSON is ground truth — every change here writes straight through it.",
+  "cvEditor.emptyBody": "Run inference against an uploaded document, open a CV JSON you already have, or initialize a blank structure. The JSON is ground truth — every change here writes straight through it.",
   "cvEditor.initBlank": "INIT BLANK",
   "cvEditor.openJson": "OPEN .JSON",
   "cvEditor.importReadFailed": "That file couldn't be read.",

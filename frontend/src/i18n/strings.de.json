@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "Als Standard festlegen",
   "cvDecks.untitled": "Unbenannt",
   "cvEditor.commit": "SPEICHERN",
-  "cvEditor.emptyBody": "Führen Sie die Analyse für ein hochgeladenes Dokument durch oder initialisieren Sie eine leere Struktur. Das JSON ist die Quelle der Wahrheit – jede Änderung hier wird direkt übernommen.",
+  "cvEditor.emptyBody": "Führe eine Inferenz für ein hochgeladenes Dokument durch, öffne eine vorhandene CV-JSON oder initialisiere eine leere Struktur. Die JSON ist maßgeblich — jede Änderung wird direkt darin geschrieben.",
   "cvEditor.emptyTitle": "KEINE STRUKTUR ERKANNT",
   "cvEditor.hideSrc": "SRC AUSBLENDEN",
   "cvEditor.importBadJson": "Diese Datei ist kein gültiges JSON – es konnte nicht analysiert werden.",

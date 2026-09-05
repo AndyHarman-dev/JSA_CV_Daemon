@@ -670,6 +670,21 @@ describe("importFromJsonFile — adopting an existing CV .json", () => {
     }
   });
 
+  it("accepts a sectionless document rather than guessing — the server owns that rule", async () => {
+    // toEditor() reads `sections ?? []`, so this loads with zero sections instead of
+    // erroring. Deliberate: CVDocument's "at least one section" is a Pydantic constraint,
+    // and COMMIT surfaces it as a 422 with the server's own wording. Both views .map() the
+    // list, so an empty one renders empty rather than crashing.
+    await useEditorStore
+      .getState()
+      .importFromJsonFile(jsonFile('{"contact": {"name": "Jane"}}'));
+
+    const st = useEditorStore.getState();
+    expect(st.importError).toBeNull();
+    expect(st.cv?.sections).toEqual([]);
+    expect(st.selectedId).toBeNull();
+  });
+
   it("clears a previous import error once a good file lands", async () => {
     await useEditorStore.getState().importFromJsonFile(jsonFile("nope"));
     expect(useEditorStore.getState().importError).not.toBeNull();

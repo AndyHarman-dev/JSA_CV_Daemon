@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "Đặt làm mặc định",
   "cvDecks.untitled": "Chưa đặt tên",
   "cvEditor.commit": "CAM KẾT",
-  "cvEditor.emptyBody": "Chạy suy luận trên tài liệu được tải lên, hoặc khởi tạo cấu trúc trống. JSON là nguồn sự thật — mỗi thay đổi ở đây ghi trực tiếp vào nó.",
+  "cvEditor.emptyBody": "Chạy suy luận trên một tài liệu đã tải lên, mở một JSON CV bạn đã có, hoặc khởi tạo một cấu trúc trống. JSON là nguồn sự thật — mọi thay đổi ở đây được ghi thẳng vào nó.",
   "cvEditor.emptyTitle": "KHÔNG PHÁT HIỆN CẤU TRÚC",
   "cvEditor.hideSrc": "ẨN SRC",
   "cvEditor.importBadJson": "Tệp này không phải là JSON hợp lệ — không thể phân tích nó.",

@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "Varsayılan Olarak Ayarla",
   "cvDecks.untitled": "Başlıksız",
   "cvEditor.commit": "KONSOLİDE ET",
-  "cvEditor.emptyBody": "Yüklenen bir belgeye karşı çıkarım çalıştırın veya boş bir yapı başlatın. JSON temel gerçektir — buradaki her değişiklik doğrudan yazılır.",
+  "cvEditor.emptyBody": "Yüklenen bir belgeye karşı çıkarım çalıştırın, zaten sahip olduğunuz bir CV JSON dosyasını açın veya boş bir yapı başlatın. JSON gerçek kaynaktır — buradaki her değişiklik doğrudan yazılır.",
   "cvEditor.emptyTitle": "YAPISI BULUNMADI",
   "cvEditor.hideSrc": "KAYNAĞI GİZLE",
   "cvEditor.importBadJson": "Bu dosya geçerli JSON değil — ayrıştırılamadı.",

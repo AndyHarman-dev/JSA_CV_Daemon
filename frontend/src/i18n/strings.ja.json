@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "デフォルトに設定",
   "cvDecks.untitled": "無題",
   "cvEditor.commit": "コミット",
-  "cvEditor.emptyBody": "アップロードされたドキュメントに対して推論を実行するか、空白の構造を初期化してください。JSON は真実の源です — ここでのすべての変更は直接書き込まれます。",
+  "cvEditor.emptyBody": "アップロードされたドキュメントから推論を実行するか、既存のCV JSONを開くか、空の構造を初期化します。JSONは信頼できる情報源です — ここでの変更はすべてそこに直接書き込まれます。",
   "cvEditor.emptyTitle": "構造が検出されません",
   "cvEditor.hideSrc": "SRC を隠す",
   "cvEditor.importBadJson": "そのファイルは有効なJSONではありません。解析に失敗しました。",

@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "Imposta come predefinito",
   "cvDecks.untitled": "Senza titolo",
   "cvEditor.commit": "SALVA",
-  "cvEditor.emptyBody": "Esegui inferenza su un documento caricato o inizializza una struttura vuota. Il JSON è la fonte di verità — ogni modifica qui viene scritta direttamente.",
+  "cvEditor.emptyBody": "Esegui l'inferenza su un documento caricato, apri un CV JSON che possiedi già, o inizializza una struttura vuota. Il JSON è la fonte di verità — ogni modifica qui viene scritta direttamente in esso.",
   "cvEditor.emptyTitle": "NESSUNA STRUTTURA RILEVATA",
   "cvEditor.hideSrc": "NASCONDI SRC",
   "cvEditor.importBadJson": "Il file non è JSON valido — impossibile analizzarlo.",

@@ -23,8 +23,15 @@ const T = EDITOR_THEME;
 
 // `accent` overrides the editor's red only for the OPEN JSON button, which the design
 // carries in the shell's amber — see SHELL_THEME in theme/tokens.ts.
+//
+// `--a` is re-declared per button, not just used for the inline background: `.cvprimary:hover`
+// (index.css) paints `color-mix(in srgb, var(--a) 85%, #fff)`, and `--a` is set once at the
+// editor root to the editor's red — so without this the amber button would flip red the
+// moment the pointer touched it, which is the one thing this accent exists to prevent. An
+// inline custom property wins over :root for this element, and is a no-op when accent === T.a.
 function tbtnStyle(primary: boolean, disabled?: boolean, accent: string = T.a): CSSProperties {
   return {
+    ["--a" as string]: accent,
     display: "inline-flex",
     alignItems: "center",
     gap: 7,

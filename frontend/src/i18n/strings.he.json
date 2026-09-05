@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "הגדר כברירת מחדל",
   "cvDecks.untitled": "ללא כותרת",
   "cvEditor.commit": "שלח",
-  "cvEditor.emptyBody": "הפעל הסקה על מסמך שהועלה, או אתחל מבנה ריק. ה-JSON הוא אמת יסוד — כל שינוי כאן נכתב ישירות דרכו.",
+  "cvEditor.emptyBody": "הרץ הסקת מסקנות על מסמך שהועלה, פתח JSON של CV שכבר יש לך, או אתחל מבנה ריק. ה-JSON הוא מקור האמת — כל שינוי כאן נכתב ישירות אליו.",
   "cvEditor.emptyTitle": "לא זוהה מבנה",
   "cvEditor.hideSrc": "הסתר SRC",
   "cvEditor.importBadJson": "הקובץ הזה אינו JSON תקין — לא ניתן היה לנתח אותו.",

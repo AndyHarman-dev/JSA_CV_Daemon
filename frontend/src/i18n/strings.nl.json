@@ -97,7 +97,7 @@
   "cvDecks.setDefault": "Als standaard instellen",
   "cvDecks.untitled": "Naamloos",
   "cvEditor.commit": "COMMIT",
-  "cvEditor.emptyBody": "Voer inferentie uit op een geüpload document of initialiseer een lege structuur. De JSON is de bron van waarheid — elke wijziging hier wordt direct geschreven.",
+  "cvEditor.emptyBody": "Voer inferentie uit op een geüpload document, open een bestaande CV JSON, of maak een lege structuur. De JSON is maatgevend — elke wijziging hier wordt direct doorgevoerd.",
   "cvEditor.emptyTitle": "GEEN STRUCTUUR GEDETECTEERD",
   "cvEditor.hideSrc": "SRC VERBERGEN",
   "cvEditor.importBadJson": "Dit bestand is geen geldige JSON — het kon niet worden geparseerd.",

@@ -885,6 +885,40 @@ tests), so no test was lost in any merge; frontend 456 passed across 28 files (n
 file dropped); `tsc --noEmit` clean. Not done: merge to `main` (awaiting explicit
 approval per the git branch policy) and the manual end-to-end smoke checks.
 
+**2026-09-04**: context — a follow-up ask on the decks editor: the two ways into a base CV
+were RUN INFERENCE (a PDF/DOCX through the model) and INIT BLANK (an empty skeleton); a user
+who already holds a `CVDocument` JSON on disk had no entry point at all. Requested as a
+yellow button, in the existing style, that "creates a new deck from that json file (just copy
+and paste)". Actions — added `editorStore.importFromJsonFile(file)` plus its own
+`importError` field; parameterized `CvEditor`'s `FileButton` (`accept` / `icon` / `accent` /
+`onFile`) rather than duplicating its hidden-input dance, whose `e.target.value = ""` reset is
+what lets the same file be picked twice; rendered OPEN .JSON in `EmptyState` between its two
+siblings, filled with `SHELL_THEME.a` (#F4CE4A, the shell's amber) against the editor's red;
+four i18n keys fanned to all 19 locales, including a reworded `cvEditor.emptyBody` that now
+names the third option. Decisions — (a) the import fills the **buffer** only; COMMIT still
+writes. Minting a deck up front and PUTting into it would strand a `has_cv: false` deck
+whenever the server's model rejects the file, and this plan already establishes such a deck
+as unassignable to a job and visible in the rail as a phantom slot; deferring also inherits
+`save()`'s `setCvStructureExists` / `refreshDeckIndex` / reload-canonical work unchanged. So
+"+ NEW BASE CV → OPEN .JSON → COMMIT" is how a deck gets made here — the same idiom INIT
+BLANK already uses. (b) `toEditor()` **is** the shape guard, not a hand-written schema check:
+it dereferences `cv.contact` and spreads sections/items/bullets unconditionally, so anything
+unreadable throws before `load()`'s first `set()`; the server's Pydantic model keeps the final
+say. A sectionless document therefore loads rather than erroring — CVDocument's min-length-1
+is the server's rule to state. (c) `FileReader`, not `Blob.text()`, which the project's jsdom
+does not implement. (d) `--a` is re-declared inline per button: `.cvprimary:hover` paints
+`color-mix(in srgb, var(--a) 85%, #fff)` and `--a` is set once at the editor root to the red,
+so an unscoped amber button would flip red on hover — measured live, the button's own `--a` is
+`#F4CE4A` while `:root` stays `#FF4655`. (In practice the inline `background` already outranks
+that rule for these buttons, on the red sibling too; the scoping is correctness insurance, not
+a live-bug fix.) Verification — **verified**: frontend 469 passed / 28 files (+6), `tsc
+--noEmit` clean, `translate-ui.sh --check` exit 0, `npm run build` clean. The shape guard is
+mutation-tested (removing the try/catch fails exactly the wrong-shape case). Playwright
+end-to-end against a real `jsa` server on an isolated DB: the button measures
+`rgb(244,206,74)` beside a `rgb(255,70,85)` sibling; a non-JSON file, an `[]`, and a real CV
+each produce the right outcome; COMMIT created a deck with `auto_title: "Ada Lovelace"`,
+`has_cv: true`. Not done: merge to `main` (still awaiting approval).
+
 ---
 
 ## Decisions Log
