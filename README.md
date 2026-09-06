@@ -360,6 +360,10 @@ New backends register in `jsa/agents/registry.py` by adding an entry to `_REGIST
    - pick which [base CV deck](#cv-structure-editor) it runs against, from the doc icon on its row;
    - give it a [prompt injection](#prompt-injection-per-job) of its own, from the syringe icon.
 
+   <p align="center">
+     <img src="assets/JSA_WORKFLOW_LAUNCH_JOBS_YOU_WANT_IMAGE_HELPER.png" alt="A queued job row: base-CV doc icon, prompt-injection syringe icon, and the LAUNCH button" width="360">
+   </p>
+
    Both are frozen at launch, so a running job's inputs can never change under it.
 
 3. **Pipeline runs in background.** For each launched job, the AI runs up to three stages:
@@ -367,9 +371,19 @@ New backends register in `jsa/agents/registry.py` by adding an entry to `_REGIST
    - *CV adjustment* — tailors your CV for the specific role and JD
    - *Cover letter* — writes a matching cover letter
 
-   While a stage runs, the REASONING card streams the model's thinking as discrete steps, with any tool calls it makes listed inline. A silent card usually means the selected model simply doesn't emit reasoning — check the model shown on the job row before suspecting the wiring.
+   While a stage runs, the REASONING card streams the model's thinking as discrete steps, with any tool calls it makes listed inline. A long trace windows to the most recent steps behind a "+N earlier steps" toggle, so the card never inflates into a wall:
 
-4. **Handle an "unfit" verdict (if raised).** If the fit-assessment stage flags the job as a poor match, it parks with a reason and a centered "not a fit" modal appears instead of proceeding. Click **Dismiss** to drop the job, or **Ignore & continue** to override and resume the pipeline.
+   <p align="center">
+     <img src="assets/JSA_WORKFLOW_REASONING_CARD_IMAGE.png" alt="The REASONING card mid-stream: a step count, a collapsed '+14 earlier steps' toggle, and the most recent reasoning steps as separated rows" width="820">
+   </p>
+
+   A silent card usually means the selected model simply doesn't emit reasoning — check the model shown on the job row before suspecting the wiring.
+
+4. **Handle an "unfit" verdict (if raised).** If the fit-assessment stage flags the job as a poor match, it parks with the model's reason and a centered `FIT_ASSESSMENT: MISMATCH` modal appears instead of proceeding. Click **Dismiss Job** to drop it, or **Ignore & Continue** to override the assessment and resume the pipeline:
+
+   <p align="center">
+     <img src="assets/JSA_WORKFLOW_FIT_ASSESSMENT_MISMATCH.png" alt="Centered FIT_ASSESSMENT: MISMATCH modal quoting the model's reason, with Ignore &amp; Continue and Dismiss Job buttons" width="620">
+   </p>
 
 5. **Answer follow-up questions.** If the AI needs clarification (e.g., "Your resume lists 'led a team' but doesn't specify team size — can you clarify?"), the job parks in `awaiting_input` and the question appears against that job, blocking further progress until you answer:
 
@@ -401,7 +415,15 @@ Separate from the per-job pipeline, JSA maintains job-less **base CVs** as struc
 
 **Many base CVs, one per profile.** A hover-out rail on the left of the editor lists every deck; each is independently editable and persists to its own file under `~/.jsa/cv_decks/`. From the rail you can switch, rename, duplicate, delete, star one as the **default**, or start a new one. One deck is always the default — it is what any job that hasn't been given a specific deck will use.
 
+<p align="center">
+  <img src="assets/JSA_MANY_BASE_CVS_MENU.png" alt="The BASE CVs rail open on the left of the editor, listing three decks with the default one starred" width="320">
+</p>
+
 **Per-job assignment.** Before you launch a job, the doc icon on its row opens a picker listing every deck that has a CV saved; the one you choose is exactly what gets injected into that job's `fit_assessment` and `cv_adjust` prompts. Assignment is **pre-launch only** (`PUT /api/jobs/{id}/base-cv` returns `409` afterwards), and the job's deck is re-resolved at every stage — so editing a deck mid-run feeds the newer content into later stages. A deck that a job is still working with **cannot be deleted** — the rail greys out its trash icon and says how many jobs hold it, and the API answers `409`. Approving, dismissing or deleting those jobs releases it. Editing a held deck is always allowed: a job that has already started has its CV baked into its conversation, so edits can't disturb it mid-flight. Deleting an unheld deck clears the assignment on jobs that were never launched.
+
+<p align="center">
+  <img src="assets/JSA_PER_JOB_BASE_CV_ASSIGNMENT.png" alt="Per-job Base CV picker opened from a queued job row, listing the available decks with one marked DEFAULT" width="420">
+</p>
 
 **Upgrading from a single `cv_structure.json`.** The first time JSA starts after this change, an existing `~/.jsa/cv_structure.json` is **copied** into a deck and becomes your default. The original file is never deleted or rewritten — it stays on disk as an inert backup.
 
@@ -422,6 +444,8 @@ Before anything is saved, the editor shows that empty state:
 <p align="center">
   <img src="assets/JSA_Screens_CV_DAEMON_NO_INFERENCE_YET.png" alt="CV Structure Editor empty state: no structure detected yet" width="820">
 </p>
+
+<sub>This shot predates **OPEN .JSON** and the BASE CVs rail — the live empty state offers all three entry points side by side.</sub>
 
 Once a structure exists (inferred or hand-built), three synchronized views edit the same JSON — **Blocks** (structured, modular editing), **Document** (read-only export preview), and **Split** (Blocks alongside the raw, schema-valid `src.json`, which is ground truth: every edit writes straight through it):
 
@@ -444,6 +468,14 @@ German, but write the CV in English", "emphasise the embedded-systems work", "th
 already knows me, skip the introduction". The syringe icon on a **queued** job row opens a vial
 panel with three boxes, all optional:
 
+<p align="center">
+  <img src="assets/JSA_PROMPT_INJECTION_BUTTON.png" alt="A queued job row with the syringe icon hovered, showing the tooltip 'Inject a prompt for this job (pre-launch only)'" width="360">
+</p>
+
+<p align="center">
+  <img src="assets/JSA_PROMPT_INJECTION_VIAL_PANEL.png" alt="PROMPT_INJECTOR panel: PRE-FIX PROMPT, POST-FIX PROMPT and FIRST USER MESSAGE boxes above a SAVED_DOSES library, with CLEAR, CANCEL and SAVE INJECTION controls" width="420">
+</p>
+
 | Field | Where it lands |
 |---|---|
 | **PRE-FIX PROMPT** | Prepended to the system prompt for this job |
@@ -455,8 +487,13 @@ enforces it — `PUT /api/jobs/{id}/injection` answers `400` once the job has le
 injection is frozen at launch, so a running job's prompt can never shift under it mid-flight.
 
 **Saved doses.** A dose is a named prefix/postfix/first-message triple saved to a global library
-you can re-apply to any later job. The library lives server-side (`~/.jsa/injection_presets.json`)
-and is shared across jobs, not per-job.
+you can re-apply to any later job. Name what's in the three boxes and press **+ SAVE**, and it
+becomes a chip you can click into any future job's panel. The library lives server-side
+(`~/.jsa/injection_presets.json`) and is shared across jobs, not per-job.
+
+<p align="center">
+  <img src="assets/JSA_PROMPT_INJECTION_VIAL_PANEL_ZOOM_IN_ON_SAVED_DOSES.png" alt="SAVED_DOSES strip in the injector panel: a saved 'game passions' dose chip beside a name field and a + SAVE button" width="420">
+</p>
 
 Three details worth knowing:
 
