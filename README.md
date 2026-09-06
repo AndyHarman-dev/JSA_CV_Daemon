@@ -442,10 +442,8 @@ All three fill the editor's buffer and nothing more: **COMMIT** is what writes t
 Before anything is saved, the editor shows that empty state:
 
 <p align="center">
-  <img src="assets/JSA_Screens_CV_DAEMON_NO_INFERENCE_YET.png" alt="CV Structure Editor empty state: no structure detected yet" width="820">
+  <img src="assets/JSA_INREFRENCE_HASNT_RUN_YET_THREE_BUTTONS.png" alt="CV Structure Editor empty state: NO STRUCTURE DETECTED, with RUN INFERENCE, OPEN .JSON and INIT BLANK side by side" width="620">
 </p>
-
-<sub>This shot predates **OPEN .JSON** and the BASE CVs rail — the live empty state offers all three entry points side by side.</sub>
 
 Once a structure exists (inferred or hand-built), three synchronized views edit the same JSON — **Blocks** (structured, modular editing), **Document** (read-only export preview), and **Split** (Blocks alongside the raw, schema-valid `src.json`, which is ground truth: every edit writes straight through it):
 
