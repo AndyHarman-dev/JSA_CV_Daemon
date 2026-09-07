@@ -416,7 +416,10 @@ def _find_keys(obj, banned: set[str]) -> set[str]:
 
 
 class TestInlineDefs:
-    _BANNED = {"$defs", "$ref", "additionalProperties", "title", "default"}
+    # Keys Gemini's responseSchema subset rejects, none of which may survive inlining.
+    # `const` is here because a 400 on it is CONFIRMED live (2026-09-07) — see
+    # inline_defs. It is rewritten to a single-member `enum`, not dropped.
+    _BANNED = {"$defs", "$ref", "additionalProperties", "title", "default", "const"}
 
     @pytest.mark.parametrize("stage", [Stage.cv_adjust, Stage.cover_letter, Stage.fit_assessment])
     def test_no_banned_keys_survive(self, stage):
@@ -433,7 +436,20 @@ class TestInlineDefs:
         inlined = inline_defs(json_schema_for_infer())
         assert _find_keys(inlined, self._BANNED) == set()
         assert inlined["properties"]["payload"]["properties"]["sections"]["minItems"] == 1
-        assert inlined["properties"]["kind"]["const"] == "final"
+
+    def test_one_member_literal_becomes_an_enum_not_a_const(self):
+        """REGRESSION (confirmed live 2026-09-07, gemini-3.5-flash): Pydantic emits
+        `const` for a one-member `Literal`, and `responseSchema` 400s on it —
+        `Unknown name "const" at 'generation_config.response_schema.properties[0].value'`
+        — which downgraded the whole inference session out of structured mode.
+        `InferTurn.kind` is the only such field in the repo; every Stage-keyed model's
+        Literal has 2+ members and already ships as `enum`.
+
+        The constraint must be PRESERVED, not dropped: an unconstrained `kind` lets the
+        model return anything and moves the failure to `_route_structured_data`'s
+        "invalid 'kind'" on every reply."""
+        kind = inline_defs(json_schema_for_infer())["properties"]["kind"]
+        assert kind == {"type": "string", "enum": ["final"]}
 
     def test_nested_ref_inside_anyof_is_resolved(self):
         """The turn union's `payload` field is `anyOf: [CVDocument, null]` — a $ref

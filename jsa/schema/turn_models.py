@@ -205,8 +205,8 @@ def json_schema_for_infer() -> dict[str, Any]:
 def inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
     """Recursively inline every ``$ref`` in ``schema`` against its own ``$defs``,
     dropping ``$defs``, ``additionalProperties``, ``title`` and ``default`` from the
-    result (Gemini's ``responseSchema`` is a restricted OpenAPI subset that rejects
-    all four).
+    result, and rewriting ``const`` to a single-member ``enum`` (Gemini's
+    ``responseSchema`` is a restricted OpenAPI subset that rejects all five).
 
     Multi-backend-model-select plan, Phase 0 probe #4 (2026-08-31): both
     ``generationConfig.responseSchema`` and ``responseJsonSchema`` reject the raw
@@ -233,6 +233,26 @@ def inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
                 if key in seen or key not in defs:
                     return {}
                 return _inline(defs[key], seen | {key})
+            if "const" in node and "enum" not in node:
+                # `responseSchema` has no `const` — CONFIRMED live (2026-09-07,
+                # gemini-3.5-flash): `Invalid JSON payload received. Unknown name
+                # "const" at 'generation_config.response_schema.properties[0].value'`,
+                # a 400 that cost the whole request its structured mode via
+                # `_SchemaRejected`. Pydantic emits `const` for a ONE-member
+                # `Literal` and `enum` for a multi-member one, so this only ever fires
+                # for `InferTurn.kind`; every Stage-keyed model's Literal has two or
+                # more members and already ships as `enum`.
+                #
+                # Rewritten to a single-member `enum` rather than added to `_DROP`,
+                # deliberately: `enum` is documented in the same restricted subset and
+                # is exactly equivalent, whereas dropping the key would leave `kind` an
+                # unconstrained string. Gemini could then return any value and
+                # `_route_structured_data` would reject it as "invalid 'kind'" — trading
+                # a loud, once-per-session schema rejection for a per-reply parse
+                # failure, which is strictly worse.
+                node = {k: v for k, v in node.items() if k != "const"} | {
+                    "enum": [node["const"]]
+                }
             return {k: _inline(v, seen) for k, v in node.items() if k not in _DROP}
         if isinstance(node, list):
             return [_inline(v, seen) for v in node]
