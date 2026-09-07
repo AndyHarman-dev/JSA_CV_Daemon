@@ -110,11 +110,11 @@ class TestInferTurnSchema:
 
     def test_not_reachable_from_the_stage_keyed_surfaces(self):
         assert InferTurn not in set(STAGE_TURN_MODELS.values())
-        for stage in Stage:
-            try:
-                assert json_schema_for(stage) != json_schema_for_infer()
-            except ValueError:
-                pass  # stage has no structured turn model at all — also fine
+        # Every stage json_schema_for actually answers for — enumerated rather than
+        # looped-over-with-a-swallowed-ValueError, so a stage that starts returning the
+        # infer schema cannot hide behind a sibling stage that raises.
+        for stage in [*STAGE_TURN_MODELS, Stage.fit_assessment]:
+            assert json_schema_for(stage) != json_schema_for_infer()
 
 
 class TestParseStructuredReplyInfer:
@@ -423,6 +423,17 @@ class TestInlineDefs:
         schema = json_schema_for(stage)
         inlined = inline_defs(schema)
         assert _find_keys(inlined, self._BANNED) == set()
+
+    def test_infer_schema_inlines_cleanly_for_gemini(self):
+        """`GeminiBackend` sends `inline_defs(structured_schema)` — the infer schema is
+        the only one whose `payload` is a NON-nullable `$ref` (a bare top-level ref, not
+        the turn union's `anyOf`), so it exercises a different branch of the inliner.
+        `sections.minItems` must survive: it is a real generation constraint, not
+        metadata the inliner is allowed to drop."""
+        inlined = inline_defs(json_schema_for_infer())
+        assert _find_keys(inlined, self._BANNED) == set()
+        assert inlined["properties"]["payload"]["properties"]["sections"]["minItems"] == 1
+        assert inlined["properties"]["kind"]["const"] == "final"
 
     def test_nested_ref_inside_anyof_is_resolved(self):
         """The turn union's `payload` field is `anyOf: [CVDocument, null]` — a $ref

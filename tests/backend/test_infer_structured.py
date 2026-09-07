@@ -63,6 +63,10 @@ class _CliShapedBackend(_RecordingBackend):
 
     async def start_session(self, system_prompt: str, initial_user_msg: str):  # type: ignore[override]
         self.system_prompts.append(system_prompt)
+        # Skips `_RecordingBackend.start_session` deliberately (it forwards **kwargs,
+        # which would reintroduce the parameter this class exists to NOT have) and
+        # records the prompt itself instead. If recording ever moves into the parent,
+        # this override needs updating rather than inheriting it.
         return await FakeAgentBackend.start_session(self, system_prompt, initial_user_msg)
 
 
