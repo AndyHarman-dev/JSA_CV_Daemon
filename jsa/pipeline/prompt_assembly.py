@@ -17,7 +17,9 @@ files"). It owns three independent concerns:
    fixture's 84 cases call this function without ``now`` and must keep passing.
 2. **Structured-output contract** (only when ``structured_model`` is given) — the
    runtime-assembled instructions a structured-output API backend's session needs:
-   ``kind``/``verdict`` semantics, the per-stage JSON schema, explicit precedence over
+   ``kind``/``verdict`` semantics (in one of three shapes — the question-or-final turn
+   union, the fit verdict, or ``document_only``'s one-shot final-document turn), the
+   per-stage JSON schema, explicit precedence over
    the prompt file's sentinel-format section, and a "never embed sentinel markers in a
    payload string value" guard. This section is assembled here, at runtime, and is
    never written into the prompt files themselves.
@@ -142,13 +144,29 @@ def _structured_language_directive(language_code: str, *, fit_verdict: bool) -> 
     return "\n".join(lines)
 
 
-def _structured_contract(schema: dict[str, Any], *, fit_verdict: bool) -> str:
+def _structured_contract(
+    schema: dict[str, Any], *, fit_verdict: bool, document_only: bool = False
+) -> str:
     """The runtime-assembled structured-output contract section.
 
     Explicitly supersedes the prompt file's sentinel-format instructions — a
     structured-mode session receives no sentinel wrapper and must not emit one.
+
+    Three mutually exclusive shapes: ``fit_verdict`` (``FitVerdict``), ``document_only``
+    (``InferTurn`` — a one-shot ``kind: "final"`` document, no question branch), and the
+    default ``CvTurn``/``ClTurn`` question-or-final union.
     """
-    if fit_verdict:
+    if document_only:
+        shape_rules = (
+            "Your reply must be a single JSON object with exactly two fields: `kind` "
+            '(always the literal string `"final"`) and `payload` (the complete object '
+            "described by the schema below).\n"
+            "This session has NO question branch — there is no one to answer you, so "
+            "never ask a clarifying question, and never leave `payload` null. If the "
+            "source material is ambiguous or incomplete, make the most faithful "
+            "reading you can and still return a complete `payload`."
+        )
+    elif fit_verdict:
         shape_rules = (
             "Your reply must be a single JSON object with exactly two fields: "
             "`verdict` (the literal string `FIT` or `UNFIT`) and `reason` (a required "
@@ -339,6 +357,7 @@ def assemble_system_prompt(
     tool_model: tuple[Any, ...] | None = None,
     native_tools: bool = False,
     fit_verdict: bool = False,
+    document_only: bool = False,
     for_resume: bool = False,
     now: datetime | None = None,
     injection: PromptInjection | None = None,
@@ -368,6 +387,17 @@ def assemble_system_prompt(
     still excluded.
     ``fit_verdict=True`` selects the fit-assessment shape in both the contract and the
     language directive.
+
+    ``document_only=True`` selects the third contract shape — a one-shot ``kind:
+    "final"`` document with no question branch (``jsa.schema.turn_models.InferTurn``,
+    used by the job-less CV-structure inference call) — AND suppresses the language
+    directive entirely. The second half is not a side effect: that call site
+    deliberately does not steer the inferred skeleton's language (see
+    ``jsa/pipeline/infer_structure.py``), and expressing that by passing
+    ``language="en"`` would only work by accident, because the directive happens to be
+    conditional on ``language != "en"`` today. Mutually exclusive with ``fit_verdict``
+    (raises ``ValueError``); inert when ``structured_model is None``, so a sentinel-mode
+    caller can pass it unconditionally alongside its schema-or-``None``.
 
     ``now``, when given, appends the current-date directive (``_current_date_directive``)
     LAST, after everything else. Every real call site passes ``now=datetime.utcnow()``;
@@ -405,6 +435,12 @@ def assemble_system_prompt(
     # would have silently discarded the user's prefix/postfix on every tool-mode
     # revision while every test on both branches stayed green. There is now a test that
     # pins this (`TestToolContract::test_injection_wrapper_survives_the_tool_branch`).
+    if document_only and fit_verdict:
+        raise ValueError(
+            "document_only and fit_verdict are mutually exclusive: they select "
+            "different structured-output contract shapes"
+        )
+
     inj = injection.normalized() if injection is not None else None
     base = prompt_text
     if inj is not None:
@@ -438,8 +474,10 @@ def assemble_system_prompt(
         return base + _tool_contract(tool_model, native=native_tools)
 
     if structured_model is not None:
-        prompt = base + _structured_contract(structured_model, fit_verdict=fit_verdict)
-        if not for_resume and language != "en":
+        prompt = base + _structured_contract(
+            structured_model, fit_verdict=fit_verdict, document_only=document_only
+        )
+        if not for_resume and not document_only and language != "en":
             prompt += _structured_language_directive(language, fit_verdict=fit_verdict)
         # Wire-stateless backends resend the system prompt every call (see module
         # docstring), so injecting on resume too keeps a job parked overnight in

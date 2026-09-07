@@ -22,7 +22,7 @@ import pytest
 
 from jsa.agents.tool_spec import tools_for
 from jsa.pipeline.prompt_assembly import assemble_system_prompt
-from jsa.schema.turn_models import json_schema_for
+from jsa.schema.turn_models import json_schema_for, json_schema_for_infer
 from jsa.db.models import Stage
 
 _GOLDEN_PATH = Path(__file__).parent / "fixtures" / "language_directive_golden.json"
@@ -56,6 +56,52 @@ class TestSentinelModeParityGate:
         assert len(golden) == 84
         assert any("Spanish" in c["output"] for c in golden)
         assert any(c["output"] == c["prompt_text"] for c in golden)  # "en" no-op cases
+
+
+class TestDocumentOnlyContract:
+    """The third contract shape (`jsa/pipeline/infer_structure.py`'s job-less call):
+    a one-shot `kind: "final"` document turn with no question branch, and no language
+    directive at all."""
+
+    def test_document_shape_replaces_the_question_or_final_union(self):
+        schema = json_schema_for_infer()
+        result = assemble_system_prompt(
+            "BASE PROMPT", language="en", structured_model=schema, document_only=True
+        )
+        assert result.startswith("BASE PROMPT")
+        assert "## Structured output contract" in result
+        assert "no question branch" in result.lower()
+        assert json.dumps(schema, indent=2) in result
+        # None of the turn-union's question machinery leaks in.
+        assert "suggested_replies" not in result
+        assert '`"question"`' not in result
+
+    def test_suppresses_the_language_directive_outright(self):
+        """Not merely because `language == "en"` short-circuits it — the point of the
+        flag is that a non-English preference is ignored on this path too."""
+        schema = json_schema_for_infer()
+        for language in ("en", "fr", "de"):
+            result = assemble_system_prompt(
+                "BASE PROMPT", language=language, structured_model=schema, document_only=True
+            )
+            assert "## Output language" not in result
+
+    def test_inert_in_sentinel_mode(self):
+        """`run_infer` passes `document_only=True` unconditionally, alongside a schema
+        that is None on a CLI backend — that combination must be a no-op."""
+        assert assemble_system_prompt(
+            "BASE PROMPT", language="en", structured_model=None, document_only=True
+        ) == "BASE PROMPT"
+
+    def test_mutually_exclusive_with_fit_verdict(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            assemble_system_prompt(
+                "BASE PROMPT",
+                language="en",
+                structured_model=json_schema_for_infer(),
+                document_only=True,
+                fit_verdict=True,
+            )
 
 
 class TestStructuredModeComposition:

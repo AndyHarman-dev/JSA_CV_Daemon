@@ -69,6 +69,29 @@ routing ONLY — all semantic/cross-field validation stays stage-side in
 `_validate_final_content`, so the existing self-heal correction budget keeps working
 unmodified for both modes.
 
+**The job-less inference call is on structured output too, via a stage-less fifth
+model.** `jsa/pipeline/infer_structure.py::run_infer` (the CV Structure Editor's
+"infer" button and `--cv` bootstrap) is not a `Stage` — no Job, no DB row, no resume
+— so it gets `InferTurn{kind, payload}` and `json_schema_for_infer()`, deliberately
+absent from `STAGE_TURN_MODELS` and unreachable from `json_schema_for`, the same way
+`FitVerdict` is special-cased. **`InferTurn.kind` is a one-member
+`Literal["final"]`, and removing it as redundant would break every structured
+inference reply**: `parse_structured_reply_for_schema` keys `is_fit` off `"kind" not
+in schema["properties"]`, so a bare `CVDocument` schema routes into
+`_parse_fit_structured` and fails with `invalid 'verdict'`. It is also what makes
+`PROMPT_INFER_STRUCTURE.md`'s "always FINAL, never NEED_INPUT" a provider-enforced
+constraint rather than prose. `run_infer` has **no** self-heal budget in either mode
+(a malformed reply is a terminal `InferError` → HTTP 422 on the first try, exactly as
+before), and it needs no post-reply mode branch: `AgentReply.content` is the bare
+`CVDocument` JSON in both modes, so an OpenCode-Zen-style mid-session downgrade lands
+there as an ordinary reply. Its prompt goes through `assemble_system_prompt(...,
+document_only=True)` — a third contract shape (one-shot final document, no question
+branch) that ALSO suppresses the language directive outright. That second half is the
+contract, not a side effect: this call deliberately does not steer the skeleton's
+language, and expressing that by passing `language="en"` would only work by accident.
+`document_only` is inert when `structured_model is None` (so the sentinel path stays
+byte-identical to the prompt file) and raises `ValueError` alongside `fit_verdict`.
+
 **Session mode, not just capability.** A structured-*capable* backend is not always
 running in structured *mode* for a given session — OpenCode Zen can downgrade
 mid-session (below). `stages.py` computes `schema = _structured_schema_for(backend,

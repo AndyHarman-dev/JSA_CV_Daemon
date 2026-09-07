@@ -28,8 +28,10 @@ from jsa.schema.turn_models import (
     ClTurn,
     CvTurn,
     FitVerdict,
+    InferTurn,
     inline_defs,
     json_schema_for,
+    json_schema_for_infer,
     parse_structured_reply,
     parse_structured_reply_for_schema,
 )
@@ -83,6 +85,53 @@ class TestStrictSchemaShape:
             Stage.cover_letter,
             Stage.revising_cl,
         }
+
+
+class TestInferTurnSchema:
+    """`InferTurn` backs the job-less CV-structure inference call. It is stage-less on
+    purpose, so it must stay out of the Stage-keyed surfaces entirely."""
+
+    def test_strict_like_every_other_turn_model(self):
+        schema = json_schema_for_infer()
+        assert schema["additionalProperties"] is False
+        assert set(schema["required"]) == set(schema["properties"])
+
+    def test_kind_is_a_one_member_literal_and_there_is_no_question_branch(self):
+        """The provider's own schema enforcement is what turns the prompt file's
+        "always FINAL, never NEED_INPUT" prose into a hard constraint."""
+        props = json_schema_for_infer()["properties"]
+        assert props["kind"]["const"] == "final"
+        assert set(props) == {"kind", "payload"}
+
+    def test_declares_kind_so_the_schema_keyed_parser_does_not_treat_it_as_fit(self):
+        """`parse_structured_reply_for_schema` keys `is_fit` off `"kind" not in
+        properties`. A bare CVDocument schema would trip that; this must not."""
+        assert "kind" in json_schema_for_infer()["properties"]
+
+    def test_not_reachable_from_the_stage_keyed_surfaces(self):
+        assert InferTurn not in set(STAGE_TURN_MODELS.values())
+        for stage in Stage:
+            try:
+                assert json_schema_for(stage) != json_schema_for_infer()
+            except ValueError:
+                pass  # stage has no structured turn model at all — also fine
+
+
+class TestParseStructuredReplyInfer:
+    def test_final_turn_routes_to_its_payload(self):
+        raw = json.dumps({"kind": "final", "payload": _cv_dict()})
+        reply = parse_structured_reply_for_schema(raw, json_schema_for_infer())
+        assert reply.kind == "final"
+        assert reply.question is None
+        assert json.loads(reply.content) == _cv_dict()
+        # And that content validates as a CVDocument, same as the sentinel path's.
+        assert CVDocument.model_validate(json.loads(reply.content)).contact.name
+
+    def test_missing_payload_is_a_protocol_error_not_a_verdict_error(self):
+        raw = json.dumps({"kind": "final", "payload": None})
+        with pytest.raises(ProtocolError) as exc:
+            parse_structured_reply_for_schema(raw, json_schema_for_infer())
+        assert "payload" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
