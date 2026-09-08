@@ -8,6 +8,16 @@ returned to the caller (the editor persists it on the user's "Done", not here).
 This deliberately mirrors the one-shot shape of the ``fit_assessment`` stage
 (``jsa/pipeline/stages.py::_run_fit_assessment``): a fresh ``start_session`` expecting a single
 FINAL, no resume / awaiting-input path. It does NOT touch any Job, DB row, or job state.
+
+Like every pipeline stage, this call runs in **structured mode** on a backend that can
+enforce it (``jsa.schema.turn_models.InferTurn`` / ``json_schema_for_infer``) and falls back
+to the sentinel grammar otherwise. The reply-handling below is mode-agnostic on purpose:
+``AgentReply.content`` is the bare ``CVDocument`` JSON in both modes — the FINAL block's body
+in sentinel mode, ``InferTurn.payload`` re-serialized in structured mode — so this function
+needs no branch after ``start_session`` returns, and an OpenCode-Zen-style mid-session
+structured→sentinel downgrade lands here as an ordinary reply rather than a parse failure.
+Unlike the job pipeline there is no self-heal correction budget: a malformed reply is a
+terminal ``InferError`` (HTTP 422) on the first try, in both modes, exactly as before.
 """
 
 from __future__ import annotations
@@ -23,8 +33,10 @@ from jsa.agents.base import AgentBackend, AgentLimitReached, AgentTimeout
 from jsa.agents.protocol import ProtocolError, parse_reply
 from jsa.events.schema import InferProgressEvent, event_to_dict
 from jsa.ingest.cv_loader import load_cv
+from jsa.pipeline.prompt_assembly import assemble_system_prompt
 from jsa.prompts import loader
 from jsa.schema import CVDocument
+from jsa.schema.turn_models import json_schema_for_infer
 
 # The five steps surfaced in the editor's "inferring" checklist. The genuine work boundaries
 # are step 1 (text extraction) and step 5 (schema validation); the single LLM call spans the
@@ -89,10 +101,32 @@ async def run_infer(
     # (headings/shape), not final deliverable prose, and it feeds cv_adjust — which DOES
     # apply the language directive (jsa/pipeline/stages.py) — so re-languaging it here
     # would be redundant. See the language-preference handoff, "Pipeline Integration" §4.
-    system_prompt = loader.read_prompt("infer_structure")
+    #
+    # Structured mode when the backend can enforce it, sentinel otherwise — the same
+    # single-boolean shape `stages.py::_structured_schema_for` uses, deliberately
+    # duplicated in three lines rather than imported: `stages.py` drags the repo, the
+    # state machine and the renderers in with it, none of which belong on this job-less
+    # path. `supports_structured_output` is read off the backend INSTANCE, never the
+    # class — `OpenCodeGoBackend` sets it per-instance (its `/messages` models are
+    # sentinel-only) and a class-level read would see `OpenAICompatBackend`'s inherited
+    # `True` and be wrong for them. See CLAUDE.md → "Structured output (API backends)".
+    schema = json_schema_for_infer() if backend.supports_structured_output else None
+    # `language` is unused here: `document_only=True` suppresses the language directive
+    # outright (this stage is deliberately not language-steered, see the note above), so
+    # the value passed is inert. With `schema is None` this returns the prompt file's
+    # text byte-for-byte, which is what keeps the sentinel path unchanged.
+    system_prompt = assemble_system_prompt(
+        loader.read_prompt("infer_structure"),
+        language="en",
+        structured_model=schema,
+        document_only=True,
+    )
     user_msg = f"CV TEXT:\n{cv_text}"
+    # Conditional kwarg, mirroring `stages.py::_schema_kwargs`: a CLI backend accepts no
+    # `structured_schema` parameter at all, so it must be omitted, not passed as None.
+    start_kwargs = {"structured_schema": schema} if schema is not None else {}
     try:
-        handle, reply = await backend.start_session(system_prompt, user_msg)
+        handle, reply = await backend.start_session(system_prompt, user_msg, **start_kwargs)
     except ProtocolError as exc:
         await emit(4, status="error", message="the model did not return a valid reply")
         raise InferError(f"agent returned no usable reply: {exc}") from exc

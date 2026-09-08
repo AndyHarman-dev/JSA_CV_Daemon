@@ -28,8 +28,10 @@ from jsa.schema.turn_models import (
     ClTurn,
     CvTurn,
     FitVerdict,
+    InferTurn,
     inline_defs,
     json_schema_for,
+    json_schema_for_infer,
     parse_structured_reply,
     parse_structured_reply_for_schema,
 )
@@ -83,6 +85,53 @@ class TestStrictSchemaShape:
             Stage.cover_letter,
             Stage.revising_cl,
         }
+
+
+class TestInferTurnSchema:
+    """`InferTurn` backs the job-less CV-structure inference call. It is stage-less on
+    purpose, so it must stay out of the Stage-keyed surfaces entirely."""
+
+    def test_strict_like_every_other_turn_model(self):
+        schema = json_schema_for_infer()
+        assert schema["additionalProperties"] is False
+        assert set(schema["required"]) == set(schema["properties"])
+
+    def test_kind_is_a_one_member_literal_and_there_is_no_question_branch(self):
+        """The provider's own schema enforcement is what turns the prompt file's
+        "always FINAL, never NEED_INPUT" prose into a hard constraint."""
+        props = json_schema_for_infer()["properties"]
+        assert props["kind"]["const"] == "final"
+        assert set(props) == {"kind", "payload"}
+
+    def test_declares_kind_so_the_schema_keyed_parser_does_not_treat_it_as_fit(self):
+        """`parse_structured_reply_for_schema` keys `is_fit` off `"kind" not in
+        properties`. A bare CVDocument schema would trip that; this must not."""
+        assert "kind" in json_schema_for_infer()["properties"]
+
+    def test_not_reachable_from_the_stage_keyed_surfaces(self):
+        assert InferTurn not in set(STAGE_TURN_MODELS.values())
+        # Every stage json_schema_for actually answers for — enumerated rather than
+        # looped-over-with-a-swallowed-ValueError, so a stage that starts returning the
+        # infer schema cannot hide behind a sibling stage that raises.
+        for stage in [*STAGE_TURN_MODELS, Stage.fit_assessment]:
+            assert json_schema_for(stage) != json_schema_for_infer()
+
+
+class TestParseStructuredReplyInfer:
+    def test_final_turn_routes_to_its_payload(self):
+        raw = json.dumps({"kind": "final", "payload": _cv_dict()})
+        reply = parse_structured_reply_for_schema(raw, json_schema_for_infer())
+        assert reply.kind == "final"
+        assert reply.question is None
+        assert json.loads(reply.content) == _cv_dict()
+        # And that content validates as a CVDocument, same as the sentinel path's.
+        assert CVDocument.model_validate(json.loads(reply.content)).contact.name
+
+    def test_missing_payload_is_a_protocol_error_not_a_verdict_error(self):
+        raw = json.dumps({"kind": "final", "payload": None})
+        with pytest.raises(ProtocolError) as exc:
+            parse_structured_reply_for_schema(raw, json_schema_for_infer())
+        assert "payload" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -367,13 +416,40 @@ def _find_keys(obj, banned: set[str]) -> set[str]:
 
 
 class TestInlineDefs:
-    _BANNED = {"$defs", "$ref", "additionalProperties", "title", "default"}
+    # Keys Gemini's responseSchema subset rejects, none of which may survive inlining.
+    # `const` is here because a 400 on it is CONFIRMED live (2026-09-07) — see
+    # inline_defs. It is rewritten to a single-member `enum`, not dropped.
+    _BANNED = {"$defs", "$ref", "additionalProperties", "title", "default", "const"}
 
     @pytest.mark.parametrize("stage", [Stage.cv_adjust, Stage.cover_letter, Stage.fit_assessment])
     def test_no_banned_keys_survive(self, stage):
         schema = json_schema_for(stage)
         inlined = inline_defs(schema)
         assert _find_keys(inlined, self._BANNED) == set()
+
+    def test_infer_schema_inlines_cleanly_for_gemini(self):
+        """`GeminiBackend` sends `inline_defs(structured_schema)` — the infer schema is
+        the only one whose `payload` is a NON-nullable `$ref` (a bare top-level ref, not
+        the turn union's `anyOf`), so it exercises a different branch of the inliner.
+        `sections.minItems` must survive: it is a real generation constraint, not
+        metadata the inliner is allowed to drop."""
+        inlined = inline_defs(json_schema_for_infer())
+        assert _find_keys(inlined, self._BANNED) == set()
+        assert inlined["properties"]["payload"]["properties"]["sections"]["minItems"] == 1
+
+    def test_one_member_literal_becomes_an_enum_not_a_const(self):
+        """REGRESSION (confirmed live 2026-09-07, gemini-3.5-flash): Pydantic emits
+        `const` for a one-member `Literal`, and `responseSchema` 400s on it —
+        `Unknown name "const" at 'generation_config.response_schema.properties[0].value'`
+        — which downgraded the whole inference session out of structured mode.
+        `InferTurn.kind` is the only such field in the repo; every Stage-keyed model's
+        Literal has 2+ members and already ships as `enum`.
+
+        The constraint must be PRESERVED, not dropped: an unconstrained `kind` lets the
+        model return anything and moves the failure to `_route_structured_data`'s
+        "invalid 'kind'" on every reply."""
+        kind = inline_defs(json_schema_for_infer())["properties"]["kind"]
+        assert kind == {"type": "string", "enum": ["final"]}
 
     def test_nested_ref_inside_anyof_is_resolved(self):
         """The turn union's `payload` field is `anyOf: [CVDocument, null]` — a $ref

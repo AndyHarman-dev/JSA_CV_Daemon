@@ -140,6 +140,36 @@ class ClTurn(BaseModel):
         return self
 
 
+# InferTurn — the job-less CV-structure inference call's reply shape
+# (jsa/pipeline/infer_structure.py::run_infer). Design notes, kept OUT of the class
+# docstring on purpose: Pydantic copies ``__doc__`` into the schema's ``description``,
+# and this schema is embedded verbatim in the system prompt of every inference request,
+# so maintainer rationale there is tokens the model pays for and cannot use.
+#
+# * ``run_infer`` is stage-less — it has no Job, no DB row, no resume path — so this
+#   model stays out of ``STAGE_TURN_MODELS`` and unreachable from ``json_schema_for``;
+#   ``json_schema_for_infer`` below is its only entry point, mirroring how
+#   ``FitVerdict`` is special-cased there.
+# * ``kind`` is a ONE-MEMBER ``Literal``, and that is the point — not a vestigial field
+#   copied from ``CvTurn``. It makes this schema route through
+#   ``parse_structured_reply_for_schema``'s existing turn-union branch with that
+#   function left untouched: it keys ``is_fit`` off ``"kind" not in properties``, so a
+#   bare ``CVDocument`` schema would be misrouted into ``_parse_fit_structured`` and
+#   fail every single reply with "invalid 'verdict'".
+# * It also turns PROMPT_INFER_STRUCTURE.md's prose rule — always FINAL, never
+#   NEED_INPUT, "there is no one to answer" — into a provider-enforced constraint: with
+#   ``extra="forbid"`` and no ``question`` field, a question turn is not expressible.
+#   No ``suggested_replies`` either, for the same reason.
+class InferTurn(BaseModel):
+    """A completed CV structuring turn: `kind` is always `final`, `payload` is the
+    CVDocument."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["final"]
+    payload: CVDocument
+
+
 # Stages whose structured reply is a {kind, question, payload} union. fit_assessment is
 # deliberately excluded — its shape (FitVerdict) has no "question" branch at all (the fit
 # gate is a one-shot verdict, never a NEED_INPUT) and is handled separately below.
@@ -162,11 +192,21 @@ def json_schema_for(stage: Stage) -> dict[str, Any]:
     return model.model_json_schema()
 
 
+def json_schema_for_infer() -> dict[str, Any]:
+    """The JSON schema a structured-output backend should enforce for the job-less
+    CV-structure inference call (``jsa/pipeline/infer_structure.py``).
+
+    Separate from ``json_schema_for`` because inference has no ``Stage``: it is not part
+    of the job pipeline, has no DB row, and no resume path. See ``InferTurn``.
+    """
+    return InferTurn.model_json_schema()
+
+
 def inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
     """Recursively inline every ``$ref`` in ``schema`` against its own ``$defs``,
     dropping ``$defs``, ``additionalProperties``, ``title`` and ``default`` from the
-    result (Gemini's ``responseSchema`` is a restricted OpenAPI subset that rejects
-    all four).
+    result, and rewriting ``const`` to a single-member ``enum`` (Gemini's
+    ``responseSchema`` is a restricted OpenAPI subset that rejects all five).
 
     Multi-backend-model-select plan, Phase 0 probe #4 (2026-08-31): both
     ``generationConfig.responseSchema`` and ``responseJsonSchema`` reject the raw
@@ -193,6 +233,26 @@ def inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
                 if key in seen or key not in defs:
                     return {}
                 return _inline(defs[key], seen | {key})
+            if "const" in node and "enum" not in node:
+                # `responseSchema` has no `const` — CONFIRMED live (2026-09-07,
+                # gemini-3.5-flash): `Invalid JSON payload received. Unknown name
+                # "const" at 'generation_config.response_schema.properties[0].value'`,
+                # a 400 that cost the whole request its structured mode via
+                # `_SchemaRejected`. Pydantic emits `const` for a ONE-member
+                # `Literal` and `enum` for a multi-member one, so this only ever fires
+                # for `InferTurn.kind`; every Stage-keyed model's Literal has two or
+                # more members and already ships as `enum`.
+                #
+                # Rewritten to a single-member `enum` rather than added to `_DROP`,
+                # deliberately: `enum` is documented in the same restricted subset and
+                # is exactly equivalent, whereas dropping the key would leave `kind` an
+                # unconstrained string. Gemini could then return any value and
+                # `_route_structured_data` would reject it as "invalid 'kind'" — trading
+                # a loud, once-per-session schema rejection for a per-reply parse
+                # failure, which is strictly worse.
+                node = {k: v for k, v in node.items() if k != "const"} | {
+                    "enum": [node["const"]]
+                }
             return {k: _inline(v, seen) for k, v in node.items() if k not in _DROP}
         if isinstance(node, list):
             return [_inline(v, seen) for v in node]
@@ -290,7 +350,8 @@ def parse_structured_reply_for_schema(raw: str, schema: dict[str, Any]) -> Agent
     ``FitVerdict`` never does — so ``"kind" not in schema["properties"]`` is an exact,
     schema-shape-based stand-in for ``stage is Stage.fit_assessment``, with no risk of
     misclassifying an actual reply payload (the check runs against the fixed schema,
-    never against whatever the model happened to return).
+    never against whatever the model happened to return). ``InferTurn`` declares ``kind``
+    too, which is exactly why it carries that one-member field — see its docstring.
 
     Equivalence with ``parse_structured_reply`` for the same logical payload is asserted
     by ``test_turn_models.py``'s ``TestSchemaKeyedParityWithStageKeyed`` — the two entry
