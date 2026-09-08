@@ -618,6 +618,9 @@ class GeminiBackend(OpenAICompatBackend):
         # chunks only while structured (see `_openai_compat._reasoning_only`), and
         # `_consume_gemini_sse` excludes thought parts from the returned body — so
         # a partial-JSON content delta is never shown and never corrupts the parse.
+        # The buffered branch below excludes them too; it did NOT until 2026-09-07,
+        # which was invisible for exactly as long as this backend had no structured
+        # caller that skips streaming (see the `not p.get("thought")` comment there).
         use_stream = on_chunk is not None
         if use_stream:
             url = f"{_API_BASE}/{self._model}:streamGenerateContent"
@@ -737,7 +740,26 @@ class GeminiBackend(OpenAICompatBackend):
         candidate = candidates[0]
         finish_reason = candidate.get("finishReason")
         parts = (candidate.get("content") or {}).get("parts") or []
-        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        # `not p.get("thought")` is load-bearing, and its absence was a live bug
+        # (2026-09-07): with `includeThoughts` on, a buffered reply's `parts` carries the
+        # thought summary AS A TEXT PART alongside the answer, so joining every part
+        # prefixed the model's thinking onto the JSON and every structured parse died on
+        # `invalid JSON (Expecting value: line 1 column 1 (char 0))`, downgrading the
+        # session to sentinel mode on its first turn.
+        #
+        # `_consume_gemini_sse` has always split these correctly (`kind = "reasoning" if
+        # part.get("thought")`), which is exactly why this went unnoticed: every
+        # structured call in `stages.py` passes an `on_chunk` (Gemini declares
+        # `supports_streaming`), so `use_stream` was always True and this branch was
+        # unreachable in structured mode until `infer_structure.py` — which wires no
+        # streaming — became the first structured caller to land here.
+        #
+        # A reply that is ALL thought and no answer now falls to the `if not text`
+        # transient raise below instead of returning the thought prose as if it were
+        # content. That is the correct classification: an empty answer is a failed turn.
+        text = "".join(
+            p.get("text", "") for p in parts if isinstance(p, dict) and not p.get("thought")
+        )
 
         if finish_reason == "MAX_TOKENS":
             raise ProtocolError(

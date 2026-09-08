@@ -28,7 +28,7 @@ from jsa.agents.gemini_api import GeminiBackend, _MAX_OUTPUT_TOKENS, _THINKING_B
 from jsa.agents.protocol import ProtocolError
 from jsa.agents.tool_spec import tools_for
 from jsa.db.models import Stage
-from jsa.schema.turn_models import json_schema_for
+from jsa.schema.turn_models import json_schema_for, json_schema_for_infer
 
 
 @pytest.fixture(autouse=True)
@@ -667,6 +667,72 @@ class TestGeminiStreaming:
             await backend.start_session("sys", "hi")
         assert mock_client.post.await_count == 1
         assert mock_client.post.call_args.args[0].endswith(":generateContent")
+
+
+class TestBufferedThoughtParts:
+    """REGRESSION (confirmed live 2026-09-07): the BUFFERED `generateContent` branch
+    joined every part's text, thought parts included, so with `includeThoughts` on the
+    model's thinking got prefixed onto the answer. `_consume_gemini_sse` has always
+    split them correctly, and every structured call in `stages.py` supplies an
+    `on_chunk` (Gemini declares `supports_streaming`), so this branch was unreachable
+    in structured mode until `infer_structure.py` — which wires no streaming — became
+    the first structured caller to hit it. Symptom: `structured reply unparseable:
+    invalid JSON (Expecting value: line 1 column 1 (char 0))` and a sentinel downgrade
+    on the session's first turn."""
+
+    @staticmethod
+    def _body_with_thought(answer: str) -> dict:
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "Let me reason about this CV first.", "thought": True},
+                            {"text": answer},
+                        ]
+                    },
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+
+    async def test_thought_parts_excluded_from_a_buffered_structured_reply(self):
+        payload = _cv_payload()
+        answer = json.dumps({"kind": "final", "payload": payload})
+        mock_client = _make_mock_client(self._body_with_thought(answer))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            # No on_chunk -> use_stream is False -> the buffered branch, the exact
+            # shape `run_infer` produces.
+            _, reply = await backend.start_session(
+                "sys", "hi", structured_schema=json_schema_for_infer()
+            )
+        assert json.loads(reply.content) == payload
+
+    async def test_thought_parts_excluded_from_a_buffered_sentinel_reply(self):
+        mock_client = _make_mock_client(self._body_with_thought(FINAL_RAW))
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            _, reply = await backend.start_session("sys", "hi")
+        assert reply.kind == "final"
+        assert "reason about this CV" not in reply.raw
+
+    async def test_a_thought_only_reply_is_a_failed_turn_not_content(self):
+        """An all-thought reply now falls to the `no text content` transient raise
+        rather than returning the thinking as if it were the answer."""
+        body = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "thinking...", "thought": True}]},
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+        mock_client = _make_mock_client(body)
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            backend = GeminiBackend()
+            with pytest.raises(AgentBackendUnavailable):
+                await backend.start_session("sys", "hi")
 
 
 class TestGeminiThinkingConfig:
