@@ -164,7 +164,15 @@ def _structured_contract(
             "This session has NO question branch — there is no one to answer you, so "
             "never ask a clarifying question, and never leave `payload` null. If the "
             "source material is ambiguous or incomplete, make the most faithful "
-            "reading you can and still return a complete `payload`."
+            "reading you can and still return a complete `payload`.\n"
+            "The schema states the SHAPE your reply must take, never the AMOUNT of "
+            "content it should carry. Its minimums are not a target: a payload holding "
+            "one section is schema-valid and is almost always wrong. Transcribe EVERY "
+            "section present in the source material — every role, entry, bullet, skill "
+            "and date — in the source's own order. Do not summarize, condense, sample, "
+            "abbreviate, or stop early because the shape is already satisfied. Omitting "
+            "content the source contains is the single worst failure mode for this "
+            "task; a long payload is expected and correct."
         )
     elif fit_verdict:
         shape_rules = (

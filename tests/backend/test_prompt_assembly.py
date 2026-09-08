@@ -76,6 +76,26 @@ class TestDocumentOnlyContract:
         assert "suggested_replies" not in result
         assert '`"question"`' not in result
 
+    def test_states_that_schema_minimums_are_not_a_target(self):
+        """Confirmed live (2026-09-07, gemini-3.5-flash): a structured inference reply
+        came back schema-valid with a Summary section and nothing else — no Experience,
+        no Skills. `sections` only has `minItems: 1` and no field carries a description,
+        so NOTHING in the schema asks for completeness, and the contract is the last
+        thing the model reads before answering.
+
+        Same failure class as the `question`-must-be-self-contained clause in the turn
+        contract (see CLAUDE.md): schema-valid, semantically empty, unfixable by the
+        schema itself. Do not drop this as redundant verbosity — it is the fix."""
+        result = assemble_system_prompt(
+            "BASE PROMPT",
+            language="en",
+            structured_model=json_schema_for_infer(),
+            document_only=True,
+        )
+        assert "never the AMOUNT" in result
+        assert "minimums are not a target" in result
+        assert "Transcribe EVERY section" in result
+
     def test_suppresses_the_language_directive_outright(self):
         """Not merely because `language == "en"` short-circuits it — the point of the
         flag is that a non-English preference is ignored on this path too."""
