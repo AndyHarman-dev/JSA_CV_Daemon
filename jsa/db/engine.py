@@ -99,6 +99,20 @@ async def init_db(engine) -> None:
         except OperationalError:
             pass  # column already exists — safe to ignore
 
+        # messages.backend_name / messages.model_name: per-turn attribution of which
+        # backend + concrete model produced each Message row. Legacy rows stay NULL
+        # forever — the information was never captured, so there is nothing to backfill.
+        # Two separate try/except blocks for the same reason model_name/model_hops are
+        # split above: a DB left half-migrated must still get the second column.
+        try:
+            await conn.execute(text("ALTER TABLE messages ADD COLUMN backend_name TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
+        try:
+            await conn.execute(text("ALTER TABLE messages ADD COLUMN model_name TEXT"))
+        except OperationalError:
+            pass  # column already exists — safe to ignore
+
 
 # ---------------------------------------------------------------------------
 # New-style helpers used by server.py and cli.py (Phase 8)

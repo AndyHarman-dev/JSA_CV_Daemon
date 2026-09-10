@@ -88,6 +88,21 @@ class Message(Base):
     # two-field HistoryTurn(role, content), so this column is structurally invisible
     # to replay -- no exclusion code needed.
     reasoning: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # Which backend + concrete model actually served the turn this row belongs to.
+    # Sourced from the AgentBackend INSTANCE at checkpoint time (see
+    # AgentBackend.model_id), never from Job.backend_name/Job.model_name: those are
+    # mutable current-state fields that a BF-19 backend switch or a model-ladder hop
+    # rewrites, which would retroactively re-attribute every surviving earlier row to
+    # whatever the job is running now. Stamped on every row in a checkpoint() call,
+    # including role="tool" rows.
+    #
+    # Both nullable, permanently: rows written before this column existed cannot be
+    # backfilled (the attribution was never recorded), and model_name is NULL for a
+    # backend with no model concept (google-cli). Structurally invisible to replay --
+    # _load_history projects to a two-field HistoryTurn(role, content), same as
+    # `reasoning` above.
+    backend_name: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     job: Mapped[Job] = relationship(back_populates="messages")
 

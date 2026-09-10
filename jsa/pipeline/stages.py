@@ -1060,6 +1060,7 @@ async def run_stage(
         await _handle_needs_input(
             session=session,
             job=job,
+            backend=general_purpose_backend,
             handle=handle,
             stage=stage,
             reply=reply,
@@ -1174,10 +1175,30 @@ async def run_stage(
         )
 
 
+def _attribution(backend: AgentBackend) -> dict[str, str | None]:
+    """``{"backend_name", "model_name"}`` for the backend that served this turn,
+    ready to splat into ``repo.checkpoint(**_attribution(backend))``.
+
+    Always sourced from the backend INSTANCE, never from ``job.backend_name`` /
+    ``job.model_name``. Those two are current-state fields that BF-19's
+    ``backend_switch_reset`` rewrites, so reading them at checkpoint time would
+    re-label every surviving earlier row (an already-completed ``fit_assessment``, or
+    the original stage's rows on a revision-stage switch, which that reset deliberately
+    does NOT delete) with whatever the job hopped to afterwards -- precisely the
+    mis-attribution these columns exist to fix.
+
+    It also gets the ``--fit-model`` case right for free: ``_run_fit_assessment`` calls
+    this with the fit backend it was handed, which may be a different model on the same
+    backend name and never touches ``job.model_name`` at all.
+    """
+    return {"backend_name": backend.name, "model_name": backend.model_id}
+
+
 async def _handle_needs_input(
     *,
     session: AsyncSession,
     job: Job,
+    backend: AgentBackend,
     handle: SessionHandle,
     stage: Stage,
     reply: AgentReply,
@@ -1207,6 +1228,7 @@ async def _handle_needs_input(
         stage,  # preserve current_stage
         messages=accumulated_messages,
         follow_up=follow_up_data,
+        **_attribution(backend),
     )
     await _publish_transcript_changed(job)
 
@@ -1395,6 +1417,7 @@ async def _run_fit_assessment(
         target_state,
         None,
         messages=accumulated_messages,
+        **_attribution(backend),
     )
     await _publish_transcript_changed(job)
     await backend.end_session(handle)
@@ -1500,6 +1523,7 @@ async def _handle_final(
             None,
             messages=accumulated_messages,
             document=document_data,
+            **_attribution(backend),
         )
         await _publish_transcript_changed(job)
         if output_dir is not None:
@@ -1516,6 +1540,7 @@ async def _handle_final(
             None,
             messages=accumulated_messages,
             document=document_data,
+            **_attribution(backend),
         )
         await _publish_transcript_changed(job)
         if output_dir is not None:
@@ -1547,6 +1572,7 @@ async def _handle_final(
             None,
             messages=accumulated_messages,
             document=document_data,
+            **_attribution(backend),
         )
         await _publish_transcript_changed(job)
         if output_dir is not None:

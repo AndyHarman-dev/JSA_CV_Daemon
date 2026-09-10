@@ -164,6 +164,30 @@ class AgentBackend(ABC):
 
     name: str                                   # "claude-cli" | "google-cli" | "anthropic" | "opencode-zen"
 
+    @property
+    def model_id(self) -> str | None:
+        """The concrete model this INSTANCE was constructed with, for attribution.
+
+        Read off the instance, never the class — one backend `name` can front many
+        models (``opencode-go`` routes 20+; every ``_openai_compat`` subclass takes a
+        ``model=`` kwarg), so a class-level answer would be wrong for all but one of
+        them. That is the same trap ``supports_structured_output`` documents below.
+
+        ``None`` is a legitimate answer, not a bug: ``google-cli`` wraps the ``agy``
+        CLI, which has no model flag at all (hence
+        ``SUPPORTS_MODEL_SELECTION["google-cli"] is False``), so there is nothing to
+        report. The ``getattr`` default is what makes that case work without forcing a
+        meaningless ``_model`` onto that backend.
+
+        This is deliberately NOT ``Job.model_name``: that column stays NULL until the
+        model ladder's first hop and is overwritten by each subsequent hop, so it
+        describes the job's *current* rung, not the model that produced any particular
+        turn. Message-level attribution has to come from the instance that served the
+        turn — including the separate ``--fit-model`` backend, which never touches
+        ``Job.model_name`` at all.
+        """
+        return getattr(self, "_model", None)
+
     # True only for backends whose wire protocol can enforce a JSON schema on the
     # model's reply (Anthropic forced tool-use, OpenCode Zen's response_format). CLI
     # backends have no such channel and stay on the sentinel grammar unconditionally.

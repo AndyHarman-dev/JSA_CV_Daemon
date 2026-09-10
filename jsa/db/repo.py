@@ -443,6 +443,8 @@ async def checkpoint(
     messages: list[dict] | None = None,
     document: dict | None = None,
     follow_up: dict | None = None,
+    backend_name: str | None = None,
+    model_name: str | None = None,
 ) -> None:
     """Write all state changes in a single atomic transaction.
 
@@ -454,6 +456,17 @@ async def checkpoint(
     5. Update Job.state, Job.current_stage, Job.updated_at, then commit.
 
     messages: list of {role, content} dicts — stage inferred from job.current_stage
+    backend_name / model_name: per-turn attribution stamped onto EVERY Message row in
+        this call (including role="tool" rows), exactly like `stage` is. Deliberately
+        call-level kwargs rather than per-message dict keys: a construction site that
+        forgot a key would silently write NULL, whereas one decision per checkpoint
+        cannot disagree with itself. Callers must source these from the AgentBackend
+        INSTANCE that served the turn (backend.name / backend.model_id), NOT from
+        job.backend_name / job.model_name — those are mutable current-state fields, so
+        reading them here would re-attribute a job's surviving earlier rows to whatever
+        backend it switched to later, which is the mis-attribution these columns exist
+        to fix. Both default to None so the non-pipeline callers (routes_jobs.py's pure
+        state transitions, which write no messages at all) need no change.
     document: {stage, version, markdown} — inserts a new Document row
     follow_up: {stage, question} to insert a new FollowUp,
                or {follow_up_id, answer, answered_at} to mark an existing one answered
@@ -480,6 +493,8 @@ async def checkpoint(
             role=msg["role"],
             content=msg["content"],
             reasoning=msg.get("reasoning"),
+            backend_name=backend_name,
+            model_name=model_name,
         )
         session.add(m)
 

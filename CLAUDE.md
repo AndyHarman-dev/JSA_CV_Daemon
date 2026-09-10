@@ -227,6 +227,33 @@ await repo.checkpoint(session, job, new_state, new_stage, messages=[], document=
 ```
 Never write `Message` rows, `Document` rows, and `Job` state in separate commits.
 
+### Per-message backend/model attribution
+
+`messages.backend_name` / `messages.model_name` record which backend + concrete model
+served each turn. **Source them from the `AgentBackend` INSTANCE that ran the turn
+(`backend.name` / `backend.model_id`), never from `Job.backend_name` / `Job.model_name`.**
+Those two Job columns are mutable current-state fields that `repo.backend_switch_reset`
+rewrites on a BF-19 backend switch or a model-ladder hop, so reading them at checkpoint
+time re-attributes every *surviving* earlier row to whatever the job hopped to later —
+and surviving rows are real: a `cover_letter`-stage switch explicitly keeps the
+`cv_adjust` rows, and a revision-stage switch keeps the original stage's. `Job.model_name`
+is also NULL until the first hop, and the `--fit-model` backend never touches it at all.
+
+The plumbing: `AgentBackend.model_id` (`jsa/agents/base.py`) is a `getattr(self, "_model",
+None)` **instance** read — same class-vs-instance trap `supports_structured_output`
+documents, since one backend name can front many models. `stages.py::_attribution(backend)`
+returns the pair, splatted into `repo.checkpoint(**_attribution(backend))`; `checkpoint`
+stamps it on **every** row in the call (including `role="tool"` rows) exactly as it does
+`stage`. They are call-level kwargs, not per-message dict keys, deliberately: a
+construction site that forgot a key would silently write NULL. `_run_fit_assessment` calls
+`_attribution` with the fit backend it was handed, which is what gets `--fit-model` right.
+
+Both columns are permanently nullable — pre-feature rows are unbackfillable (the
+attribution was never captured) and `model_name` is legitimately NULL for `google-cli`,
+whose `agy` CLI has no model flag. They are structurally invisible to replay:
+`_load_history` projects rows to a two-field `HistoryTurn(role, content)`, same as
+`Message.reasoning`.
+
 ---
 
 ## Agent backend registration

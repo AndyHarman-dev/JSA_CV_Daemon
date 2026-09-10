@@ -63,6 +63,8 @@ class FakeAgentBackend(AgentBackend):
         self,
         replies: list[AgentReply],
         *,
+        name: str | None = None,
+        model: str | None = None,
         supports_structured_output: bool = False,
         supports_streaming: bool = False,
         supports_native_tools: bool = False,
@@ -85,6 +87,14 @@ class FakeAgentBackend(AgentBackend):
         ignoring side.
         """
         self._replies: list[AgentReply] = list(replies)
+        # Instance attributes shadowing the class-level `name` and feeding
+        # AgentBackend.model_id's `getattr(self, "_model", None)` read. Both default to
+        # the pre-attribution behaviour (name "fake", model_id None), so every existing
+        # test is unaffected; pass them to build two DISTINGUISHABLE fakes, which is
+        # what a per-message attribution test needs.
+        if name is not None:
+            self.name = name
+        self._model = model
         self.supports_structured_output = supports_structured_output
         self.supports_streaming = supports_streaming
         self.supports_native_tools = supports_native_tools
