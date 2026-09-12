@@ -670,11 +670,15 @@ class CVDocument(_Loose):
         if len(empty) > _MAX_EMPTY_SECTIONS:
             listed = ", ".join(empty)
             raise ValueError(
+                # Diagnosis only, no re-emit imperative: `_parse_structured` folds this
+                # text into its `reasons` and the CALLER supplies the corrective
+                # instruction (`reemit_hint` — sentinel re-emit, structured payload, or
+                # the tool loop's "call finalize again"). An imperative here would
+                # contradict whichever one the session is actually using.
                 f"{len(empty)} of {len(self.sections)} CV sections are empty ({listed}) — "
-                "this is a heading-only outline, not a CV. Every section must carry its own "
-                "content in `text`, `items` or `entries`. Re-emit the CV with each of those "
-                "sections filled in with its full content from the base CV; do not return "
-                "section names with null or empty bodies."
+                "this is a heading-only outline, not a CV. Every section must carry its "
+                "own content from the base CV in `text`, `items` or `entries`; a section "
+                "name with a null or empty body is a dropped section."
             )
         return self
 

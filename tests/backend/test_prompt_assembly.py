@@ -163,6 +163,8 @@ class TestStructuredModeComposition:
             assert "minimums are not a target" in result
             assert "carry its own full content" in result
             assert "not the deliverable" in result
+            # Shape-neutral: no CV-only vocabulary leaks into the cover-letter contract.
+            assert "Every section the prompt above" not in result
 
     def test_precedence_and_no_sentinel_marker_lines_present(self):
         schema = json_schema_for(Stage.cv_adjust)

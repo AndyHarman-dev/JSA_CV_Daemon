@@ -234,11 +234,16 @@ def _structured_contract(
             "distinct answers make sense. On a `\"final\"` turn, `suggested_replies` "
             "must be left null.\n"
             + _completeness_clause(
-                "Every section the prompt above asks for must appear in `payload` AND "
-                "carry its own full content — every role, entry, bullet, skill, date "
-                "and paragraph written out in full. A section reduced to a heading with "
-                "empty or null text is a dropped section. Your strategy write-up and "
-                "change log are not the deliverable; the `payload` is."
+                # Deliberately shape-neutral: this branch serves BOTH `CvTurn` (sections
+                # and entries) and `ClTurn` (`CoverLetter` is salutation/paragraphs/
+                # signoff, with no sections at all), and `_structured_contract` is not
+                # told which. Naming only CV parts here would read as noise in a
+                # cover-letter session.
+                "Every part of the document the prompt above asks for must appear in "
+                "`payload` AND carry its own full content — every section, role, entry, "
+                "bullet, skill, date and paragraph written out in full. A named part "
+                "left with empty or null content is a dropped part. Your strategy "
+                "write-up and change log are not the deliverable; the `payload` is."
             )
         )
     return (
