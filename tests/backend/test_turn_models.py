@@ -480,6 +480,31 @@ class TestInlineDefs:
         inlined = inline_defs(schema)
         assert inlined["required"] == schema["required"]
 
+    @pytest.mark.parametrize("stage", [Stage.cv_adjust, Stage.cover_letter])
+    def test_every_property_of_every_object_is_required(self, stage):
+        """REGRESSION (confirmed live 2026-09-11, gemini-3.5-flash): with Pydantic's own
+        `required` list, Gemini's constrained decoder let the model omit `text`/`items`/
+        `entries` and it returned a Summary-only skeleton on every attempt — immune to
+        prompt wording, self-heal and thinking budget. Marking all properties required
+        yielded a full CV on the same request. Do not relax this back to Pydantic's list."""
+        def _check(node):
+            if isinstance(node, dict):
+                if isinstance(node.get("properties"), dict) and node["properties"]:
+                    assert set(node["required"]) == set(node["properties"]), node.get("description")
+                for v in node.values():
+                    _check(v)
+            elif isinstance(node, list):
+                for v in node:
+                    _check(v)
+        inlined = inline_defs(json_schema_for(stage))
+        _check(inlined)
+        # Spot-check the field that actually went missing on the wire.
+        cv_or_cl = next(b for b in inlined["properties"]["payload"]["anyOf"] if "properties" in b)
+        assert "kind" in inlined["required"] and "payload" in inlined["required"]
+        if stage is Stage.cv_adjust:
+            section = cv_or_cl["properties"]["sections"]["items"]
+            assert {"name", "text", "items", "entries"} <= set(section["required"])
+
     def test_unresolvable_ref_returns_empty_object_not_a_crash(self):
         """A cycle guard / missing-key guard: an unknown $ref key must not raise —
         it degrades to an empty object so the function stays total."""

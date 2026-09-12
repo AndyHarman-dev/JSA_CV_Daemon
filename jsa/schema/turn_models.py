@@ -205,8 +205,11 @@ def json_schema_for_infer() -> dict[str, Any]:
 def inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
     """Recursively inline every ``$ref`` in ``schema`` against its own ``$defs``,
     dropping ``$defs``, ``additionalProperties``, ``title`` and ``default`` from the
-    result, and rewriting ``const`` to a single-member ``enum`` (Gemini's
-    ``responseSchema`` is a restricted OpenAPI subset that rejects all five).
+    result, rewriting ``const`` to a single-member ``enum`` (Gemini's
+    ``responseSchema`` is a restricted OpenAPI subset that rejects all five), and
+    marking EVERY property of every object ``required`` — see the inline comment for
+    the live evidence; that last rewrite is what stops Gemini's constrained decoder
+    from emitting schema-valid skeletons.
 
     Multi-backend-model-select plan, Phase 0 probe #4 (2026-08-31): both
     ``generationConfig.responseSchema`` and ``responseJsonSchema`` reject the raw
@@ -253,7 +256,24 @@ def inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
                 node = {k: v for k, v in node.items() if k != "const"} | {
                     "enum": [node["const"]]
                 }
-            return {k: _inline(v, seen) for k, v in node.items() if k not in _DROP}
+            out = {k: _inline(v, seen) for k, v in node.items() if k not in _DROP}
+            if isinstance(out.get("properties"), dict) and out["properties"]:
+                # Every property REQUIRED, not just Pydantic's non-defaulted ones.
+                # CONFIRMED LIVE (2026-09-11, gemini-3.5-flash, replaying a real
+                # cv_adjust "proceed" turn six ways): with Pydantic's own `required`
+                # (`contact`/`sections` only — `text`/`items`/`entries` all have
+                # defaults) constrained decoding let the model skip every optional key,
+                # and it did so on EVERY attempt: a 1 KB Summary-only skeleton, no
+                # `items`/`entries` key ever emitted, unmoved by prompt wording,
+                # self-heal corrections, or a thinking budget of 0 / 8k / 24k. The same
+                # request with all properties required returned a 13 KB CV with 5-7
+                # entries per section; so did `responseJsonSchema` and no schema at
+                # all. Nullable fields still accept `null` and arrays `[]`, so nothing
+                # the Pydantic models tolerate is lost — only the decoder's licence to
+                # omit. Applies to every object, including the turn envelope (the model
+                # already emits `"question": null` on a final turn).
+                out["required"] = list(out["properties"].keys())
+            return out
         if isinstance(node, list):
             return [_inline(v, seen) for v in node]
         return node

@@ -325,6 +325,14 @@ class GeminiBackend(OpenAICompatBackend):
         guaranteed floor of ``_MAX_OUTPUT_TOKENS`` for the actual CV/cover-letter JSON
         regardless of how much the model wants to think.
 
+        Correction (2026-09-11): the budget-starvation reading above was NOT the cause
+        of the skeleton replies. A six-way live replay of a real cv_adjust turn
+        produced the identical skeleton with thinking off, at 8k and at 24k; what
+        fixed it was ``inline_defs`` marking every property ``required`` (see
+        ``jsa/schema/turn_models.py``). The cap stays — it is still the right guard
+        against a genuinely long think eating the reply — but it is not the skeleton
+        fix and must not be tuned as if it were.
+
         Returned as a ``generationConfig`` fragment, not a top-level payload key —
         this backend overrides ``_call_api_once`` and merges it there; the shared
         base only ever calls this hook to decide whether reasoning fields were
