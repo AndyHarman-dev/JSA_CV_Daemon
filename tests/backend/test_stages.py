@@ -854,6 +854,40 @@ class TestValidateCvContent:
         md = cv_to_markdown(obj)
         assert "hello there" in md and "changelog" not in md
 
+    def test_skeleton_cv_rejected(self):
+        # The live bug (2026-09-11, gemini-3.5-flash): structured output came back
+        # schema-valid as a Summary plus three sections carrying `text: null`, passed the
+        # old "at least one renderable section" gate, and was rendered to PDF/DOCX as a
+        # one-paragraph "CV". Verbatim shape of jobs a1145262/37c04e8d/f7066f23/… in
+        # ~/.jsa/jsa.sqlite. The prompt-side half of this fix is
+        # `prompt_assembly._completeness_clause`; this is the structural gate.
+        bad = json.dumps({
+            "contact": {"name": "Andrei", "email": "a@b.c"},
+            "sections": [
+                {"name": "Summary", "text": "Senior UE5 C++ developer with 4 years."},
+                {"name": "Skills", "text": None},
+                {"name": "Experience", "text": None},
+                {"name": "Technical Projects", "text": None},
+            ],
+        })
+        with pytest.raises(FinalContentError, match="heading-only outline"):
+            _validate_final_content(Stage.cv_adjust, bad, None)
+
+    def test_one_stray_empty_section_still_tolerated(self):
+        # The long-standing tolerance the skeleton arm must NOT break: a single empty/odd
+        # section is skipped by the serializer and can't false-reject an otherwise-good CV.
+        payload = json.dumps({
+            "contact": {"name": "Jane", "email": "j@x.com"},
+            "sections": [
+                {"name": "Summary", "text": "Engineer with ten years of experience."},
+                {"name": "Skills", "items": ["Python", "Go"]},
+                {"name": "Experience", "entries": [{"heading": "Dev", "bullets": ["shipped"]}]},
+                {"name": "Education", "text": None},
+            ],
+        })
+        obj = _validate_final_content(Stage.cv_adjust, payload, None)
+        assert len(obj.sections) == 4
+
     def test_cover_letter_as_cv_rejected(self):
         # Content-kind guard (the live bug): the model emitted cover-letter prose into the CV
         # shape — valid JSON, contact + a section, so it passed the tolerant gate and shipped

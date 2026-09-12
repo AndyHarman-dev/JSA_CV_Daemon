@@ -601,6 +601,13 @@ class Section(_Loose):
         return out
 
 
+# How many content-free sections a CV may carry before it is read as a skeleton rather
+# than a CV with one stray section. 1 preserves the long-standing "an individual empty/odd
+# section is tolerated" behaviour exactly; 2+ is the observed structured-output failure
+# (see CVDocument._has_renderable_content).
+_MAX_EMPTY_SECTIONS = 1
+
+
 def _section_has_content(s: Section) -> bool:
     if s.text or s.items:
         return True
@@ -646,11 +653,29 @@ class CVDocument(_Loose):
     @model_validator(mode="after")
     def _has_renderable_content(self) -> "CVDocument":
         # The CV-vs-noise gate lives here, at the document level: contact.name (required on
-        # Contact) plus at least one section that actually renders something. An individual
-        # empty/odd section is tolerated (the serializer skips it) so it can't false-reject
-        # an otherwise-good CV — but a payload with no renderable content at all is rejected.
-        if not any(_section_has_content(s) for s in self.sections):
+        # Contact) plus sections that actually render something. An individual empty/odd
+        # section is still tolerated (the serializer skips it) so this can't false-reject an
+        # otherwise-good CV — but a payload with no renderable content at all is rejected,
+        # and so is a SKELETON: several sections present by name with nothing in them.
+        #
+        # The skeleton arm is the structural half of the schema-minimums fix (the prompt
+        # half is `jsa/pipeline/prompt_assembly.py::_completeness_clause`). Confirmed live
+        # on gemini-3.5-flash: a cv_adjust FINAL came back as Summary + three sections with
+        # `text: null`, which satisfied the old "at least one section has content" test and
+        # was rendered to PDF/DOCX as a one-paragraph "CV". Nothing else in the pipeline
+        # would have caught it — this validator is the only gate before the DB write.
+        empty = [s.name or "(unnamed)" for s in self.sections if not _section_has_content(s)]
+        if len(empty) == len(self.sections):
             raise ValueError("CV has no renderable section content")
+        if len(empty) > _MAX_EMPTY_SECTIONS:
+            listed = ", ".join(empty)
+            raise ValueError(
+                f"{len(empty)} of {len(self.sections)} CV sections are empty ({listed}) — "
+                "this is a heading-only outline, not a CV. Every section must carry its own "
+                "content in `text`, `items` or `entries`. Re-emit the CV with each of those "
+                "sections filled in with its full content from the base CV; do not return "
+                "section names with null or empty bodies."
+            )
         return self
 
     @model_validator(mode="after")

@@ -143,6 +143,27 @@ class TestStructuredModeComposition:
         assert "sentinel-block instructions elsewhere in this prompt" in result
         assert "must stay exactly as spelled, in English/ASCII" not in result
 
+    def test_states_that_schema_minimums_are_not_a_target(self):
+        """The pipeline lane's half of the same clause the infer lane got in a98fb46.
+
+        Confirmed live (gemini-3.5-flash): a cv_adjust FINAL came back schema-valid as a
+        Summary section plus three sections with `text: null`, and was rendered to PDF and
+        DOCX. `sections` carries only `minItems: 1` and no field has a description, so
+        NOTHING in the wire schema asks for completeness, and this contract is the last
+        thing the model reads before answering.
+
+        Do not drop this as duplication of the document_only test — the bug being pinned is
+        precisely that the clause existed on ONE branch of `_structured_contract` and not
+        the other. Both branches must assert it independently."""
+        for stage in (Stage.cv_adjust, Stage.cover_letter):
+            result = assemble_system_prompt(
+                "BASE PROMPT", language="en", structured_model=json_schema_for(stage)
+            )
+            assert "never the AMOUNT" in result
+            assert "minimums are not a target" in result
+            assert "carry its own full content" in result
+            assert "not the deliverable" in result
+
     def test_precedence_and_no_sentinel_marker_lines_present(self):
         schema = json_schema_for(Stage.cv_adjust)
         result = assemble_system_prompt("BASE PROMPT", language="en", structured_model=schema)

@@ -144,6 +144,42 @@ def _structured_language_directive(language_code: str, *, fit_verdict: bool) -> 
     return "\n".join(lines)
 
 
+def _completeness_clause(directive: str) -> str:
+    """The "schema minimums are not a content target" clause, shared by every branch of
+    ``_structured_contract`` that carries a document ``payload``.
+
+    Confirmed live twice on gemini-3.5-flash: a structured reply comes back schema-valid
+    with a Summary section and nothing else — every other section present by name with
+    ``text: null``. Nothing in the wire schema asks for completeness (``sections`` carries
+    only ``minItems: 1``; no field has a description), so a one-section CV is fully valid
+    and a small model anchors on that minimum. In sentinel mode the prompt file's spec and
+    worked example carry the model; in structured mode this contract is the last thing it
+    reads before answering.
+
+    It lives in ONE function on purpose. The first version of this clause (a98fb46) was
+    written into the ``document_only`` branch only, and the ``CvTurn``/``ClTurn`` branch —
+    the actual job pipeline — kept shipping skeleton CVs through to PDF/DOCX.
+    Adding a branch to ``_structured_contract`` means calling this from it too.
+
+    ``directive`` is the one lane-specific sentence: transcription wording for a source
+    document, adjustment wording for a rewrite of a known base CV. The framing around it
+    is identical everywhere, which is the point.
+
+    Mitigation, not a guarantee — model choice still dominates, which is why
+    ``jsa/schema/cv.py::CVDocument._has_renderable_content`` also gates this structurally.
+    """
+    return (
+        "The schema states the SHAPE your reply must take, never the AMOUNT of "
+        "content it should carry. Its minimums are not a target: a payload holding "
+        "one section is schema-valid and is almost always wrong. "
+        f"{directive} "
+        "Do not summarize, condense, sample, abbreviate, or stop early because the "
+        "shape is already satisfied. Omitting content the source contains is the "
+        "single worst failure mode for this task; a long payload is expected and "
+        "correct."
+    )
+
+
 def _structured_contract(
     schema: dict[str, Any], *, fit_verdict: bool, document_only: bool = False
 ) -> str:
@@ -165,14 +201,10 @@ def _structured_contract(
             "never ask a clarifying question, and never leave `payload` null. If the "
             "source material is ambiguous or incomplete, make the most faithful "
             "reading you can and still return a complete `payload`.\n"
-            "The schema states the SHAPE your reply must take, never the AMOUNT of "
-            "content it should carry. Its minimums are not a target: a payload holding "
-            "one section is schema-valid and is almost always wrong. Transcribe EVERY "
-            "section present in the source material — every role, entry, bullet, skill "
-            "and date — in the source's own order. Do not summarize, condense, sample, "
-            "abbreviate, or stop early because the shape is already satisfied. Omitting "
-            "content the source contains is the single worst failure mode for this "
-            "task; a long payload is expected and correct."
+            + _completeness_clause(
+                "Transcribe EVERY section present in the source material — every role, "
+                "entry, bullet, skill and date — in the source's own order."
+            )
         )
     elif fit_verdict:
         shape_rules = (
@@ -200,7 +232,14 @@ def _structured_contract(
             "short, decisive option and at least one longer option that clarifies or "
             "pushes back), and do not pad the list to a fixed count if fewer genuinely "
             "distinct answers make sense. On a `\"final\"` turn, `suggested_replies` "
-            "must be left null."
+            "must be left null.\n"
+            + _completeness_clause(
+                "Every section the prompt above asks for must appear in `payload` AND "
+                "carry its own full content — every role, entry, bullet, skill, date "
+                "and paragraph written out in full. A section reduced to a heading with "
+                "empty or null text is a dropped section. Your strategy write-up and "
+                "change log are not the deliverable; the `payload` is."
+            )
         )
     return (
         "\n\n## Structured output contract\n"

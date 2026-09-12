@@ -338,8 +338,17 @@ class TestFinalize:
                 ("replace_section", {"section_id": "s2", "section": empty_section}),
                 ("finalize", {"change_log": "oops"}),
             ]),
+            # The recovery round must refill BOTH emptied sections, not just add a
+            # summary: `CVDocument._has_renderable_content` now also rejects a SKELETON
+            # (more than one content-free section), so a CV of [X(empty), X(empty),
+            # Summary(text)] — what `replace_summary` alone produces here, since neither
+            # renamed section matches the summary lookup — is still not a valid document.
             _tool_calls_reply([
-                ("replace_summary", {"text": "Restored a real summary."}),
+                ("replace_section", {"section_id": "s1", "section": {
+                    "name": "Summary", "text": "Restored a real summary."}}),
+                ("replace_section", {"section_id": "s2", "section": {
+                    "name": "Experience", "entries": [
+                        {"heading": "Engineer", "bullets": ["Restored the role."]}]}}),
                 ("finalize", {"change_log": "fixed it"}),
             ]),
         ])
