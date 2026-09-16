@@ -1,5 +1,5 @@
 ---
-status: InProgress
+status: Done
 ---
 
 # Merge reference CV editor's document rendering + export into the CV Structure Editor
