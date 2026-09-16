@@ -212,6 +212,7 @@ interface EditorState {
   cv: EditorCV | null;
   view: EditorView;
   jsonOpen: boolean;
+  exportOpen: boolean;
   paperSerif: boolean;
 
   // infer flow
@@ -278,6 +279,7 @@ interface EditorState {
   // --- view / panels ---
   setView(v: EditorView): void;
   toggleJson(): void;
+  toggleExport(): void;
   togglePaperSerif(): void;
   setSelected(id: string | null): void;
 
@@ -424,6 +426,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     cv: null,
     view: "blocks",
     jsonOpen: false,
+    exportOpen: false,
     paperSerif: true,
     inferring: false,
     inferStep: 0,
@@ -508,6 +511,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         importError: null,
         selectedId: null,
         jsonOpen: false,
+        exportOpen: false,
         saveError: null,
         unsaved: false,
       });
@@ -578,6 +582,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
     },
     toggleJson() {
       set((s) => ({ jsonOpen: !s.jsonOpen }));
+    },
+    toggleExport() {
+      set((s) => ({ exportOpen: !s.exportOpen }));
     },
     togglePaperSerif() {
       set((s) => ({ paperSerif: !s.paperSerif }));
@@ -911,7 +918,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         if (!(await get().flushAndPersist())) return;
         // view/jsonOpen first: load()/reset() own selectedId and saveError, so setting them
         // afterwards would clobber the fresh deck's own selection.
-        set({ activeDeckId: id, view: "blocks", jsonOpen: false });
+        set({ activeDeckId: id, view: "blocks", jsonOpen: false, exportOpen: false });
         await loadDeckInto(id);
       } finally {
         set({ deckBusy: false });
@@ -924,7 +931,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
       try {
         if (!(await get().flushAndPersist())) return;
         const deck = await api.createCvDeck(null);
-        set({ activeDeckId: deck.id, view: "blocks", jsonOpen: false });
+        set({ activeDeckId: deck.id, view: "blocks", jsonOpen: false, exportOpen: false });
         // reset() (not startBlank) so the existing EmptyState re-offers RUN INFERENCE /
         // INIT BLANK for the new slot, and leaves `unsaved` false — switching straight back
         // out of an untouched new deck must not try to PUT an empty CV.
@@ -1001,7 +1008,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
           // The buffer belonged to the deck that is now gone — land on the new default,
           // or on the empty state when that was the last deck.
           const next = default_id ?? decks[0]?.id ?? null;
-          set({ activeDeckId: next, view: "blocks", jsonOpen: false });
+          set({ activeDeckId: next, view: "blocks", jsonOpen: false, exportOpen: false });
           await loadDeckInto(next);
         }
       } catch (err) {

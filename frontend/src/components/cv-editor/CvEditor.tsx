@@ -14,6 +14,7 @@ import { Icon, type IconName } from "../../theme/Icon";
 import { EDITOR_THEME, SHELL_THEME, paperT } from "../../theme/tokens";
 import { BlocksView } from "./BlocksView";
 import { DocumentView } from "./PaperSheet";
+import { ExportModal } from "./ExportModal";
 import { JsonDrawer } from "./JsonDrawer";
 import { LanguagePill } from "./LanguagePill";
 import { SplitView } from "./SplitView";
@@ -330,6 +331,7 @@ export function CvEditor() {
   const cv = useEditorStore((s) => s.cv);
   const view = useEditorStore((s) => s.view);
   const jsonOpen = useEditorStore((s) => s.jsonOpen);
+  const exportOpen = useEditorStore((s) => s.exportOpen);
   const inferring = useEditorStore((s) => s.inferring);
   const canUndo = useEditorStore((s) => s.canUndo);
   const canRedo = useEditorStore((s) => s.canRedo);
@@ -340,6 +342,9 @@ export function CvEditor() {
   const t = useT();
   const [loading, setLoading] = useState(true);
   const [clock, setClock] = useState(() => new Date());
+  // Owned here (not inside ExportModal) so it survives the dialog being closed/reopened —
+  // see ExportModal.tsx's doc comment.
+  const [exportBottomMargin, setExportBottomMargin] = useState(36);
   const sessionRef = useRef(
     Array.from({ length: 6 }, () => "0123456789ABCDEF"[Math.floor(Math.random() * 16)]).join("")
   );
@@ -549,6 +554,13 @@ export function CvEditor() {
             </button>
           )}
 
+          {cv && (
+            <button type="button" onClick={st.toggleExport} className="cvghost" style={tbtnStyle(false)}>
+              <Icon name="doc" size={14} />
+              <span className="hidden lg:inline">{t("cvEditor.export")}</span>
+            </button>
+          )}
+
           <LanguagePill />
 
           <FileButton label={cv ? t("cvEditor.rerun") : t("cvEditor.runInference")} primary={!cv} disabled={inferring} />
@@ -590,6 +602,7 @@ export function CvEditor() {
         </main>
         {cv && jsonOpen && <JsonDrawer />}
       </div>
+      {cv && exportOpen && <ExportModal bottomMargin={exportBottomMargin} setBottomMargin={setExportBottomMargin} />}
     </div>
   );
 }
