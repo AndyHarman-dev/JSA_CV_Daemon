@@ -17,7 +17,11 @@ import { chamferPath, cornerMarks } from "../../theme/chrome";
 import { Icon } from "../../theme/Icon";
 import { EDITOR_THEME, paperT } from "../../theme/tokens";
 import type { EditorSection } from "../../types";
+import { DateRangeField } from "./DateRangeField";
+import { allLocations, useRecentLocations } from "./locationHistory";
 import { AutoTextarea } from "./ui";
+
+const LOCATION_LIST_ID = "cv-locations-list";
 
 const T = EDITOR_THEME;
 const PA = paperT;
@@ -98,16 +102,18 @@ function SectionTools({ section, index, total }: { section: EditorSection; index
       className="cvtools"
       style={{
         position: "absolute",
-        top: 8,
-        right: 0,
+        top: -13,
+        left: "50%",
+        transform: "translateX(-50%)",
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
         gap: 1,
         background: PA.surface,
         border: `1px solid ${PA.bd}`,
         borderRadius: 8,
         padding: 2,
         boxShadow: "0 2px 8px rgba(0,0,0,.15)",
+        zIndex: 2,
       }}
     >
       {lightToolBtn({ icon: "up", title: t("paperSheet.moveUpTitle"), disabled: index === 0, onClick: () => st.moveSection(section.id, -1) })}
@@ -117,7 +123,15 @@ function SectionTools({ section, index, total }: { section: EditorSection; index
   );
 }
 
-function PaperBody({ section, serif }: { section: EditorSection; serif: boolean }) {
+function PaperBody({
+  section,
+  serif,
+  onRecordLocation,
+}: {
+  section: EditorSection;
+  serif: boolean;
+  onRecordLocation: (v: string) => void;
+}) {
   const st = useEditorStore();
   const t = useT();
   const bodyFont = serif ? PA.serifF : PA.ui;
@@ -134,9 +148,10 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
       );
     case "bullets":
       return (
-        <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+        <ul style={{ margin: "4px 0 0", paddingLeft: 20, listStyle: "none" }}>
           {section.items.map((it, i) => (
             <li key={i} className="cvitem" style={{ marginBottom: 2, display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span style={{ width: 4, height: 4, borderRadius: 4, background: PA.ink3, marginTop: 8, flex: "none" }} />
               <AutoTextarea
                 className="cvf cvf-paper"
                 style={paperStyle({ fontFamily: bodyFont, size: 13.5 })}
@@ -204,13 +219,12 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                     onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
                   />
                   {e.dates !== undefined && (
-                    <input
-                      className="cvf cvf-paper"
-                      style={{ ...paperStyle({ fontFamily: PA.mono, size: 11.5, color: PA.ink2, align: "right", width: chWidth(e.dates, "dates") }), flex: "none" }}
-                      value={e.dates ?? ""}
-                      placeholder={t("paperSheet.datesPlaceholder")}
-                      onChange={(ev) => st.updateEntry(section.id, e.id, { dates: ev.target.value })}
-                    />
+                    <span style={{ flex: "0 1 auto", minWidth: 0, marginLeft: "auto" }}>
+                      <DateRangeField
+                        value={e.dates ?? ""}
+                        onChange={(v) => st.updateEntry(section.id, e.id, { dates: v })}
+                      />
+                    </span>
                   )}
                 </div>
                 {showSub && (
@@ -225,10 +239,12 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                     {e.location !== undefined && (
                       <input
                         className="cvf cvf-paper"
+                        list={LOCATION_LIST_ID}
                         style={{ ...paperStyle({ fontFamily: bodyFont, size: 12, color: PA.ink2, align: "right", width: chWidth(e.location, "location") }), flex: "none" }}
                         value={e.location ?? ""}
                         placeholder={t("paperSheet.locationPlaceholder")}
                         onChange={(ev) => st.updateEntry(section.id, e.id, { location: ev.target.value })}
+                        onBlur={(ev) => onRecordLocation(ev.target.value)}
                       />
                     )}
                   </div>
@@ -243,9 +259,10 @@ function PaperBody({ section, serif }: { section: EditorSection; serif: boolean 
                   />
                 )}
                 {e.bullets.length > 0 && (
-                  <ul style={{ margin: "3px 0 0", paddingLeft: 20 }}>
+                  <ul style={{ margin: "3px 0 0", paddingLeft: 20, listStyle: "none" }}>
                     {e.bullets.map((b, i) => (
                       <li key={i} className="cvitem" style={{ marginBottom: 1, display: "flex", gap: 6, font: `400 13px ${bodyFont}`, color: PA.ink }}>
+                        <span style={{ width: 4, height: 4, borderRadius: 4, background: PA.ink3, marginTop: 7, flex: "none" }} />
                         <AutoTextarea
                           className="cvf cvf-paper"
                           style={paperStyle({ fontFamily: bodyFont, size: 13 })}
@@ -296,6 +313,8 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
   const selectedId = useEditorStore((s) => s.selectedId);
   const t = useT();
   const nameFont = serif ? PA.serifF : PA.ui;
+  const { recent, record } = useRecentLocations();
+  const locationOptions = allLocations(cv, recent);
 
   const sheet = (
     <div
@@ -352,13 +371,21 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
             ·{" "}
             <input
               className="cvf cvf-paper"
+              list={LOCATION_LIST_ID}
               style={paperStyle({ fontFamily: PA.ui, size: 12.5, color: PA.ink2, align: "center", width: chWidth(cv.contact.location, "location") })}
               value={cv.contact.location ?? ""}
               onChange={(e) => st.updateContact({ location: e.target.value })}
+              onBlur={(e) => record(e.target.value)}
             />
           </span>
         )}
       </div>
+
+      <datalist id={LOCATION_LIST_ID}>
+        {locationOptions.map((loc) => (
+          <option key={loc} value={loc} />
+        ))}
+      </datalist>
 
       {cv.sections.map((s, i) => {
         const isSel = selectable && selectedId === s.id;
@@ -387,7 +414,7 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
                 onChange={(e) => st.updateSection(s.id, { name: e.target.value })}
               />
             </div>
-            <PaperBody section={s} serif={serif} />
+            <PaperBody section={s} serif={serif} onRecordLocation={record} />
             <SectionTools section={s} index={i} total={cv.sections.length} />
           </div>
         );
