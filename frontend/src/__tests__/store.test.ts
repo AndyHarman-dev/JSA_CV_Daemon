@@ -18,6 +18,7 @@ vi.mock("../api", () => ({
 }));
 
 import { api } from "../api";
+import { useCvChatStore } from "../cvChatStore";
 
 function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
   return {
@@ -463,6 +464,41 @@ describe("applyEvent - agent_tool event", () => {
     const buf = useStore.getState().streamBuffers.job1;
     expect(buf.reasoning).toBe("more thinking");
     expect(buf.tools).toEqual([{ name: "read_file", detail: "cv_structure.json", ok: true, at: 0 }]);
+  });
+});
+
+describe("applyEvent - chat_chunk / chat_turn_end (CV-editor AI chat)", () => {
+  beforeEach(() => {
+    useStore.setState({ streamBuffers: {} });
+    useCvChatStore.setState({ busy: false, content: "", reasoning: "" });
+  });
+
+  it("forwards chat_chunk to cvChatStore and leaves the job-scoped streamBuffers untouched", () => {
+    useCvChatStore.setState({ busy: true });
+    useStore.getState().applyEvent({
+      type: "chat_chunk",
+      task_id: "t1",
+      kind: "reasoning",
+      text: "Considering the CV...",
+    });
+
+    expect(useCvChatStore.getState().reasoning).toBe("Considering the CV...");
+    expect(useStore.getState().streamBuffers).toEqual({});
+  });
+
+  it("ignores a chat_chunk when cvChatStore is not busy (single-flight gating)", () => {
+    useStore.getState().applyEvent({
+      type: "chat_chunk",
+      task_id: "t1",
+      kind: "content",
+      text: "should be dropped",
+    });
+    expect(useCvChatStore.getState().content).toBe("");
+  });
+
+  it("forwards chat_turn_end without touching streamBuffers", () => {
+    useStore.getState().applyEvent({ type: "chat_turn_end", task_id: "t1", superseded: false });
+    expect(useStore.getState().streamBuffers).toEqual({});
   });
 });
 

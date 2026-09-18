@@ -245,6 +245,42 @@ class CvWorkingCopy:
             return text_only[0]
         return None
 
+    _CONTACT_FIELDS = ("name", "email", "phone", "location", "links")
+
+    def replace_contact(self, contact: Any) -> dict[str, Any]:
+        """Replace one or more identity fields. Only the keys present in ``contact``
+        are written — an omitted key leaves the existing value alone, so "fix the
+        email" never blanks the phone. Used by the CV-editor chat only; no op on the
+        revision-tool-use path calls this (see ``jsa/agents/tool_spec.py``'s D6).
+
+        String fields are stripped via ``_clean_str_or_none`` — the same
+        tolerant-absorption rule every other setter in this class uses — EXCEPT
+        ``name``: ``Contact.name`` is the one required field, so a blank/whitespace
+        name is rejected with ``bad_argument`` here rather than silently written as
+        ``None`` and only failing later, opaquely, inside ``finalize()``.
+        """
+        if not isinstance(contact, dict):
+            return _err("bad_argument", "contact must be an object")
+        present = {k: v for k, v in contact.items() if k in self._CONTACT_FIELDS}
+        if not present:
+            return _err(
+                "bad_argument",
+                f"contact must name at least one of {self._CONTACT_FIELDS}",
+            )
+        patch: dict[str, Any] = {}
+        if "name" in present:
+            cleaned_name = _clean_str_or_none(present["name"])
+            if cleaned_name is None:
+                return _err("bad_argument", "contact.name must be a non-empty string")
+            patch["name"] = cleaned_name
+        for field in ("email", "phone", "location"):
+            if field in present:
+                patch[field] = _clean_str_or_none(present[field])
+        if "links" in present:
+            patch["links"] = _clean_str_list(present["links"])
+        self._contact.update(patch)
+        return _ok(fields=sorted(patch))
+
     def replace_summary(self, text: Any) -> dict[str, Any]:
         cleaned = _clean_str_or_none(text)
         if cleaned is None:

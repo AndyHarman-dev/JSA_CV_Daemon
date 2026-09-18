@@ -564,6 +564,53 @@ class TestCvLoaderUnsupportedExtension:
 
 
 # ---------------------------------------------------------------------------
+# jsa/ingest/text_source.py — load_cv stays pinned above; this widens ingest via a
+# SEPARATE entry point for the CV-editor chat's read-only attachments.
+# ---------------------------------------------------------------------------
+
+class TestLoadTextSource:
+    def test_txt_is_read_as_utf8(self, tmp_path):
+        from jsa.ingest.text_source import load_text_source
+
+        txt_file = tmp_path / "notes.txt"
+        txt_file.write_text("Jane Doe, jane@x.com", encoding="utf-8")
+        assert load_text_source(txt_file) == "Jane Doe, jane@x.com"
+
+    def test_md_and_json_and_csv_and_rtf_are_accepted(self, tmp_path):
+        from jsa.ingest.text_source import load_text_source
+
+        for ext in (".md", ".json", ".csv", ".rtf"):
+            f = tmp_path / f"notes{ext}"
+            f.write_text("content", encoding="utf-8")
+            assert load_text_source(f) == "content"
+
+    def test_load_cv_still_raises_for_txt(self, tmp_path):
+        """The pin above must survive this module's addition unchanged."""
+        txt_file = tmp_path / "resume.txt"
+        txt_file.write_text("plain text resume", encoding="utf-8")
+        with pytest.raises(ValueError, match="Unsupported"):
+            load_cv(txt_file)
+
+    def test_unsupported_extension_raises(self, tmp_path):
+        from jsa.ingest.text_source import UnsupportedSource, load_text_source
+
+        png_file = tmp_path / "photo.png"
+        png_file.write_bytes(b"\x89PNG\r\n")
+        with pytest.raises(UnsupportedSource, match=r"\.png"):
+            load_text_source(png_file)
+
+    def test_delegates_pdf_and_docx_to_load_cv(self, monkeypatch, tmp_path):
+        from jsa.ingest import text_source
+
+        calls: list = []
+        monkeypatch.setattr(text_source, "load_cv", lambda p: calls.append(p) or "extracted")
+        pdf_file = tmp_path / "resume.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4")
+        assert text_source.load_text_source(pdf_file) == "extracted"
+        assert calls == [pdf_file]
+
+
+# ---------------------------------------------------------------------------
 # prompts/loader tests
 # ---------------------------------------------------------------------------
 

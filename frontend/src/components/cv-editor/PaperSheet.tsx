@@ -12,6 +12,7 @@
 // colors/fonts via `style`. ContentInput itself is left untouched.
 import type { CSSProperties } from "react";
 import { useEditorStore } from "../../editorStore";
+import { useCvChatStore, type ChatScope } from "../../cvChatStore";
 import { useT } from "../../i18n/useT";
 import { chamferPath, cornerMarks } from "../../theme/chrome";
 import { Icon } from "../../theme/Icon";
@@ -20,6 +21,7 @@ import type { EditorSection } from "../../types";
 import { DateRangeField } from "./DateRangeField";
 import { allLocations, useRecentLocations } from "./locationHistory";
 import { AutoTextarea } from "./ui";
+import { chatAnchorRef } from "../../lib/chatAnchors";
 
 const LOCATION_LIST_ID = "cv-locations-list";
 
@@ -90,6 +92,45 @@ function lightToolBtn({
       }}
     >
       <Icon name={icon} size={14} />
+    </button>
+  );
+}
+
+// Paper surfaces are NOT chamfered (no clipPath -- see the module docstring), so this pill
+// can sit directly inside its section/entry's own `position: relative` wrapper, unlike the
+// Blocks view's ChatCorner (see ChatCorner.tsx's docstring for that trap).
+function PaperChatDot({ scope }: { scope: ChatScope }) {
+  const t = useT();
+  const openChat = useCvChatStore((s) => s.openChat);
+  return (
+    <button
+      type="button"
+      className="aitrig"
+      data-testid="chat-corner-trigger"
+      onClick={(e) => {
+        e.stopPropagation();
+        openChat(scope);
+      }}
+      title={t("cvChat.triggerTitle")}
+      style={{
+        position: "absolute",
+        top: -4,
+        right: -34,
+        zIndex: 2,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 22,
+        height: 22,
+        borderRadius: "50%",
+        background: PA.surface,
+        border: `1px solid ${PA.a}`,
+        color: PA.a,
+        cursor: "pointer",
+        boxShadow: "0 1px 4px rgba(0,0,0,.15)",
+      }}
+    >
+      <Icon name="chat" size={11} />
     </button>
   );
 }
@@ -208,8 +249,15 @@ function PaperBody({
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 4 }}>
           {section.entries.map((e) => {
             const showSub = e.subheading !== undefined || section.kind !== "projects";
+            const entryScope: ChatScope = { type: "entry", sectionId: section.id, entryId: e.id };
             return (
-              <div key={e.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div
+                key={e.id}
+                className="cvunit"
+                ref={chatAnchorRef(entryScope)}
+                style={{ display: "flex", flexDirection: "column", gap: 2, position: "relative" }}
+              >
+                <PaperChatDot scope={entryScope} />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
                   <input
                     className="cvf cvf-paper"
@@ -392,7 +440,8 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
         return (
           <div
             key={s.id}
-            className="cvsec cvpapersec"
+            className="cvsec cvpapersec cvunit"
+            ref={chatAnchorRef({ type: "section", sectionId: s.id })}
             onClick={selectable ? () => st.setSelected(s.id) : undefined}
             style={{
               position: "relative",
@@ -405,6 +454,7 @@ export function PaperSheet({ selectable = false }: { selectable?: boolean }) {
               cursor: selectable ? "pointer" : "default",
             }}
           >
+            <PaperChatDot scope={{ type: "section", sectionId: s.id }} />
             <div style={{ marginBottom: 7 }}>
               <input
                 className="cvf cvf-paper"

@@ -1622,3 +1622,146 @@ curl http://localhost:8765/api/jobs        # should return []
 cd frontend && npm run dev
 # Open http://localhost:5173 in a browser
 ```
+
+---
+
+## CV-editor AI chat
+
+A scoped, chat-driven editing feature over the base-CV editor (`frontend/src/components/
+cv-editor/`): a corner trigger per editable unit (identity card, section, entry, skills
+group, whole CV) opens an anchored panel where the user types an instruction, picks a
+quick action, or drops a file; the model proposes a field-level diff; the user applies or
+discards it into the editor's live buffer. `SAVE` remains the only thing that writes to
+disk. Full design rationale, phase-by-phase implementation, and the Change Log live in
+`.claude/plans/see-this-design-hand-off-harmonic-nygaard.md` — this section records only
+the load-bearing decisions a future change is likely to violate by accident.
+
+### Why this does NOT port `jsa/pipeline/tool_loop.py`
+
+Three independent constraints, each sufficient alone, rule out reusing the revision tool
+loop for the chat:
+
+1. **`tools_for(stage)` raises `ValueError` outside `revising_cv`/`revising_cl`**
+   (`jsa/agents/tool_spec.py`). A job-less chat has no such stage; passing one anyway
+   would be a lie that also silently hands the chat the whole revision vocabulary.
+2. **Tool mode never streams** — `tool_loop.py` passes no `on_chunk`/`on_retry` by
+   construction, grep-pinned by `tests/backend/test_tools_doc_sync.py`. The chat's
+   REASONING card is fed by `AgentChunk(kind="reasoning")`. Irreconcilable.
+3. **`claude-cli`, the chat's default backend, cannot reach either tool rung** — it has
+   `supports_native_tools = False` and `restore_applies_system_prompt = False`, so
+   `stages.py::_tools_for` returns `None` and the ladder is skipped entirely.
+
+The actual precedent is `jsa/pipeline/infer_structure.py::run_infer` — the repo's only
+other job-less model call. `jsa/pipeline/cv_chat.py::run_cv_chat` is that same shape
+(fresh `start_session`, structured mode off the backend instance, no self-heal budget)
+plus conversation history. What's reused from the tool machinery is `jsa/schema/
+patch.py`'s `CvWorkingCopy` as the op applier — the model emits an ops array in one
+reply instead of a multi-turn tool loop.
+
+### Locked decisions (D1–D7)
+
+- **D1 — Addressing.** Editor ids are client-only and re-minted on every save/deck-switch/
+  import, so they must never round-trip to the model. The model addresses the `s1…sN`/
+  `e1…eN` ids `CvWorkingCopy` mints in document order (the same dump the revision loop's
+  `get_cv` tool returns); those ids are valid for one turn only and never leave the server.
+- **D2 — The daemon sees the editor BUFFER, not the deck file.** The request body carries
+  the current in-memory `CVDocument`. Reading the deck file would silently feed the model
+  a stale document whenever there are unsaved edits.
+- **D3 — Apply is a whole-document replace, not per-op field patching.** Ops like
+  `replace_section`/`add_entry` retire/mint ids in ways that don't map back to frontend
+  ids position-by-position, so the server returns the finalized `CVDocument` and the
+  frontend reconciles it into the live `EditorCV` (`reconcileIds`, reusing ids only where
+  positions align, purely for React keys/drag/selection) through **one**
+  `applyAiDocument`/`applyEdit(next, false)` call — one undo entry per turn.
+- **D4 — Staleness is checked once, on the whole buffer, via `base_hash`.** A mismatch at
+  apply time marks the card `STALE` with a re-run affordance instead of writing.
+  **Auto-mode must refuse to auto-apply a stale diff** and fall back to a `PROPOSED`
+  card — this is the one path in the feature that can lose user work if gotten wrong.
+  `cvChatStore.ts::send` checks freshness (`hashCv(exportJson(currentCv)) === baseHash`)
+  before auto-applying; on mismatch the turn is marked `stale`, never auto-applied.
+- **D5 — Scope restricts what may CHANGE, never what the model may SEE.** Every scope —
+  including `contact` and a single `entry` — gets the model the **whole** `get_cv()` dump
+  in the user message, with the scoped node marked `◀ EDITABLE`. Enforcement is
+  three-layered: the schema's `op` enum is narrowed per scope (provider-enforced),
+  `PROMPT_CV_CHAT.md` states the rule in prose, and the **authoritative** gate is a
+  server-side structural diff of the submitted document against the finalized one — any
+  changed path outside scope is a hard `ChatError`, never a silent partial apply. Do not
+  "optimize" the prompt into a scope-only slice — `finalize()` validates a whole
+  `CVDocument`, and the design's own quality claims ("quantify from numbers already in
+  your CV") require the rest of the document to be visible.
+- **D6 — `replace_contact` does NOT join `CV_TOOL_SPECS`.** `tools_for(revising_cv)`
+  returns `CV_TOOL_SPECS + SHARED_TOOL_SPECS`, so adding a member there would silently
+  widen the live job-revision vocabulary with no parity test pinning the old behavior. A
+  separate `CV_CHAT_OP_SPECS` tuple exists instead (`CV_TOOL_SPECS + (_REPLACE_CONTACT,)`
+  in `jsa/agents/tool_spec.py`); `tools_for` itself is untouched, and `CvWorkingCopy.
+  replace_contact` is purely additive — nothing on the revision path calls it.
+- **D7 — The turn runs in-request** (mirroring `run_infer`), streaming reasoning over the
+  existing `/ws` socket, persisting the completed turn before returning. A `claude-cli`
+  turn can hold the HTTP request for minutes; acceptable for a single-user, local-only
+  tool with no proxy — a dropped connection still completes and persists, recoverable by
+  re-`GET`ting the thread.
+
+### The `clipPath`/corner-pill trap
+
+`panelBase()` (the editor's chamfered-card styling) sets a `clipPath` that clips its
+descendants. The corner `EDIT`/chat pill sits at `top: -10`, **outside** the card's own
+edge — so if it is mounted as a descendant of the chamfered card, the `clipPath` silently
+clips it away with no error. The fix is structural, not a z-index/overflow tweak: `
+ChatCorner`/`PaperChatDot` must be mounted as a **sibling** of the chamfered card inside a
+`position: relative` wrapper, never as a descendant. `SectionCard` already has an outer
+wrapper to reuse; `ContactCard` and `EntryEditor` are bare chamfered divs and need one
+added. Paper surfaces (`PaperSheet.tsx`) are *not* chamfered (plain `border-radius`, no
+`clipPath`), so they have no version of this trap and use a lighter `PaperChatDot`
+instead of the shared `ChatCorner`. If a future chamfered surface gets a corner trigger
+and the pill silently stops rendering, check this first before suspecting CSS specificity
+or `overflow: hidden`.
+
+### Other non-obvious invariants
+
+- **Job-less, no DB row.** The thread is a JSON file beside the deck store
+  (`jsa/store/deck_chats.py`, `Settings.deck_chats_dir`), not a `Job`. There is no
+  `orchestrator.kick()` call anywhere on this path — it touches no deck file and no job.
+- **Attachment text is read-only context, never persisted.** `deck_chats.py`'s `ChatTurn.
+  files` stores only `{name, size}`; the extracted text lives only for the one turn that
+  used it, so the thread file cannot grow into an unbounded document store.
+- **History is rendered into the user message, not replayed via `restore_session`.**
+  Every chat turn gets a fresh `start_session`, sidestepping `claude-cli`'s
+  `restore_applies_system_prompt = False` entirely and needing no persisted `external_id`.
+- **The CV dump, history, and attachment text share one context budget**, trimmed in
+  priority order: attachments truncate first, then history (last 8 turns, then fewer);
+  the CV dump is never trimmed, since the ids in it are what every op addresses.
+- **`chat_backend` is independent of `backends[0]`** (`Settings.chat_backend`, default
+  `claude-cli`) — the editor chat is interactive and short-lived; the pipeline's BF-19
+  fallback chain is a different concern and is not reused here.
+- **An op's object argument must be a TYPED MODEL, never `dict[str, Any]`.**
+  `CvChatOp.section`/`entry`/`contact` are `ChatSection`/`ChatEntry`/`ChatContact`
+  (`jsa/schema/chat_turn.py`), mirroring the hand-written `_SECTION_SCHEMA`/
+  `_ENTRY_SCHEMA`/`_REPLACE_CONTACT` that `tool_spec.py` already uses on the revision
+  path. Pydantic renders a bare `dict[str, Any]` as `{"type": "object"}` with **no**
+  `properties`, and `inline_defs` then strips the `additionalProperties` that was its
+  only other key — an object schema declaring no properties has exactly one valid
+  completion under constrained decoding, `{}`. Every structured `replace_contact`/
+  `replace_section`/`replace_entry` came back empty while the model's `answer` described
+  the edit as done (confirmed live, Gemini, 2026-09-16). Same class as commit `c51592d`.
+- **`ChatContact` is the one defaulted-AND-nullable model, and `links: list[str] | None`
+  is load-bearing.** `replace_contact` is a partial update ("an omitted key leaves the
+  existing value alone"), so `cv_chat.py`'s `_OP_DISPATCH` dumps it with
+  `exclude_none=True` — **only there**; the entry/section ops are whole-object replaces
+  and dump plainly. Because `inline_defs` forces every property into `required`, a
+  non-nullable `links` would compel the model to emit `[]`, which `exclude_none` does not
+  strip, silently clearing the user's links on every "fix the email" turn. Consequence to
+  keep in sync: `exclude_none` also removes `null`'s old "clear this field" meaning, so
+  the clear affordance is `""` for scalars and `[]` for `links` — documented in
+  `PROMPT_CV_CHAT.md` and pinned in `test_cv_chat_ops.py`. Do not "align" this model with
+  `_REPLACE_CONTACT`, whose shape is tuned for the native tool-call path.
+- **`_render_cv_dump` must render EVERY field `ChatEntry` accepts.** `replace_entry`/
+  `add_entry` replace the whole entry, so a field the model was never shown is a field it
+  cannot restate. The dump originally omitted `dates`/`location`/`text`/`links`, and "add
+  the location, keep everything else the same" came back with `dates: null`, wiping it
+  (confirmed live, 2026-09-17). Adding a field to `ChatEntry` means adding it here too.
+- **`PROMPT_CV_CHAT.md`'s JSON shape examples are the whole fix in sentinel mode** —
+  `claude-cli` (the default `chat_backend`) is handed no schema at all, so the prompt is
+  the only channel that teaches these shapes. The models are `extra="forbid"`, so a
+  typo'd field name in an example would hard-fail every turn that copies it faithfully;
+  `test_cv_chat_ops.py::TestPromptExamplesStayValid` parses the examples out of the
+  prompt and validates them as a drift guard.

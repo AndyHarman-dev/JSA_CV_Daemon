@@ -10,11 +10,14 @@ _NAME_TO_FILE: dict[str, str] = {
     "cover_letter": "CVL_PROMPT.md",
     "fit_assessment": "PROMPT_FIT_ASSESSMENT.md",
     "infer_structure": "PROMPT_INFER_STRUCTURE.md",
+    "cv_chat": "PROMPT_CV_CHAT.md",
 }
 
 
 def read_prompt(
-    name: Literal["cv_adjust", "cover_letter", "fit_assessment", "infer_structure"],
+    name: Literal[
+        "cv_adjust", "cover_letter", "fit_assessment", "infer_structure", "cv_chat"
+    ],
 ) -> str:
     """Read a prompt file from disk and return its contents as a string.
 

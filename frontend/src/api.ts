@@ -7,13 +7,41 @@ import type {
   CvDeckDTO,
   PromptInjectionDTO,
   InjectionPresetDTO,
+  ChatTurnDTO,
 } from "./types";
+
+/** Pull FastAPI's `detail` out of an error body, falling back to the raw text.
+ *
+ * `detail` is occasionally a list (a 422 from request-model validation, as opposed to
+ * the hand-raised `HTTPException(detail=str)` the chat routes use), so a non-string
+ * `detail` falls through to the raw body rather than rendering `[object Object]`.
+ * Exported for the unit test; not part of the `api` surface. */
+export function errorMessage(status: number, body: string): string {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === "object" && "detail" in parsed) {
+      const detail = (parsed as { detail: unknown }).detail;
+      if (typeof detail === "string" && detail.trim()) return detail;
+    }
+  } catch {
+    // Not JSON — fall through to the raw body below.
+  }
+  return `HTTP ${status}: ${body}`;
+}
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`HTTP ${response.status}: ${body}`);
+    // FastAPI errors are `{"detail": "..."}`. Surfacing the raw body meant a plain
+    // misconfiguration reached the user as `HTTP 422: {"detail":"backend error: gemini
+    // API error: Method doesn't allow unregistered callers ..."}` — reported as
+    // "gemini failed with HTTP request" when the real cause (an unexported
+    // GEMINI_API_KEY) was spelled out inside the blob. Prefer `detail`; fall back to
+    // the raw text so a non-JSON body or a differently-shaped error still says
+    // something, and keep the status prefix in that fallback since it is then the only
+    // machine-readable part left.
+    throw new Error(errorMessage(response.status, body));
   }
   // 204 No Content (DELETE /api/cv-decks/{id}) has an empty body, and `Response.json()`
   // rejects on that — which would turn a *successful* delete into a thrown SyntaxError and
@@ -271,6 +299,43 @@ export const api = {
       "/api/cv-structure/infer",
       { method: "POST", body: form }
     );
+  },
+
+  // --- CV-editor AI chat (job-less, per-deck thread) ---
+
+  async getDeckChat(deckId: string): Promise<{ turns: ChatTurnDTO[] }> {
+    return apiFetch<{ turns: ChatTurnDTO[] }>(
+      `/api/cv-decks/${encodeURIComponent(deckId)}/chat`
+    );
+  },
+
+  // multipart, mirroring inferCvStructure: `payload` is the JSON scope/instruction/cv/
+  // base_hash blob as one Form field, `files` are optional read-only attachments. No
+  // `Content-Type` header -- the browser sets the multipart boundary.
+  async sendDeckChat(
+    deckId: string,
+    payload: {
+      scope: Record<string, unknown>;
+      instruction?: string | null;
+      quick_action?: string | null;
+      cv: CVDocument;
+      base_hash: string;
+    },
+    files: File[]
+  ): Promise<{ task_id: string; turns: ChatTurnDTO[]; rejected: string[] }> {
+    const form = new FormData();
+    form.append("payload", JSON.stringify(payload));
+    for (const f of files) form.append("files", f);
+    return apiFetch<{ task_id: string; turns: ChatTurnDTO[]; rejected: string[] }>(
+      `/api/cv-decks/${encodeURIComponent(deckId)}/chat`,
+      { method: "POST", body: form }
+    );
+  },
+
+  async clearDeckChat(deckId: string): Promise<void> {
+    await apiFetch<void>(`/api/cv-decks/${encodeURIComponent(deckId)}/chat`, {
+      method: "DELETE",
+    });
   },
 
   health(): Promise<{ ok: boolean }> {

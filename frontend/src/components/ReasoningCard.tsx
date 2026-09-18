@@ -18,20 +18,29 @@
 // applies to a settled card (where the user opened it deliberately to read the thing).
 import { useState } from "react";
 import { useT } from "../i18n/useT";
-import { SHELL_THEME } from "../theme/tokens";
+import { SHELL_THEME, type Theme } from "../theme/tokens";
 import { Icon } from "../theme/Icon";
 import { panelBase, Spinner } from "../theme/chrome";
 import { segmentReasoning, type ReasoningStep } from "../lib/reasoningSteps";
 import { mergeToolSteps, type ToolMark } from "../lib/mergeToolSteps";
 
-const T = SHELL_THEME;
-
 export const LIVE_STEP_WINDOW = 5;
 
 // Exported so the settled-turn renderer (AgentThread.tsx's TurnBubble) can render its
 // persisted tool rows through the exact same row/separator idiom live rows use.
-export function StepRow({ step, active, last }: { step: ReasoningStep; active: boolean; last: boolean }) {
+export function StepRow({
+  step,
+  active,
+  last,
+  theme = SHELL_THEME,
+}: {
+  step: ReasoningStep;
+  active: boolean;
+  last: boolean;
+  theme?: Theme;
+}) {
   const t = useT();
+  const T = theme;
   return (
     <div
       data-testid={step.kind === "tool" ? "reasoning-tool-step" : "reasoning-step"}
@@ -112,12 +121,15 @@ export function ReasoningCard({
   reasoning,
   running,
   tools = [],
+  theme = SHELL_THEME,
 }: {
   reasoning: string;
   running: boolean;
   tools?: ToolMark[];
+  theme?: Theme;
 }) {
   const t = useT();
+  const T = theme;
   const [expanded, setExpanded] = useState(running);
   const [showAll, setShowAll] = useState(false);
 
@@ -235,6 +247,7 @@ export function ReasoningCard({
               step={step}
               active={steps.length - visible.length + i === activeIndex}
               last={i === visible.length - 1}
+              theme={T}
             />
           ))}
         </div>

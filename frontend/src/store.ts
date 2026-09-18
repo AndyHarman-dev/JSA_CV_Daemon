@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import { api } from "./api";
 import { useEditorStore, detailOf } from "./editorStore";
+import { useCvChatStore } from "./cvChatStore";
 
 interface BackendSwitchEvent {
   job_id: string;
@@ -380,6 +381,13 @@ export const useStore = create<Store>((set, get) => ({
           const { [e.job_id]: _, ...rest } = state.streamBuffers;
           return { streamBuffers: rest };
         });
+        break;
+      case "chat_chunk":
+        // CV-editor AI chat — job-less, drives cvChatStore's own live buffer.
+        useCvChatStore.getState().onChunk(e);
+        break;
+      case "chat_turn_end":
+        useCvChatStore.getState().onTurnEnd(e);
         break;
     }
   },

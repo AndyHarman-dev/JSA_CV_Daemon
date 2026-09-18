@@ -66,6 +66,14 @@ class Settings(BaseSettings):
                                           # section). Default True must produce a payload
                                           # byte-identical to pre-feature behaviour on any
                                           # backend where caching is a no-op.
+    chat_backend: str = "claude-cli"      # via JSA_CHAT_BACKEND / --chat-backend. The
+                                          # CV-editor AI chat's backend — deliberately
+                                          # independent of backends[0]: the editor chat
+                                          # is interactive and short, the pipeline chain
+                                          # is not.
+    auto_mode: bool = False               # via JSA_AUTO_MODE / --auto-mode. Seeds the
+                                          # CV-editor chat's AUTO toggle default; the
+                                          # user can still flip it per-session in the UI.
     backend_models: Dict[str, str] = {}   # backend name -> selected model ID, seeded from
                                           # backend_models.json at startup and mutated live by
                                           # PUT /api/backend-models. Overrides the flat
@@ -107,6 +115,13 @@ class Settings(BaseSettings):
         """Directory holding one ``CVDocument`` JSON file per deck (filename ``<id>.json``).
         Lives next to the DB, derived from ``db_path`` the same way ``cv_decks_path`` is."""
         return self.db_path.parent / "cv_decks"
+
+    @property
+    def deck_chats_dir(self) -> Path:
+        """Directory holding one persisted CV-editor chat thread JSON file per deck
+        (filename ``<deck_id>.json``). Lives next to the DB, derived from ``db_path``
+        the same way ``cv_decks_dir`` is."""
+        return self.db_path.parent / "deck_chats"
 
     @property
     def injection_presets_path(self) -> Path:
@@ -151,4 +166,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"Unknown backend(s): {invalid}. Available: {available}"
             )
+        return v
+
+    @field_validator("chat_backend")
+    @classmethod
+    def _validate_chat_backend(cls, v: str) -> str:
+        """Same registry-membership rule as ``backends`` — a mistyped
+        ``--chat-backend`` should fail at startup, not at the first chat turn."""
+        from jsa.agents.registry import _REGISTRY  # noqa: PLC0415
+        if v not in _REGISTRY:
+            available = ", ".join(sorted(_REGISTRY.keys())) or "(none registered)"
+            raise ValueError(f"Unknown chat_backend: {v!r}. Available: {available}")
         return v

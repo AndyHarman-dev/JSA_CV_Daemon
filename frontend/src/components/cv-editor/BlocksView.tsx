@@ -9,6 +9,9 @@ import { Grip, Icon, type IconName } from "../../theme/Icon";
 import { EDITOR_THEME } from "../../theme/tokens";
 import type { EditorEntry, EditorSection, SectionKind } from "../../types";
 import { AutoTextarea, KIND_CODE, KIND_ICON, KIND_LABEL } from "./ui";
+import { ChatCorner } from "./ChatCorner";
+import { chatAnchorRef } from "../../lib/chatAnchors";
+import { useUnitChatVisualState } from "../../lib/chatUnitState";
 
 const T = EDITOR_THEME;
 
@@ -127,12 +130,28 @@ function ContactCard() {
   const updateContact = useEditorStore((s) => s.updateContact);
   const c = cv.contact;
   const t = useT();
+  const { active, dimmed } = useUnitChatVisualState({ type: "contact" });
 
   return (
     <div
-      className="cvsec"
-      style={{ position: "relative", ...panelBase(T, { chamfer: 16 }), padding: T.pad + 3, marginBottom: T.secGap, boxShadow: T.shadowSm }}
+      className="cvunit"
+      ref={chatAnchorRef({ type: "contact" })}
+      style={{
+        position: "relative",
+        marginBottom: T.secGap,
+        opacity: dimmed ? 0.3 : 1,
+        transition: "opacity .15s",
+      }}
     >
+      <div
+        className="cvsec"
+        style={{
+          position: "relative",
+          ...panelBase(T, { chamfer: 16 }),
+          padding: T.pad + 3,
+          boxShadow: active ? `0 0 0 2px ${T.a}, ${T.shadowSm}` : T.shadowSm,
+        }}
+      >
       {cornerMarks(T, T.bd2)}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <span style={{ font: `600 10.5px ${T.mono}`, letterSpacing: ".16em", color: T.ink3, textTransform: "uppercase" }}>{t("blocksView.identityLabel")}</span>
@@ -155,6 +174,8 @@ function ContactCard() {
         <div style={{ font: `600 11px ${T.disp}`, letterSpacing: ".06em", color: T.ink3, marginBottom: 4 }}>{t("blocksView.channelsLabel")}</div>
         <LinkList links={c.links} onChange={(links) => updateContact({ links })} />
       </div>
+      </div>
+      <ChatCorner scope={{ type: "contact" }} />
     </div>
   );
 }
@@ -376,8 +397,15 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
   const set = (patch: Partial<EditorEntry>) => st.updateEntry(sid, entry.id, patch);
   const idx = section.entries.findIndex((e) => e.id === entry.id);
   const f = ENTRY_FIELDS[section.kind] ?? ENTRY_FIELDS.experience;
+  const entryScope = { type: "entry" as const, sectionId: sid, entryId: entry.id };
+  const { active, dimmed } = useUnitChatVisualState(entryScope);
 
   return (
+    <div
+      className="cvunit"
+      ref={chatAnchorRef(entryScope)}
+      style={{ position: "relative", opacity: dimmed ? 0.3 : 1, transition: "opacity .15s" }}
+    >
     <div
       className="cvsec"
       style={{
@@ -389,6 +417,7 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
         paddingLeft: 14,
         ...panelBase(T, { bg: T.subtle, chamfer: 9 }),
         borderLeft: `2px solid ${T.aBorder}`,
+        boxShadow: active ? `0 0 0 2px ${T.a}` : "none",
       }}
     >
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10, paddingRight: 76 }}>
@@ -473,6 +502,84 @@ function EntryEditor({ section, entry }: { section: EditorSection; entry: Editor
         <ToolBtn icon="trash" size={24} iconSize={13} title={t("blocksView.deleteEntryTitle")} danger onClick={() => st.deleteEntry(sid, entry.id)} />
       </div>
     </div>
+    <ChatCorner scope={entryScope} />
+    </div>
+  );
+}
+
+// --- skills-group row (its own component so useUnitChatVisualState's hook call stays at a
+// stable count regardless of how many skill categories the section holds) --------------
+
+function SkillsRow({
+  sectionId,
+  entryId,
+  heading,
+  bullets,
+}: {
+  sectionId: string;
+  entryId: string;
+  heading?: string;
+  bullets: string[];
+}) {
+  const st = useEditorStore();
+  const t = useT();
+  const entryScope = { type: "entry" as const, sectionId, entryId };
+  const { active, dimmed } = useUnitChatVisualState(entryScope);
+  return (
+    <div
+      className="cvunit"
+      ref={chatAnchorRef(entryScope)}
+      style={{ position: "relative", opacity: dimmed ? 0.3 : 1, transition: "opacity .15s" }}
+    >
+      <div
+        className="cvitem"
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 10,
+          padding: "7px 8px",
+          borderRadius: T.btnRadius,
+          background: T.subtle,
+          border: `1px solid ${T.bd}`,
+          boxShadow: active ? `0 0 0 2px ${T.a}` : "none",
+        }}
+      >
+        <div style={{ flex: "none", width: 132 }}>
+          <input
+            className="cvf cvf-card"
+            style={cardField({ weight: 600, size: 13, pad: "3px 7px" })}
+            value={heading ?? ""}
+            placeholder={t("blocksView.categoryPlaceholder")}
+            onChange={(ev) => st.updateEntry(sectionId, entryId, { heading: ev.target.value })}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 0, paddingTop: 1 }}>
+          <TagEditor tags={bullets} onChange={(next) => st.updateEntry(sectionId, entryId, { bullets: next })} />
+        </div>
+        <button
+          type="button"
+          className="cvih cvbtn"
+          title={t("blocksView.removeCategoryTitle")}
+          onClick={() => st.deleteEntry(sectionId, entryId)}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: T.ink3,
+            cursor: "pointer",
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flex: "none",
+          }}
+        >
+          <Icon name="trash" size={12} />
+        </button>
+      </div>
+      <ChatCorner scope={entryScope} />
+    </div>
   );
 }
 
@@ -555,45 +662,7 @@ function SectionBody({ section }: { section: EditorSection }) {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {section.entries.map((e) => (
-            <div
-              key={e.id}
-              className="cvitem"
-              style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 8px", borderRadius: T.btnRadius, background: T.subtle, border: `1px solid ${T.bd}` }}
-            >
-              <div style={{ flex: "none", width: 132 }}>
-                <input
-                  className="cvf cvf-card"
-                  style={cardField({ weight: 600, size: 13, pad: "3px 7px" })}
-                  value={e.heading ?? ""}
-                  placeholder={t("blocksView.categoryPlaceholder")}
-                  onChange={(ev) => st.updateEntry(section.id, e.id, { heading: ev.target.value })}
-                />
-              </div>
-              <div style={{ flex: 1, minWidth: 0, paddingTop: 1 }}>
-                <TagEditor tags={e.bullets} onChange={(bullets) => st.updateEntry(section.id, e.id, { bullets })} />
-              </div>
-              <button
-                type="button"
-                className="cvih cvbtn"
-                title={t("blocksView.removeCategoryTitle")}
-                onClick={() => st.deleteEntry(section.id, e.id)}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  color: T.ink3,
-                  cursor: "pointer",
-                  width: 24,
-                  height: 24,
-                  borderRadius: 6,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flex: "none",
-                }}
-              >
-                <Icon name="trash" size={12} />
-              </button>
-            </div>
+            <SkillsRow key={e.id} sectionId={section.id} entryId={e.id} heading={e.heading} bullets={e.bullets} />
           ))}
           <button
             type="button"
@@ -663,10 +732,16 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
   const armed = useEditorStore((s) => s.armed);
   const isDrag = dragId === section.id;
   const isOver = overId === section.id && !!dragId && dragId !== section.id;
+  const sectionScope = { type: "section" as const, sectionId: section.id };
+  const { active, dimmed } = useUnitChatVisualState(sectionScope);
 
   // Armed only from the grip (store state, so the `draggable` attribute actually re-renders).
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
+    <div
+      className="cvunit"
+      ref={chatAnchorRef(sectionScope)}
+      style={{ display: "flex", flexDirection: "column", position: "relative", opacity: dimmed ? 0.3 : 1, transition: "opacity .15s" }}
+    >
       <div
         className="cvsec"
         draggable={armed && dragId === section.id}
@@ -688,7 +763,11 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
           position: "relative",
           ...panelBase(T, { chamfer: 14, border: isOver ? T.a : T.bd }),
           padding: T.pad + 1,
-          boxShadow: isOver ? `0 0 0 3px ${T.aSoft2}, 0 0 22px ${T.aSoft2}` : T.shadowSm,
+          boxShadow: isOver
+            ? `0 0 0 3px ${T.aSoft2}, 0 0 22px ${T.aSoft2}`
+            : active
+            ? `0 0 0 2px ${T.a}, ${T.shadowSm}`
+            : T.shadowSm,
           opacity: isDrag ? 0.4 : 1,
           transition: "box-shadow .12s,border-color .12s,opacity .12s",
         }}
@@ -741,6 +820,7 @@ function SectionCard({ section, index, total }: { section: EditorSection; index:
         </div>
         <SectionBody section={section} />
       </div>
+      <ChatCorner scope={sectionScope} />
       <div className="cvgap" style={{ display: "flex", justifyContent: "center", height: T.secGap, alignItems: "center", position: "relative" }}>
         <div className="cvadd">
           <AddButton anchor={section.id} />

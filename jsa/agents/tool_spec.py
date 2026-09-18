@@ -255,6 +255,29 @@ _ASK_USER = _tool(
 SHARED_TOOL_SPECS: tuple[ToolSpec, ...] = (_FINALIZE, _ASK_USER)
 
 
+# CV-editor chat op vocabulary --------------------------------------------------------
+
+_REPLACE_CONTACT = _tool(
+    "replace_contact",
+    "Set one or more identity fields (name, email, phone, location, links). Omitted "
+    "fields are left unchanged.",
+    {
+        "name": _NULLABLE_STRING,
+        "email": _NULLABLE_STRING,
+        "phone": _NULLABLE_STRING,
+        "location": _NULLABLE_STRING,
+        "links": _STRING_ARRAY,
+    },
+    [],
+)
+
+# The CV-editor chat's op vocabulary (jsa/pipeline/cv_chat.py). Deliberately NOT folded
+# into CV_TOOL_SPECS and NOT reachable from tools_for() — adding a member there would
+# silently widen the live job-revision vocabulary with no parity test pinning the old
+# behaviour. See the CV-editor AI chat plan's D6.
+CV_CHAT_OP_SPECS: tuple[ToolSpec, ...] = CV_TOOL_SPECS + (_REPLACE_CONTACT,)
+
+
 def tools_for(stage: Stage) -> tuple[ToolSpec, ...]:
     """The tool vocabulary for ``stage``.
 
@@ -378,6 +401,7 @@ __all__ = [
     "CV_TOOL_SPECS",
     "CL_TOOL_SPECS",
     "SHARED_TOOL_SPECS",
+    "CV_CHAT_OP_SPECS",
     "tools_for",
     "to_anthropic_tools",
     "to_openai_tools",

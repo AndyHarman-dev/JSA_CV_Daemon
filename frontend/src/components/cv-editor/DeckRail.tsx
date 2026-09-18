@@ -6,6 +6,7 @@
 // rail's source of truth for which deck is default.
 import { useRef, useState, type CSSProperties } from "react";
 import { useEditorStore } from "../../editorStore";
+import { useCvChatStore } from "../../cvChatStore";
 import { useT } from "../../i18n/useT";
 import { Icon } from "../../theme/Icon";
 import { EDITOR_THEME } from "../../theme/tokens";
@@ -258,6 +259,21 @@ function DeckRow({
   );
 }
 
+// Keeps the CV chat panel's thread pointed at whatever deck is actually active. The
+// switch-to-an-existing-deck path below already re-hydrates chat inline; newDeck(),
+// duplicateDeck()'s internal switch, and deleteDeck()'s active-deck-deleted fallback
+// all change `activeDeckId` too but have no such call, which used to leave
+// cvChatStore.deckId stale — the next chat turn posted to the WRONG deck's endpoint
+// (using the new deck's live buffer) and any pending diff card then failed the
+// deck-identity guard in cvChatStore.applyTurn on APPLY. Guarded on an actual mismatch
+// so it never re-hydrates (and resets) an already-current, already-open thread.
+async function resyncChatDeck(): Promise<void> {
+  const id = useEditorStore.getState().activeDeckId;
+  if (id && id !== useCvChatStore.getState().deckId) {
+    await useCvChatStore.getState().hydrate(id);
+  }
+}
+
 export function DeckRail() {
   const decks = useEditorStore((s) => s.decks);
   const defaultDeckId = useEditorStore((s) => s.defaultDeckId);
@@ -381,17 +397,32 @@ export function DeckRail() {
                 label={deckLabel(d)}
                 onHoverEnter={() => setHoverId(d.id)}
                 onHoverLeave={() => setHoverId((h) => (h === d.id ? null : h))}
-                onSwitch={() => void switchDeck(d.id)}
+                onSwitch={() => {
+                  void (async () => {
+                    await switchDeck(d.id);
+                    // The chat thread is per-deck (plan's "Thread lifetime" decision) --
+                    // reload it right after the buffer swap, same as the initial mount does.
+                    await useCvChatStore.getState().hydrate(d.id);
+                  })();
+                }}
                 onSetDefault={() => void setDefaultDeck(d.id)}
                 onBeginRename={() => beginRename(d.id, deckLabel(d))}
-                onDuplicate={() => void duplicateDeck(d.id)}
+                onDuplicate={() => {
+                  void (async () => {
+                    await duplicateDeck(d.id);
+                    await resyncChatDeck();
+                  })();
+                }}
                 onDelete={() => {
                   // deleteDeck has no undo and, if this is the active deck, discards any
                   // unsaved edit without a save attempt (saving a deck right before deleting
                   // it would be pointless) — a confirm here is the only safeguard against a
                   // stray click, for both a dirty active deck and any other deck alike.
                   if (window.confirm(t("cvDecks.confirmDelete", { name: deckLabel(d) }))) {
-                    void deleteDeck(d.id);
+                    void (async () => {
+                      await deleteDeck(d.id);
+                      await resyncChatDeck();
+                    })();
                   }
                 }}
                 onRenameDraftChange={setRenameDraft}
@@ -404,7 +435,12 @@ export function DeckRail() {
           <button
             type="button"
             data-testid="deck-new"
-            onClick={() => void newDeck()}
+            onClick={() => {
+              void (async () => {
+                await newDeck();
+                await resyncChatDeck();
+              })();
+            }}
             style={{
               margin: 6,
               marginTop: 0,
