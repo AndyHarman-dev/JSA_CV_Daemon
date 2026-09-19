@@ -22,10 +22,6 @@ const STATUS_META: Record<ClientChatTurn["status"], { label: string; color: stri
   none: { label: "NO CHANGES", color: T.ink3 },
 };
 
-function truncate(s: string, max = 140): string {
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
 export function CvDiffCard({ turn }: { turn: ClientChatTurn }) {
   const t = useT();
   const applyTurn = useCvChatStore((s) => s.applyTurn);
@@ -68,10 +64,28 @@ export function CvDiffCard({ turn }: { turn: ClientChatTurn }) {
       {visible.map((item, i) => (
         <div key={i} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <div style={{ font: `600 10px ${T.mono}`, letterSpacing: ".05em", color: T.ink3 }}>{item.label}</div>
-          <div style={{ font: `400 11.5px/1.45 ${T.mono}`, color: T.danger, textDecoration: "line-through", opacity: 0.75 }}>
-            {truncate(item.before) || "—"}
+          <div
+            style={{
+              font: `400 11.5px/1.45 ${T.mono}`,
+              color: T.danger,
+              textDecoration: "line-through",
+              opacity: 0.75,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {item.before || "—"}
           </div>
-          <div style={{ font: `400 11.5px/1.45 ${T.mono}`, color: T.green }}>{truncate(item.after) || "—"}</div>
+          <div
+            style={{
+              font: `400 11.5px/1.45 ${T.mono}`,
+              color: T.green,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {item.after || "—"}
+          </div>
         </div>
       ))}
       {hiddenCount > 0 && (
