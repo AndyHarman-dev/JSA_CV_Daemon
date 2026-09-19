@@ -1,6 +1,15 @@
 // One turn's proposed/settled diff card in the CV chat thread (design hand-off's
-// "PROPOSED DIFF" card). Shows up to 4 changed fields as BEFORE/AFTER rows, then the
-// status-appropriate action row. The STALE state is new relative to the design (D4): it
+// "PROPOSED DIFF" card). Shows EVERY changed field as a full-text BEFORE/AFTER row, then
+// the status-appropriate action row.
+//
+// Nothing here may abbreviate: no per-field character cap, no visible-item cap. The card is
+// the only thing the user reads before pressing APPLY, so any cut hides part of what that
+// button will write into the editor buffer. Both cuts existed and both were removed — a
+// 140-char `truncate()` on each side, and a 4-item slice with a "+N more changes" line. The
+// panel scrolls (CvChatPanel's `maxHeight`), so length is a scrolling concern, never a
+// truncation one. `whiteSpace: "pre-wrap"` is what makes long text wrap instead of clip.
+//
+// The STALE state is new relative to the design (D4): it
 // replaces APPLY/DISCARD with a short explanation and a RE-RUN affordance, since applying a
 // diff computed against a buffer that has since changed would silently overwrite newer work.
 import { Icon } from "../../theme/Icon";
@@ -10,7 +19,6 @@ import { useCvChatStore } from "../../cvChatStore";
 import { useT } from "../../i18n/useT";
 
 const T = EDITOR_THEME;
-const MAX_VISIBLE_ITEMS = 4;
 
 const STATUS_META: Record<ClientChatTurn["status"], { label: string; color: string }> = {
   pending: { label: "PROPOSED DIFF", color: T.a },
@@ -29,8 +37,6 @@ export function CvDiffCard({ turn }: { turn: ClientChatTurn }) {
   const flashKey = useCvChatStore((s) => s.flashKey);
   const meta = STATUS_META[turn.status];
   const items = turn.items ?? [];
-  const visible = items.slice(0, MAX_VISIBLE_ITEMS);
-  const hiddenCount = items.length - visible.length;
   const flashing = flashKey === turn.id;
   const canAct = turn.status === "pending" && !!turn.document;
 
@@ -61,7 +67,7 @@ export function CvDiffCard({ turn }: { turn: ClientChatTurn }) {
 
       {turn.text && <div style={{ font: `400 12.5px/1.5 ${T.ui}`, color: T.ink2 }}>{turn.text}</div>}
 
-      {visible.map((item, i) => (
+      {items.map((item, i) => (
         <div key={i} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <div style={{ font: `600 10px ${T.mono}`, letterSpacing: ".05em", color: T.ink3 }}>{item.label}</div>
           <div
@@ -88,9 +94,6 @@ export function CvDiffCard({ turn }: { turn: ClientChatTurn }) {
           </div>
         </div>
       ))}
-      {hiddenCount > 0 && (
-        <div style={{ font: `400 10.5px ${T.mono}`, color: T.ink3 }}>+ {hiddenCount} more changes</div>
-      )}
 
       {turn.status === "stale" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

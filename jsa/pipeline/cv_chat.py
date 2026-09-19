@@ -48,7 +48,12 @@ from jsa.schema.patch import CvWorkingCopy
 # the ids in it are what every op addresses).
 _MAX_ATTACHMENT_CHARS = 40_000
 _MAX_HISTORY_TURNS = 8
-_MAX_DIFF_ITEMS = 60
+# NOT a context-budget cap: DiffItems are built AFTER the model turn and go only to the
+# browser, never back into a prompt. It is a runaway guard, and it cuts SILENTLY (no "+N"
+# marker anywhere), so it must stay far above any real CV's changed-field count — the diff
+# card is what the user reads before pressing APPLY, and a dropped item is an edit applied
+# without being shown. It was 60, low enough for a whole-CV rewrite to reach.
+_MAX_DIFF_ITEMS = 500
 
 Publish = Any  # Callable[[dict], Awaitable[None]] — matches infer_structure.py's alias
 
