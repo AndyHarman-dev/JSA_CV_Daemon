@@ -1,5 +1,5 @@
 ---
-status: InProgress
+status: Done
 ---
 
 # CV Editor AI Chat — scoped, chat-driven editing over the base-CV editor
@@ -1625,6 +1625,33 @@ Two weak models still fail on a different class — correct op, wrong field: qwe
 still fails outright. That class is what the one-shot self-heal retry would have caught;
 the user chose enum-narrowing over the retry, so it remains open by decision, not oversight.
 Both models are outside the shipped defaults, all three of which pass.
+
+---
+
+**2026-09-24**: *Context* — document the feature in `README.md` with real screenshots of
+the chat, then merge and close the plan. *Actions* — added a `## CV-editor AI chat` section
+(triggers per surface, scope table with per-scope quick actions, the D5 see-all /
+change-only-the-scope rule, APPLY as one undo step with COMMIT as the only disk write,
+STALE/AUTO, attachment limits from the `_MAX_*` constants, per-deck threads, chat backend
+and model selection) plus the Features bullet, TOC entry, `--chat-backend`/`--auto-mode`
+flag rows, the three `/api/cv-decks/{id}/chat` routes, `chat_chunk`/`chat_turn_end`,
+`PROMPT_CV_CHAT.md`, and the new modules in the project structure. Four screenshots
+(`assets/JSA_CV_AI_CHAT_*.png`) captured with Playwright over CDP from a real turn against a
+scratch instance (isolated `JSA_DB_PATH`, port 8799) seeded with the fictional Daniel Okafor
+CV the other editor shots use. Merged `docs/readme-cv-editor-ai-chat` →
+`feat/cv-editor-ai-chat` → `main` on the user's instruction. *Decisions/friction* —
+OpenRouter's default `nvidia/nemotron-3-nano-30b-a3b` timed out at 300s on a single Summary
+turn with no reasoning streamed, so the captures use `google/gemini-3.5-flash` (~15s, 19
+reasoning steps) and the README says so. The README deliberately does NOT claim a
+file-only send works — the route still 422s on it (Finding C, accepted as-is). Observed but
+not fixed: the app's "Scratch buffer" button (⌘+Space) overlaps the editor's
+`ASK DAEMON · ENTIRE CV` pill in the bottom-right corner. Translations for the `cvChat.*`
+keys are still not generated (the user-directed deferral recorded in the Phase 6 entry).
+*Verification* — verified: every screenshot read back and matched against its alt text;
+the key scan of scratch files, task logs and the staged diff found no copy of the
+user-supplied OpenRouter key; `main`'s tree is identical to `feat/cv-editor-ai-chat`'s
+after the merge (empty `git diff`), so no re-test was needed. Plan marked `Done` on the
+user's confirmation.
 
 ## Decisions Log
 
