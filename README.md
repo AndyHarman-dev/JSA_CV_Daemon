@@ -21,7 +21,7 @@ Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vi
 - Live agent stream: a REASONING card shows the model's thinking as discrete steps while it works, with executed tool calls inline
 - Browser UI with live pipeline progress, PDF document preview, and PDF/DOCX export
 - Standalone CV Structure Editor: infer a structured JSON representation of your base CV from a PDF/DOCX, open a `CVDocument` JSON you already have, or start from a blank structure — and edit it directly. This JSON is what `cv_adjust` tailors per job
-- CV-editor AI chat: click the corner `EDIT` pill on any part of a base CV — the identity card, a section, an entry, a skills group, or the whole CV — ask for a rewrite in plain words or pick a quick action, and review the model's proposed field-level diff before applying it to the editor, where one ⌘Z undoes it. The model can read the whole CV but may only change the part you picked — see [CV-editor AI chat](#cv-editor-ai-chat)
+- CV-editor AI chat: click the corner `EDIT` pill on the identity card, a section, an entry or a skills group (or open the chat on the whole CV), ask for a rewrite in plain words or pick a quick action, and review the model's proposed field-level diff before applying it to the editor, where one ⌘Z undoes it. The model can read the whole CV but may only change the part you picked — see [CV-editor AI chat](#cv-editor-ai-chat)
 - Multiple base CVs ("decks"): keep one deck per profile (backend, data, management…), switch between them in the editor's deck rail, and assign a specific deck to an individual job before launch — that deck is what `fit_assessment` and `cv_adjust` actually read
 - Multi-language output and UI: one global preference drives the pipeline's output language (CV/cover-letter JSON, clarifying questions, change-log, fit-assessment reasons) *and* the frontend's own chrome, picked from a 20-language catalog
 - Eight AI backends: Claude CLI, Google `agy` CLI, Anthropic REST API, OpenCode Zen, Mistral, OpenRouter, Google Gemini REST API, OpenCode-GO — configurable as an ordered fallback chain, each with a runtime-selectable model (no restart) via the header's backend dropdown. A timeout or an unavailable model first tries the next model on the same backend before burning a backend hop
@@ -482,7 +482,7 @@ A trigger opens the chat panel next to its block, joined to it by a dashed line.
   <img src="assets/JSA_CV_AI_CHAT_PROPOSED_DIFF.png" alt="CV editor with the chat panel open beside the Summary section: the other sections are faded, a dashed line joins the panel to the Summary card, and the panel shows a PROPOSED DIFF with the old summary struck through above the rewrite, plus APPLY and DISCARD buttons" width="820">
 </p>
 
-**The model reads the whole CV but can only change the part you picked.** A good rewrite of one bullet draws on the rest of the document, such as numbers mentioned elsewhere or related work, so the model is always given the full CV. Three checks keep it to your selection. The list of edits it is allowed to make is narrowed to that part of the CV. The prompt tells it the same thing. And the server compares the result with what you sent: if anything outside your selection changed, the whole reply is rejected with an error. A reply is never partly applied.
+**The model reads the whole CV but can only change the part you picked.** A good rewrite of one bullet draws on the rest of the document, such as numbers mentioned elsewhere or related work, so the model is always given the full CV. Three checks keep it to your selection. The list of edits it is allowed to make is narrowed to that part of the CV. The prompt tells it the same thing. And the server compares the result with what you sent: if anything outside your selection changed, the whole reply is rejected with an error, so an out-of-bounds edit is never partly applied.
 
 | Selection | Opened from | What the model may change | Quick actions |
 |---|---|---|---|
@@ -512,12 +512,18 @@ More details:
 - **Each deck keeps its own saved chat history.** It lives in `~/.jsa/deck_chats/<deck-id>.json`, which keeps the latest 60 messages. The history comes back when you reopen the editor, and changes when you switch decks. The ↻ button in the panel header clears it.
 - **You're told when an edit was skipped.** If one change in a reply can't be made, for example because it points at an entry that doesn't exist, the rest of the diff still comes through and the panel lists what was skipped. It won't report success for an edit that didn't happen.
 
-**Which backend runs the chat.** The chat has its own backend setting, `--chat-backend` (`JSA_CHAT_BACKEND`, default `claude-cli`), separate from the pipeline's `--backends` chain. It is read once at launch, so changing it needs a restart. The chat uses whichever model is selected for that backend. The header's backend dropdown only lists backends in your `--backends` chain, so if the chat backend isn't in that chain, it runs on that backend's default model. For an API backend, export its key in the same shell that launches `jsa`:
+**Which backend runs the chat.** The chat has its own backend setting, `--chat-backend` (`JSA_CHAT_BACKEND`, default `claude-cli`), separate from the pipeline's `--backends` chain. It is read once at launch, so changing it needs a restart. The chat uses the model currently selected for that backend, so a selection made while `jsa` is running takes effect on the next message. If the chat backend is in your `--backends` chain, choose its model from the header's backend dropdown. The dropdown only lists backends in that chain, so for any other backend, set the model with its `JSA_*_MODEL` environment variable at launch, or with `PUT /api/backend-models` while `jsa` is running. For an API backend, also export its key in the same shell that launches `jsa`:
 
 ```bash
 export OPENROUTER_API_KEY=...
-jsa --csv jobs.csv --chat-backend openrouter
+JSA_OPENROUTER_MODEL=google/gemini-3.5-flash jsa --csv jobs.csv --chat-backend openrouter
+
+# or switch the model while jsa is running:
+curl -X PUT localhost:8765/api/backend-models -H 'Content-Type: application/json' \
+  -d '{"backend": "openrouter", "model": "google/gemini-3.5-flash"}'
 ```
+
+The model matters more here than in the pipeline, because you are waiting on each reply. When the screenshots were taken, OpenRouter's default model (`nvidia/nemotron-3-nano-30b-a3b`) timed out after 300 seconds on a single Summary edit, while `google/gemini-3.5-flash` replied in about 15 seconds.
 
 Backends that support structured output are given a schema limited to your selection. `claude-cli` uses the same sentinel reply format as the job pipeline. The screenshots above use `--chat-backend openrouter` with `google/gemini-3.5-flash`. The set of edits the model can make is listed in [`docs/TOOLS.md`](docs/TOOLS.md#cv-editor-chat-vocabulary).
 
