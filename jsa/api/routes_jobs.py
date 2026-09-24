@@ -9,10 +9,11 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from jsa.api.routes_cv_decks import _deck_dict
 from jsa.api.transcript import build_transcript
 from jsa.db import repo
 from jsa.db.models import Document, FollowUp, Job, JobState, Message, RevisionRequest, Stage
@@ -24,8 +25,10 @@ from jsa.events.schema import (
     TranscriptChangedEvent,
     event_to_dict,
 )
+from jsa.pipeline.infer_structure import _concise_reason
 from jsa.pipeline.state_machine import set_current_stage, transition
 from jsa.render.registry import renderer_for
+from jsa.schema import CVDocument
 from jsa.schema.injection import PromptInjection, parse_injection
 from jsa.store import cv_decks
 from jsa.store import preferences as preferences_store
@@ -389,6 +392,58 @@ async def approve_cv_job(request: Request, job_id: str):
     request.app.state.orchestrator.kick()
 
     return {"pdf_path": cv_pdf_path, "docx_path": cv_docx_path}
+
+
+@router.post("/api/jobs/{job_id}/save-cv-as-deck", status_code=201)
+async def save_cv_as_deck(request: Request, job_id: str) -> dict:
+    """Copy the job's latest tailored CV into a brand-new base CV (deck).
+
+    Gated on "a cv_adjust Document exists", not on a list of job states — a CV can already
+    exist in running/awaiting_input (cover-letter lane), failed, dismissed, etc., and it
+    cannot exist before cv_adjust's first FINAL. It is a pure copy: the job is not written
+    and its state does not change, so the ReviewPane that calls this may be read-only.
+
+    Always a NEW deck (repeat saves mint more decks), never made the default unless it is
+    the very first one (see ``cv_decks.create_deck_from_cv``). Named "{company} · {role}"
+    because a deck's ``auto_title`` is ``cv.contact.name``, which a tailored CV shares with
+    the base CV it came from — without a name the two would be indistinguishable in the rail.
+
+    Re-validated with the same context-free ``CVDocument`` gate as ``PUT
+    /api/cv-decks/{id}``, so anything saved here can also be re-saved from the editor.
+    """
+    sf = _session_factory(request)
+    async with sf() as session:
+        job = await repo.get_job(session, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+        # Version desc — the latest is what ReviewPane previews.
+        cv_docs = await repo.get_documents(session, job_id, stage=Stage.cv_adjust)
+        if not cv_docs:
+            raise HTTPException(
+                status_code=404, detail=f"Job {job_id!r} has no tailored CV yet"
+            )
+        structured = cv_docs[0].structured
+        name = " · ".join(p for p in (job.company.strip(), job.role.strip()) if p) or None
+
+    if structured is None:
+        # Pre-structured-output rows stored only markdown, which cannot be turned back
+        # into a CVDocument without a model call.
+        raise HTTPException(
+            status_code=409,
+            detail="This CV was stored without its structured form and cannot be saved as a base CV",
+        )
+    try:
+        cv = CVDocument.model_validate_json(structured)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_concise_reason(exc)) from exc
+
+    settings = request.app.state.settings
+    meta = await cv_decks.create_deck_from_cv(settings, cv, name=name)
+    index = await cv_decks.load_index(settings)
+    # Every deck write kicks: with zero decks the base-CV gate is holding jobs `pending`,
+    # and this may be the deck that unblocks them.
+    request.app.state.orchestrator.kick()
+    return {"deck": _deck_dict(meta, index.default_id)}
 
 
 @router.post("/api/jobs/{job_id}/revise")

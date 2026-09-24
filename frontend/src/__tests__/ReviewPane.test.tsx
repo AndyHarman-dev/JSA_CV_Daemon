@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { ReviewPane } from "../components/ReviewPane";
 import { api } from "../api";
 import { useStore } from "../store";
-import type { JobDTO, FullJobDTO } from "../types";
+import type { DocumentDTO, JobDTO, FullJobDTO } from "../types";
 
 vi.mock("../api", () => ({
   api: {
@@ -13,6 +13,8 @@ vi.mock("../api", () => ({
     approveCv: vi.fn(),
     revise: vi.fn(),
     getJobs: vi.fn().mockResolvedValue([]),
+    saveCvAsDeck: vi.fn(),
+    listCvDecks: vi.fn().mockResolvedValue({ decks: [], default_id: null }),
   },
 }));
 
@@ -335,6 +337,118 @@ describe("ReviewPane", () => {
 
       await screen.findByRole("button", { name: /approve & export/i });
       expect(screen.queryByText(/job posting/i)).not.toBeInTheDocument();
+    });
+  });
+
+  // Gated on "a cv_adjust Document exists", never on job state — so it must also show while
+  // the pane is read-only, and never before the CV is written.
+  describe("SAVE AS BASE CV", () => {
+    const cvDoc: DocumentDTO = {
+      id: 1,
+      job_id: "job1",
+      stage: "cv_adjust",
+      version: 2,
+      markdown: "# CV",
+      pdf_path: "/out/acme/cv.pdf",
+      docx_path: "/out/acme/cv.docx",
+    };
+
+    function withCvDoc(overrides: Partial<JobDTO> = {}) {
+      (api.getJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...makeFullJob(overrides),
+        documents: [cvDoc],
+      });
+    }
+
+    it("saves the CV as a new deck, refreshes the deck list, and confirms with its name", async () => {
+      const user = userEvent.setup();
+      withCvDoc();
+      (api.saveCvAsDeck as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "d".repeat(32),
+        name: "Acme · Engineer",
+        auto_title: "Jane Doe",
+        has_cv: true,
+        is_default: false,
+        in_use_by: 0,
+      });
+      useStore.setState({ jobs: { job1: makeJob({ state: "review" }) }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" />);
+
+      await user.click(await screen.findByRole("button", { name: /save as base cv/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/saved as base cv “Acme · Engineer”/i)).toBeInTheDocument();
+      });
+      expect(api.saveCvAsDeck).toHaveBeenCalledWith("job1");
+      expect(api.listCvDecks).toHaveBeenCalled();
+      expect(useStore.getState().cvStructureExists).toBe(true);
+      // A pure copy — it must not approve anything.
+      expect(api.approve).not.toHaveBeenCalled();
+    });
+
+    it("shows the server's error when the save fails", async () => {
+      const user = userEvent.setup();
+      withCvDoc();
+      (api.saveCvAsDeck as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("This CV was stored without its structured form")
+      );
+      useStore.setState({ jobs: { job1: makeJob({ state: "review" }) }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" />);
+
+      await user.click(await screen.findByRole("button", { name: /save as base cv/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/stored without its structured form/i)).toBeInTheDocument();
+      });
+    });
+
+    it("is available while the pane is read-only (a lane is running)", async () => {
+      withCvDoc({ state: "running", current_stage: "cover_letter" });
+      useStore.setState({
+        jobs: { job1: makeJob({ state: "running", current_stage: "cover_letter" }) },
+        selectedId: "job1",
+      });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      expect(await screen.findByRole("button", { name: /save as base cv/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /approve cv/i })).toBeNull();
+    });
+
+    it("is available on an approved job", async () => {
+      withCvDoc({ state: "approved" });
+      useStore.setState({ jobs: { job1: makeJob({ state: "approved" }) }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" />);
+
+      expect(await screen.findByRole("button", { name: /save as base cv/i })).toBeInTheDocument();
+    });
+
+    it("is hidden before the CV is written (no cv_adjust document)", async () => {
+      useStore.setState({
+        jobs: { job1: makeJob({ state: "running", current_stage: "cv_adjust" }) },
+        selectedId: "job1",
+      });
+
+      render(<ReviewPane jobId="job1" mode="cv-gate" />);
+
+      await waitFor(() => expect(api.getJob).toHaveBeenCalled());
+      await screen.findByText(/cv lane is running/i);
+      expect(screen.queryByRole("button", { name: /save as base cv/i })).toBeNull();
+    });
+
+    it("is hidden on the COVER_LETTER tab", async () => {
+      const user = userEvent.setup();
+      withCvDoc();
+      useStore.setState({ jobs: { job1: makeJob({ state: "review" }) }, selectedId: "job1" });
+
+      render(<ReviewPane jobId="job1" />);
+
+      await screen.findByRole("button", { name: /save as base cv/i });
+      await user.click(screen.getByRole("button", { name: "COVER_LETTER" }));
+      expect(screen.queryByRole("button", { name: /save as base cv/i })).toBeNull();
     });
   });
 });

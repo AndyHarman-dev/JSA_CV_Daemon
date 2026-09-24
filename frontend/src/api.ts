@@ -290,6 +290,16 @@ export const api = {
     await apiFetch<void>(`/api/cv-decks/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
 
+  // Copy a job's latest tailored CV into a brand-new deck named "{company} · {role}".
+  // Never becomes the default (unless it is the first deck); every call mints another deck.
+  async saveCvAsDeck(jobId: string): Promise<CvDeckDTO> {
+    const body = await apiFetch<{ deck: CvDeckDTO }>(
+      `/api/jobs/${encodeURIComponent(jobId)}/save-cv-as-deck`,
+      { method: "POST" }
+    );
+    return body.deck;
+  },
+
   // POST a CV file to infer a structure. Runs synchronously server-side (streams
   // `infer_progress` WS events meanwhile) and resolves with the inferred-but-unsaved CV.
   async inferCvStructure(file: File): Promise<{ task_id: string; structured: CVDocument }> {

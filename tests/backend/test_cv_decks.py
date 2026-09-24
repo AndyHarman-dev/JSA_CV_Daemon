@@ -257,6 +257,65 @@ class TestDuplicate:
             )
 
 
+# --- create from an existing CV (a job's tailored CV -> new base CV) -------------------------
+
+
+class TestCreateDeckFromCv:
+    async def test_creates_a_filled_deck_with_name_and_auto_title(self, tmp_path):
+        settings = _settings(tmp_path)
+        meta = await cv_decks.create_deck_from_cv(
+            settings, CVDocument.model_validate(_VALID_CV), name="Acme · Engineer"
+        )
+        assert meta.name == "Acme · Engineer"
+        assert meta.auto_title == "Jane Doe"
+        assert meta.has_cv is True
+
+        loaded = await cv_decks.load_deck(settings, meta.id)
+        assert loaded == CVDocument.model_validate(_VALID_CV)
+
+        index = await cv_decks.load_index(settings)
+        assert [m.id for m in index.decks] == [meta.id]
+        assert index.decks[0].has_cv is True
+
+    async def test_does_not_take_over_an_existing_default(self, tmp_path):
+        settings = _settings(tmp_path)
+        first = await cv_decks.create_deck(settings)
+        await cv_decks.save_deck(settings, first.id, CVDocument.model_validate(_OTHER_CV))
+
+        meta = await cv_decks.create_deck_from_cv(
+            settings, CVDocument.model_validate(_VALID_CV), name="x"
+        )
+
+        index = await cv_decks.load_index(settings)
+        assert index.default_id == first.id
+        assert [m.id for m in index.decks] == [first.id, meta.id]
+
+    async def test_first_deck_becomes_default(self, tmp_path):
+        """`ensure_default_deck` relies on `default_id is None` meaning "no decks", so the
+        first deck must claim the default no matter which path created it."""
+        settings = _settings(tmp_path)
+        meta = await cv_decks.create_deck_from_cv(
+            settings, CVDocument.model_validate(_VALID_CV)
+        )
+        assert (await cv_decks.load_index(settings)).default_id == meta.id
+        assert await cv_decks.ensure_default_deck(settings) == meta.id
+
+    async def test_failed_write_leaves_no_index_entry(self, tmp_path, monkeypatch):
+        """The reason this is one function and not create_deck + save_deck: a write that
+        fails must not strand an empty slot in the rail."""
+        settings = _settings(tmp_path)
+
+        async def _boom(path, cv):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cv_structure, "write", _boom)
+        with pytest.raises(OSError):
+            await cv_decks.create_deck_from_cv(
+                settings, CVDocument.model_validate(_VALID_CV), name="x"
+            )
+        assert (await cv_decks.load_index(settings)).decks == []
+
+
 # --- delete -----------------------------------------------------------------------------------
 
 

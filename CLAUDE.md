@@ -792,6 +792,27 @@ via `ensure_default_deck` if the index is empty. `POST /api/cv-structure/infer` 
 **unchanged** — it is stateless and deck-agnostic, returning an unsaved structure the
 editor then PUTs into whichever deck is active.
 
+**The editor is no longer the only place decks are created.** `POST
+/api/jobs/{id}/save-cv-as-deck` (ReviewPane's "SAVE AS BASE CV", beside DOWNLOAD) copies a
+job's latest `cv_adjust` `Document.structured` into a brand-new deck via
+`cv_decks.create_deck_from_cv` — one hold of the `"index"` lock, file written before the
+index entry, so a failed write never strands an empty slot (do not "simplify" it into
+`create_deck` + `save_deck`). The **endpoint** is gated on **a `cv_adjust` Document
+existing**, never on a list of job states, and is a pure copy (no job write, no
+transition), so it accepts any state that has one. The **button** is narrower: it lives in
+ReviewPane, which JobDetail mounts only at `cv_review`, `review`, `approved`, and `running`
+with the CV_ADJUST dot selected — so it is unreachable at `awaiting_input`, `cv_done`,
+`failed` and `dismissed` even though a CV can exist there (a header-bar placement was
+considered and deferred). Every call mints another deck (no dedupe, by
+decision), named `"{company} · {role}"` — `auto_title` is `contact.name`, which a tailored
+CV shares with its base CV, so without a name the two are indistinguishable in the rail. It
+never takes over an existing default (only a first-ever deck claims `default_id`, per
+`ensure_default_deck`'s invariant), re-validates with the same context-free `CVDocument`
+gate as `PUT /api/cv-decks/{id}` (422), answers 409 for a legacy Document with no
+`structured` JSON, and `kick()`s like every deck write. The frontend must re-hydrate the
+picker's deck list afterwards (`store.hydrateCvDecks`) — `setEditorOpen(false)` is otherwise
+the only refresh point.
+
 **`cv_structure_exists` on `/api/config` now means "at least one deck has a usable CV"**
 (`bool(await cv_decks.resolve_path(settings, None))`), not `cv_structure_path.exists()`.
 The field name is kept because the frontend store reads it; `cv_deck_count` sits alongside
