@@ -76,10 +76,25 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
   const [approveError, setApproveError] = useState<string | null>(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const downloadRef = useRef<HTMLDivElement>(null);
+  // "Save as base CV" is gated on a cv_adjust Document existing — not on job state — and
+  // is a pure copy (no job write), so it stays available even while this pane is read-only.
+  const [hasCvDoc, setHasCvDoc] = useState(false);
+  const [savingDeck, setSavingDeck] = useState(false);
+  const [savedDeckName, setSavedDeckName] = useState<string | null>(null);
+  const [saveDeckError, setSaveDeckError] = useState<string | null>(null);
+  // JobDetail reuses this instance across job switches (no `key`), so a save that resolves
+  // after the user moved on must not report itself on the next job.
+  const currentJobRef = useRef(jobId);
   const t = useT();
 
   // Close the download menu when clicking outside of it.
   useOutsideClick(downloadRef, showDownloadMenu, () => setShowDownloadMenu(false));
+
+  useEffect(() => {
+    currentJobRef.current = jobId;
+    setSavedDeckName(null);
+    setSaveDeckError(null);
+  }, [jobId]);
 
   // Fetch document paths whenever jobId or state changes.
   // By the time state === "review", the pipeline has already rendered both formats.
@@ -99,6 +114,7 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
           .filter((d) => d.stage === "cover_letter")
           .sort((a, b) => b.version - a.version)[0];
 
+        setHasCvDoc(latestCv !== undefined);
         setCvPaths({
           pdfUrl: toFileUrl(latestCv?.pdf_path),
           docxUrl: toFileUrl(latestCv?.docx_path),
@@ -134,6 +150,31 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
       setApproveError(err instanceof Error ? err.message : String(err));
     } finally {
       setApproving(false);
+    }
+  }
+
+  async function handleSaveAsDeck() {
+    const requestedFor = jobId;
+    setSavingDeck(true);
+    setSaveDeckError(null);
+    setSavedDeckName(null);
+    try {
+      const deck = await api.saveCvAsDeck(requestedFor);
+      // A deck with a CV now exists — clears the zero-decks gate banner, exactly as an
+      // editor save does. And the picker's list must learn about the new deck: until now
+      // the editor was the only place decks were created (see store.setEditorOpen).
+      const st = useStore.getState();
+      st.setCvStructureExists(true);
+      await st.hydrateCvDecks();
+      if (currentJobRef.current === requestedFor) {
+        setSavedDeckName(deck.name ?? deck.auto_title ?? "");
+      }
+    } catch (err) {
+      if (currentJobRef.current === requestedFor) {
+        setSaveDeckError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setSavingDeck(false);
     }
   }
 
@@ -298,120 +339,164 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
         )}
       </div>
 
-      {/* Download button + format popup — shown for both review and approved states */}
-      {!pathsLoading && (activePaths.pdfUrl || activePaths.docxUrl) && (
-        <div style={{ position: "relative", alignSelf: "flex-start" }} ref={downloadRef}>
-          <button
-            type="button"
-            className="jghost"
-            onClick={() => setShowDownloadMenu((open) => !open)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 7,
-              padding: "7px 13px",
-              border: `1px solid ${T.bd2}`,
-              borderRadius: T.btnRadius,
-              background: T.surface,
-              color: T.ink,
-              font: `600 11.5px ${T.disp}`,
-              letterSpacing: ".03em",
-              cursor: "pointer",
-            }}
-          >
-            <Icon name="download" size={13} />
-            {t("reviewPane.downloadButton")}
-            <span
-              style={{
-                color: T.ink3,
-                transform: showDownloadMenu ? "rotate(180deg)" : "none",
-                transition: "transform .12s",
-                display: "flex",
-              }}
-            >
-              <Icon name="chevron" size={9} />
-            </span>
-          </button>
-          {showDownloadMenu && (
-            <div
-              style={{
-                position: "absolute",
-                top: "100%",
-                left: 0,
-                marginTop: 6,
-                width: 210,
-                zIndex: 30,
-                ...panelBase(T, { chamfer: 10 }),
-                boxShadow: T.shadowMd,
-                padding: 5,
-                animation: "jsfade .12s ease",
-              }}
-            >
-              {cornerMarks(T, T.bd2, 8)}
-              <div
+      {/* Artifact actions: DOWNLOAD (+ format popup) and, on the CV tab, SAVE AS BASE CV */}
+      {!pathsLoading && (activePaths.pdfUrl || activePaths.docxUrl || (activeTab === "cv" && hasCvDoc)) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignSelf: "flex-start" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {(activePaths.pdfUrl || activePaths.docxUrl) && (
+              <div style={{ position: "relative" }} ref={downloadRef}>
+                <button
+                  type="button"
+                  className="jghost"
+                  onClick={() => setShowDownloadMenu((open) => !open)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                    padding: "7px 13px",
+                    border: `1px solid ${T.bd2}`,
+                    borderRadius: T.btnRadius,
+                    background: T.surface,
+                    color: T.ink,
+                    font: `600 11.5px ${T.disp}`,
+                    letterSpacing: ".03em",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Icon name="download" size={13} />
+                  {t("reviewPane.downloadButton")}
+                  <span
+                    style={{
+                      color: T.ink3,
+                      transform: showDownloadMenu ? "rotate(180deg)" : "none",
+                      transition: "transform .12s",
+                      display: "flex",
+                    }}
+                  >
+                    <Icon name="chevron" size={9} />
+                  </span>
+                </button>
+                {showDownloadMenu && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "100%",
+                      left: 0,
+                      marginTop: 6,
+                      width: 210,
+                      zIndex: 30,
+                      ...panelBase(T, { chamfer: 10 }),
+                      boxShadow: T.shadowMd,
+                      padding: 5,
+                      animation: "jsfade .12s ease",
+                    }}
+                  >
+                    {cornerMarks(T, T.bd2, 8)}
+                    <div
+                      style={{
+                        font: `600 9.5px ${T.mono}`,
+                        letterSpacing: ".12em",
+                        color: T.ink3,
+                        textTransform: "uppercase",
+                        padding: "5px 9px 6px",
+                      }}
+                    >
+                      {t("reviewPane.chooseFormat")}
+                    </div>
+                    {activePaths.pdfUrl && (
+                      <button
+                        type="button"
+                        className="jbtn"
+                        onClick={() => downloadFormat(activePaths.pdfUrl)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 9,
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "8px 11px",
+                          border: "none",
+                          borderRadius: T.btnRadius,
+                          background: "transparent",
+                          color: T.ink,
+                          font: `500 12.5px ${T.ui}`,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
+                          PDF
+                        </span>
+                        <span>{activeTab === "cv" ? t("reviewPane.cvOption") : t("reviewPane.clOption")} · pdf</span>
+                      </button>
+                    )}
+                    {activePaths.docxUrl && (
+                      <button
+                        type="button"
+                        className="jbtn"
+                        onClick={() => downloadFormat(activePaths.docxUrl)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 9,
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "8px 11px",
+                          border: "none",
+                          borderRadius: T.btnRadius,
+                          background: "transparent",
+                          color: T.ink,
+                          font: `500 12.5px ${T.ui}`,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
+                          DOCX
+                        </span>
+                        <span>{activeTab === "cv" ? t("reviewPane.cvOption") : t("reviewPane.clOption")} · docx</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {activeTab === "cv" && hasCvDoc && (
+              <button
+                type="button"
+                className="jghost"
+                disabled={savingDeck}
+                title={t("reviewPane.saveAsBaseCvTitle")}
+                onClick={() => {
+                  handleSaveAsDeck().catch((err: unknown) => {
+                    console.error("ReviewPane save-as-base-CV error:", err);
+                  });
+                }}
                 style={{
-                  font: `600 9.5px ${T.mono}`,
-                  letterSpacing: ".12em",
-                  color: T.ink3,
-                  textTransform: "uppercase",
-                  padding: "5px 9px 6px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  padding: "7px 13px",
+                  border: `1px solid ${T.bd2}`,
+                  borderRadius: T.btnRadius,
+                  background: T.surface,
+                  color: T.ink,
+                  font: `600 11.5px ${T.disp}`,
+                  letterSpacing: ".03em",
+                  cursor: savingDeck ? "default" : "pointer",
+                  opacity: savingDeck ? 0.6 : 1,
                 }}
               >
-                {t("reviewPane.chooseFormat")}
-              </div>
-              {activePaths.pdfUrl && (
-                <button
-                  type="button"
-                  className="jbtn"
-                  onClick={() => downloadFormat(activePaths.pdfUrl)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 9,
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "8px 11px",
-                    border: "none",
-                    borderRadius: T.btnRadius,
-                    background: "transparent",
-                    color: T.ink,
-                    font: `500 12.5px ${T.ui}`,
-                    cursor: "pointer",
-                  }}
-                >
-                  <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
-                    PDF
-                  </span>
-                  <span>{activeTab === "cv" ? t("reviewPane.cvOption") : t("reviewPane.clOption")} · pdf</span>
-                </button>
-              )}
-              {activePaths.docxUrl && (
-                <button
-                  type="button"
-                  className="jbtn"
-                  onClick={() => downloadFormat(activePaths.docxUrl)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 9,
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "8px 11px",
-                    border: "none",
-                    borderRadius: T.btnRadius,
-                    background: "transparent",
-                    color: T.ink,
-                    font: `500 12.5px ${T.ui}`,
-                    cursor: "pointer",
-                  }}
-                >
-                  <span style={{ font: `600 10px ${T.mono}`, color: T.accent2, width: 36, flex: "none" }}>
-                    DOCX
-                  </span>
-                  <span>{activeTab === "cv" ? t("reviewPane.cvOption") : t("reviewPane.clOption")} · docx</span>
-                </button>
-              )}
-            </div>
+                <Icon name="copy" size={13} />
+                {savingDeck ? t("reviewPane.savingAsBaseCv") : t("reviewPane.saveAsBaseCvButton")}
+              </button>
+            )}
+          </div>
+          {activeTab === "cv" && savedDeckName !== null && (
+            <p style={{ font: `400 12.5px ${T.ui}`, color: T.green, margin: 0 }}>
+              {t("reviewPane.savedAsBaseCv", { name: savedDeckName })}
+            </p>
+          )}
+          {activeTab === "cv" && saveDeckError && (
+            <p style={{ font: `400 12.5px ${T.ui}`, color: T.danger, margin: 0 }}>{saveDeckError}</p>
           )}
         </div>
       )}

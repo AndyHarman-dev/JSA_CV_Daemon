@@ -23,8 +23,8 @@ deleted or rewritten, so it remains an inert backup of the pre-decks state forev
 index file's existence *inside* the lock, immediately before writing -- two concurrent
 first-boot callers (e.g. ``GET /api/config`` and the orchestrator's dispatch gate, both
 on the same event loop) must mint exactly one deck from the legacy file, not two. Every
-other index mutator (``create_deck``/``save_deck``/``rename_deck``/``set_default``/
-``duplicate_deck``/``delete_deck``) is a load-mutate-write cycle over the whole index file
+other index mutator (``create_deck``/``create_deck_from_cv``/``save_deck``/``rename_deck``/
+``set_default``/``duplicate_deck``/``delete_deck``) is a load-mutate-write cycle over the whole index file
 and is serialized behind the "index" lock for the same reason -- two overlapping mutations
 would otherwise have the later write silently drop the earlier one.
 
@@ -264,6 +264,31 @@ async def create_deck(settings: Settings, *, name: str | None = None) -> DeckMet
     async with _lock("index"):
         index = await load_index(settings)
         meta = _append_deck(index, name)
+        await save_index(settings, index)
+        return meta
+
+
+async def create_deck_from_cv(
+    settings: Settings, cv: CVDocument, *, name: str | None = None
+) -> DeckMeta:
+    """Mint a brand-new deck that already holds ``cv`` -- in one hold of the index lock.
+
+    The "save a job's tailored CV as a base CV" path (``POST
+    /api/jobs/{id}/save-cv-as-deck``). Deliberately not ``create_deck`` + ``save_deck``:
+    that takes the lock twice, and a write failing between the two would strand an empty
+    "NEW BASE CV" slot in the rail. Here the file is written before the index is saved, so
+    a failed write leaves no index entry at all.
+
+    Like ``create_deck``, the new deck becomes ``default_id`` only when the index has none
+    (it is the first deck) -- ``ensure_default_deck`` relies on ``default_id is None``
+    meaning "no decks", so the first deck must claim it whichever path minted it.
+    """
+    async with _lock("index"):
+        index = await load_index(settings)
+        meta = _append_deck(index, name)
+        await cv_structure.write(deck_path(settings, meta.id), cv)
+        meta.auto_title = cv.contact.name
+        meta.has_cv = True
         await save_index(settings, index)
         return meta
 
