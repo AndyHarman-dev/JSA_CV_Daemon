@@ -7,6 +7,7 @@
 // Document/Split paper preview is intentionally NOT reskinned (see PaperSheet.tsx).
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useEditorStore, type EditorView } from "../../editorStore";
+import { useCvChatStore } from "../../cvChatStore";
 import { useStore } from "../../store";
 import { useT } from "../../i18n/useT";
 import { panelBase, cornerMarks } from "../../theme/chrome";
@@ -19,6 +20,7 @@ import { JsonDrawer } from "./JsonDrawer";
 import { LanguagePill } from "./LanguagePill";
 import { SplitView } from "./SplitView";
 import { DeckRail } from "./DeckRail";
+import { CvChatPanel } from "./CvChatPanel";
 
 const T = EDITOR_THEME;
 
@@ -348,6 +350,9 @@ export function CvEditor() {
   const sessionRef = useRef(
     Array.from({ length: 6 }, () => "0123456789ABCDEF"[Math.floor(Math.random() * 16)]).join("")
   );
+  // <main> is the scroll container the CV chat panel's anchored position re-measures
+  // against -- it is mounted as a sibling of <main>, so it needs this ref, not its own.
+  const mainRef = useRef<HTMLElement>(null);
 
   // Live HUD clock.
   useEffect(() => {
@@ -360,7 +365,10 @@ export function CvEditor() {
   // (falling back to the empty state), so there is nothing to catch here.
   useEffect(() => {
     let alive = true;
-    st.hydrateDecks().finally(() => alive && setLoading(false));
+    st.hydrateDecks().then(() => {
+      const deckId = useEditorStore.getState().activeDeckId;
+      if (alive && deckId) void useCvChatStore.getState().hydrate(deckId);
+    }).finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
@@ -583,7 +591,7 @@ export function CvEditor() {
       {/* Body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative", zIndex: 1 }}>
         <DeckRail />
-        <main style={{ flex: 1, minWidth: 0, overflow: "auto", position: "relative" }}>
+        <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflow: "auto", position: "relative" }}>
           {loading ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: T.ink3, fontSize: 13 }}>
               Loading…
@@ -601,6 +609,7 @@ export function CvEditor() {
           )}
         </main>
         {cv && jsonOpen && <JsonDrawer />}
+        {cv && <CvChatPanel mainRef={mainRef} />}
       </div>
       {cv && exportOpen && <ExportModal bottomMargin={exportBottomMargin} setBottomMargin={setExportBottomMargin} />}
     </div>

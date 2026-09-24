@@ -1,6 +1,7 @@
 // View C — Split: a 280px dark "INDEX" outline rail (select / reorder sections) beside the
 // selectable paper sheet (View B in selectable mode).
 import { useEditorStore } from "../../editorStore";
+import { useCvChatStore } from "../../cvChatStore";
 import { useT } from "../../i18n/useT";
 import { Icon } from "../../theme/Icon";
 import { EDITOR_THEME } from "../../theme/tokens";
@@ -13,6 +14,7 @@ export function SplitView() {
   const cv = useEditorStore((s) => s.cv)!;
   const st = useEditorStore();
   const selectedId = useEditorStore((s) => s.selectedId);
+  const openChat = useCvChatStore((s) => s.openChat);
   const t = useT();
 
   return (
@@ -61,6 +63,19 @@ export function SplitView() {
                   </div>
                 </div>
                 <div className="cvtools" style={{ display: "flex", gap: 0, flex: "none" }}>
+                  <button
+                    type="button"
+                    title={t("cvChat.triggerTitleSection")}
+                    data-testid="chat-corner-trigger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openChat({ type: "section", sectionId: s.id });
+                    }}
+                    className="cvbtn"
+                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, border: "none", background: "transparent", color: T.a, borderRadius: T.btnRadius, cursor: "pointer", padding: 0 }}
+                  >
+                    <Icon name="chat" size={11} />
+                  </button>
                   <button
                     type="button"
                     title={t("splitView.moveUpTitle")}

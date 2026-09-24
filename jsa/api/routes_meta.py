@@ -33,6 +33,8 @@ def _config_payload(
         "select_language": settings.select_language,
         "cv_structure_exists": cv_structure_exists,
         "cv_deck_count": cv_deck_count,
+        "auto_mode": settings.auto_mode,
+        "chat_backend": settings.chat_backend,
     }
 
 

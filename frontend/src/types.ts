@@ -137,7 +137,14 @@ export type WSEvent =
   // Marks the end of one streamed turn. superseded=true means discard the buffer outright
   // (a retry/nudge/self-heal path replayed the whole turn). Mirrors
   // jsa/events/schema.py::AgentTurnEndEvent exactly.
-  | { type: "agent_turn_end"; job_id: string; stage: string; superseded: boolean };
+  | { type: "agent_turn_end"; job_id: string; stage: string; superseded: boolean }
+  // CV-editor AI chat — job-less, keyed by a transient task_id (same single-flight
+  // gating convention as infer_progress: the POST's own resolution — not task_id
+  // correlation — is what ends the "busy" state client-side; see cvChatStore.ts).
+  // Mirrors jsa/events/schema.py::ChatChunkEvent exactly.
+  | { type: "chat_chunk"; task_id: string; kind: "content" | "reasoning"; text: string }
+  // Mirrors jsa/events/schema.py::ChatTurnEndEvent exactly.
+  | { type: "chat_turn_end"; task_id: string; superseded: boolean };
 
 // --- CV Structure Editor — the CVDocument schema (mirrors jsa/schema/cv.py) -------------
 // The editor reads/writes exactly this shape. `kind`/`id` are UI-only and stripped on export.
@@ -197,6 +204,32 @@ export interface EditorSection extends Omit<CVSection, "entries"> {
 export interface EditorCV {
   contact: CVContact;
   sections: EditorSection[];
+}
+
+// --- CV-editor AI chat -------------------------------------------------------------------
+// Mirrors jsa/store/deck_chats.py::ChatTurn exactly (the wire shape of GET/POST
+// .../chat). `scope` here is the SERVER's index-based scope dict ({type, section_index?,
+// entry_index?}) as persisted — not cvChatStore's client-id-based ChatScope, which exists
+// only for UI addressing (highlight/anchor) and is converted to indices at send time.
+export interface ChatDiffItemDTO {
+  label: string;
+  before: string;
+  after: string;
+}
+
+export interface ChatTurnDTO {
+  id: string;
+  role: "user" | "agent" | "scope";
+  scope: Record<string, unknown>;
+  text: string;
+  question: string | null;
+  reasoning: string;
+  items: ChatDiffItemDTO[];
+  document: CVDocument | null;
+  status: "pending" | "applied" | "auto" | "discarded" | "none" | "error";
+  files: { name: string; size: number }[];
+  base_hash: string;
+  created_at: string;
 }
 
 export interface FullJobDTO extends JobDTO {

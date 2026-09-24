@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { api } from "../api";
+import { api, errorMessage } from "../api";
 
 function makeResponse(
   data: unknown,
@@ -229,5 +229,51 @@ describe("deleteCvDeck — 204 No Content", () => {
     );
 
     await expect(api.deleteCvDeck("bad")).rejects.toThrow(/HTTP 400/);
+  });
+});
+
+describe("errorMessage — FastAPI detail unwrapping", () => {
+  it("surfaces `detail` instead of the raw JSON blob", () => {
+    // The live shape behind the user-reported "gemini failed with HTTP request": the
+    // real cause (an unexported GEMINI_API_KEY) was spelled out inside a blob that
+    // rendered verbatim, prefixed with the HTTP status.
+    const body = JSON.stringify({
+      detail:
+        "backend error: gemini API error: Method doesn't allow unregistered callers " +
+        "(callers without established identity). Please use API Key or other form of " +
+        "API consumer identity to call this API.",
+    });
+    const msg = errorMessage(422, body);
+    expect(msg).toBe(JSON.parse(body).detail);
+    expect(msg).not.toContain("HTTP 422");
+    expect(msg).not.toContain('{"detail"');
+  });
+
+  it("falls back to the raw body when it is not JSON", () => {
+    expect(errorMessage(502, "<html>bad gateway</html>")).toBe(
+      "HTTP 502: <html>bad gateway</html>"
+    );
+  });
+
+  it("falls back when `detail` is absent", () => {
+    expect(errorMessage(400, '{"message":"nope"}')).toBe('HTTP 400: {"message":"nope"}');
+  });
+
+  it("falls back when `detail` is not a string", () => {
+    // FastAPI's request-model 422s use a LIST detail; rendering that directly would
+    // print "[object Object]".
+    const body = JSON.stringify({ detail: [{ loc: ["body", "cv"], msg: "field required" }] });
+    expect(errorMessage(422, body)).toBe(`HTTP 422: ${body}`);
+  });
+
+  it("falls back when `detail` is blank", () => {
+    expect(errorMessage(500, '{"detail":"   "}')).toBe('HTTP 500: {"detail":"   "}');
+  });
+
+  it("is what apiFetch actually throws", async () => {
+    vi.mocked(global.fetch).mockResolvedValue(
+      makeResponse({ detail: "deck is held by 2 jobs" }, { ok: false, status: 409 })
+    );
+    await expect(api.deleteCvDeck("d1")).rejects.toThrow("deck is held by 2 jobs");
   });
 });

@@ -132,3 +132,12 @@ body {
 .cvkindbtn:hover { background: #141B23; border-color: color-mix(in srgb, var(--a) 40%, #2A3440); }
 
 .cvpapersec { transition: box-shadow .15s; }
+
+/* CV Editor AI chat -- corner trigger reveal. `.cvunit` is a plain position:relative
+   wrapper (NOT chamfered/clipped) around a card + its ChatCorner pill; `.cvsec`/`.cvtools`
+   above are untouched. */
+.cvunit .aitrig { opacity: 0; transition: opacity .14s; }
+.cvunit:hover .aitrig, .cvunit:focus-within .aitrig { opacity: 1; }
+
+@keyframes aiwork { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
+@keyframes aiflash { 0% { box-shadow: 0 0 0 0 rgba(70, 200, 120, .55); } 100% { box-shadow: 0 0 0 14px rgba(70, 200, 120, 0); } }

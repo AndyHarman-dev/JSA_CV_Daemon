@@ -143,6 +143,26 @@ class AgentTurnEndEvent:
     superseded: bool = False
 
 
+@dataclass
+class ChatChunkEvent:
+    """One streamed delta for a CV-editor chat turn (job-less — see
+    jsa/pipeline/cv_chat.py). Keyed by ``task_id``, mirroring InferProgressEvent,
+    since there is no ``job_id`` here. No tool events: a chat turn is a one-shot
+    reply, nothing executes mid-turn."""
+    type: Literal["chat_chunk"] = "chat_chunk"
+    task_id: str = ""
+    kind: Literal["content", "reasoning"] = "content"
+    text: str = ""
+
+
+@dataclass
+class ChatTurnEndEvent:
+    """Marks the end of one CV-editor chat turn's streamed chunk sequence."""
+    type: Literal["chat_turn_end"] = "chat_turn_end"
+    task_id: str = ""
+    superseded: bool = False
+
+
 def event_to_dict(event) -> dict:
     """Convert any event dataclass to a JSON-serialisable dict."""
     return dataclasses.asdict(event)

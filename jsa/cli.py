@@ -113,6 +113,8 @@ def main(
     dev_auto: bool = typer.Option(False, "--dev-auto", help="Dev-only: auto-answer NEED_INPUT gates via DEV_ANSWERS.json pattern matching.", is_flag=True),
     select_language: bool = typer.Option(False, "--select-language", help="Show a full-screen language picker + boot sequence before the dashboard on first run.", is_flag=True),
     prompt_caching: Optional[bool] = typer.Option(None, "--prompt-caching/--no-prompt-caching", help="Enable/disable provider prompt-caching request fields (anthropic, mistral, openrouter, gemini, opencode-go). Defaults to on."),
+    auto_mode: Optional[bool] = typer.Option(None, "--auto-mode/--no-auto-mode", help="Seed the CV-editor chat's AUTO toggle default — proposed diffs apply without confirmation. Defaults to off; can also be toggled per-session in the chat panel."),
+    chat_backend: Optional[str] = typer.Option(None, "--chat-backend", help="Backend for the CV-editor AI chat (independent of --backend/--backends). Defaults to claude-cli."),
 ) -> None:
     """Run JSA: process a CSV of job listings with a CV file."""
     # Validate --csv extension
@@ -172,6 +174,17 @@ def main(
         overrides["select_language"] = True
     if prompt_caching is not None:
         overrides["prompt_caching"] = prompt_caching
+    if auto_mode is not None:
+        overrides["auto_mode"] = auto_mode
+    if chat_backend is not None:
+        if chat_backend not in _VALID_BACKENDS:
+            typer.echo(
+                f"Error: --chat-backend must be one of {sorted(_VALID_BACKENDS)}, "
+                f"got: {chat_backend!r}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        overrides["chat_backend"] = chat_backend
 
     try:
         settings = Settings(**overrides)

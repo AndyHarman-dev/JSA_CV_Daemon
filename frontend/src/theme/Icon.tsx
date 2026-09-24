@@ -8,7 +8,8 @@ export type IconName =
   | "alert" | "mail" | "phone" | "pin" | "bolt" | "server" | "inbox" | "doc" | "work"
   | "link" | "back" | "up" | "down" | "undo" | "redo" | "braces" | "spark" | "eye"
   | "copy" | "text" | "list" | "tag" | "cap" | "blocks" | "cols" | "globe" | "search" | "play"
-  | "pencil" | "star" | "syringe";
+  | "pencil" | "star" | "syringe"
+  | "chat" | "arrows" | "clip" | "file" | "id";
 
 interface IconProps {
   name: IconName;
@@ -59,6 +60,12 @@ const PATHS: Record<IconName, string[]> = {
   star: ["M8 2.2l1.8 3.7 4.1.6-3 2.9.7 4.1L8 11.6l-3.6 1.9.7-4.1-3-2.9 4.1-.6z"],
   // Every shape sits inside one rotate() group (see extraShapes), so nothing can live here.
   syringe: [],
+  // CV Editor AI Chat glyphs (see the plan's Phase 5).
+  chat: ["M2.6 3.6h10.8v7.2H7.4L4.2 13.4v-2.6H2.6z"],
+  arrows: ["M2.5 8h11", "M2.5 8l3-3M2.5 8l3 3", "M13.5 8l-3-3M13.5 8l-3 3"],
+  clip: ["M11 4.5v6.2a2.3 2.3 0 0 1-4.6 0V3.8a1.4 1.4 0 0 1 2.8 0v6.4a.5.5 0 0 1-1 0V4.5"],
+  file: ["M4.5 2h4.2l2.8 2.8v9.2h-7z", "M8.7 2v2.8h2.8"],
+  id: ["M6.6 6.2h4.4M6.6 8.4h4.4"],
 };
 
 // Icons that mix paths with non-path primitives (rects/circles/lines) — rendered explicitly
@@ -129,6 +136,13 @@ function extraShapes(name: IconName): ReactNode {
           <path d="M9.8 8h4.4" />
           <circle cx={14.8} cy={9.6} r={0.55} fill="currentColor" stroke="none" />
         </g>
+      );
+    case "id":
+      return (
+        <>
+          <rect x={2.2} y={3.6} width={11.6} height={8.8} rx={1.4} />
+          <circle cx={4.6} cy={8} r={1.3} />
+        </>
       );
     default:
       return null;

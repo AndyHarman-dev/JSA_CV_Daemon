@@ -159,6 +159,31 @@ export function exportJson(cv: EditorCV): CVDocument {
   return { contact, sections } as unknown as CVDocument;
 }
 
+// --- AI chat integration (reconciling a model-proposed document into the live buffer) ---
+
+// Walk `fresh` (a just-`toEditor()`-ed model proposal) by POSITION and adopt `prev`'s ids
+// where a section/entry still exists at that index, minting a fresh id only where the
+// structure actually changed (added/removed/reordered). ids are otherwise meaningless
+// outside this client (see exportJson) — this exists purely so React keys, drag state and
+// `selectedId` survive an in-place AI edit instead of a full remount. Exported for direct
+// unit testing (editorStore.test.ts).
+export function reconcileIds(prev: EditorCV, fresh: EditorCV): EditorCV {
+  return {
+    contact: fresh.contact,
+    sections: fresh.sections.map((s, i) => {
+      const prevSection = prev.sections[i];
+      return {
+        ...s,
+        id: prevSection?.id ?? s.id,
+        entries: s.entries.map((e, j) => ({
+          ...e,
+          id: prevSection?.entries[j]?.id ?? e.id,
+        })),
+      };
+    }),
+  };
+}
+
 // --- defaults for new sections ----------------------------------------------------------
 
 const KIND_DEFAULTS: Record<SectionKind, { name: string; build: () => Partial<EditorSection> }> = {
@@ -313,6 +338,9 @@ interface EditorState {
   addBullet(sectionId: string, entryId: string): void;
   removeBullet(sectionId: string, entryId: string, idx: number): void;
 
+  // --- AI chat (cvChatStore's apply action) ---
+  applyAiDocument(next: CVDocument): void;
+
   // --- infer / save ---
   beginInfer(filename: string): void;
   onInferProgress(e: Extract<WSEvent, { type: "infer_progress" }>): void;
@@ -364,8 +392,10 @@ export function detailOf(err: unknown, fallback: string): string {
 
 // The store's non-hook twin of useT(): same catalogs, same en-then-key fallback, but read
 // imperatively because these strings are needed inside async actions (window.confirm text,
-// the duplicate suffix), not during render.
-function tr(key: string): string {
+// the duplicate suffix), not during render. Exported so cvChatStore.ts (which already
+// imports from this module) can reuse it for its own async-action error text instead of
+// carrying a second copy of the same three-line body.
+export function tr(key: string): string {
   const language = useStore.getState().language;
   return getCatalog(language)?.[key] ?? englishCatalog[key] ?? key;
 }
@@ -752,6 +782,17 @@ export const useEditorStore = create<EditorState>((set, get) => {
         ),
       }));
       if (next) applyEdit(next, false);
+    },
+
+    // Replace the whole buffer with a model-proposed document, as ONE undo entry
+    // (`applyEdit(..., false)`: non-coalescing, so it flushes any pending typing burst
+    // into its own step first rather than silently extending the user's coalesce timer).
+    // With auto-mode on this is the ONLY escape from an unwanted apply, so it must be a
+    // single ⌘Z away — see cvChatStore.ts's applyTurn.
+    applyAiDocument(next) {
+      const prev = get().cv;
+      if (!prev) return;
+      applyEdit(reconcileIds(prev, toEditor(next)), false);
     },
 
     beginInfer(filename) {

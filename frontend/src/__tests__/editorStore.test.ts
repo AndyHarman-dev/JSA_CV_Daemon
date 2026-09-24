@@ -13,7 +13,7 @@ vi.mock("../api", () => ({
   },
 }));
 
-import { useEditorStore, exportJson, inferKind, toEditor } from "../editorStore";
+import { useEditorStore, exportJson, inferKind, toEditor, reconcileIds } from "../editorStore";
 import { useStore } from "../store";
 import { api } from "../api";
 import type { CVDocument, CvDeckDTO } from "../types";
@@ -191,6 +191,68 @@ describe("undo/redo with coalescing", () => {
     expect(useEditorStore.getState().canRedo).toBe(true);
     useEditorStore.getState().addSection("education", null);
     expect(useEditorStore.getState().canRedo).toBe(false);
+  });
+});
+
+describe("reconcileIds", () => {
+  it("adopts the previous ids at unchanged positions, minting fresh ones for new structure", () => {
+    loadSample();
+    const prev = useEditorStore.getState().cv!;
+    const proposal = toEditor(structuredClone(SAMPLE)); // fresh ids, same structure
+    const reconciled = reconcileIds(prev, proposal);
+    expect(reconciled.sections.map((s) => s.id)).toEqual(prev.sections.map((s) => s.id));
+    expect(reconciled.sections[1].entries.map((e) => e.id)).toEqual(
+      prev.sections[1].entries.map((e) => e.id)
+    );
+
+    // A structurally different proposal (one fewer section) cannot reuse position 2's id.
+    const shorter: CVDocument = { ...SAMPLE, sections: SAMPLE.sections.slice(0, 2) };
+    const reconciledShorter = reconcileIds(prev, toEditor(shorter));
+    expect(reconciledShorter.sections.length).toBe(2);
+    expect(reconciledShorter.sections[0].id).toBe(prev.sections[0].id);
+    expect(reconciledShorter.sections[1].id).toBe(prev.sections[1].id);
+  });
+});
+
+describe("applyAiDocument", () => {
+  it("pushes exactly one history entry and is a single undo away from the prior buffer", () => {
+    loadSample();
+    const startLen = useEditorStore.getState().history.length;
+    const prevName = useEditorStore.getState().cv!.contact.name;
+
+    const proposal: CVDocument = {
+      ...structuredClone(SAMPLE),
+      contact: { ...SAMPLE.contact, name: "Jane Q. Doe" },
+    };
+    useEditorStore.getState().applyAiDocument(proposal);
+
+    expect(useEditorStore.getState().cv!.contact.name).toBe("Jane Q. Doe");
+    expect(useEditorStore.getState().history.length).toBe(startLen + 1);
+    expect(useEditorStore.getState().unsaved).toBe(true);
+
+    useEditorStore.getState().undo();
+    expect(useEditorStore.getState().cv!.contact.name).toBe(prevName);
+  });
+
+  it("preserves section/entry ids at unchanged positions (React keys survive the apply)", () => {
+    loadSample();
+    const idsBefore = useEditorStore.getState().cv!.sections.map((s) => s.id);
+    const entryIdBefore = useEditorStore.getState().cv!.sections[1].entries[0].id;
+
+    const proposal: CVDocument = structuredClone(SAMPLE);
+    proposal.sections[0].text = "Tightened summary.";
+    useEditorStore.getState().applyAiDocument(proposal);
+
+    expect(useEditorStore.getState().cv!.sections.map((s) => s.id)).toEqual(idsBefore);
+    expect(useEditorStore.getState().cv!.sections[1].entries[0].id).toBe(entryIdBefore);
+    expect(useEditorStore.getState().cv!.sections[0].text).toBe("Tightened summary.");
+  });
+
+  it("is a no-op when there is no active buffer", () => {
+    useEditorStore.getState().reset();
+    expect(useEditorStore.getState().cv).toBeNull();
+    useEditorStore.getState().applyAiDocument(structuredClone(SAMPLE));
+    expect(useEditorStore.getState().cv).toBeNull();
   });
 });
 

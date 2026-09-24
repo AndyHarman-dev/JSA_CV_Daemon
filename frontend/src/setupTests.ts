@@ -35,3 +35,13 @@ Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
   writable: true,
 });
+
+// jsdom does not implement scrolling (https://github.com/jsdom/jsdom/issues/1695) --
+// Element.scrollTo is simply absent, unlike a real browser where it always exists. Code
+// that calls it (e.g. CvChatPanel.tsx's auto-scroll-to-bottom effect) needs something real
+// to call in tests; a no-op is correct here since jsdom has no layout/scroll position to
+// assert against anyway. Production code is unaffected -- real browsers provide this
+// natively.
+if (!Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = function scrollTo() {};
+}

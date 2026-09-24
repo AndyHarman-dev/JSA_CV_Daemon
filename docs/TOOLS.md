@@ -193,3 +193,53 @@ constraint.
   cost this turn its tools. `_ToolsRejected` also stays out of `_call_api`'s existing
   `_CacheRejected`/`_ReasoningRejected` degrade loop: the tool ladder is the pipeline's
   decision, not the backend's.
+
+---
+
+## CV-editor chat vocabulary
+
+**This section is intentionally outside the "CV vocabulary" / "Cover-letter vocabulary"
+headings above** — `tests/backend/test_tools_doc_sync.py::_documented_tool_names` scans
+from each of those two headings to the next `## ` heading that follows it, so a table row
+placed between them (or immediately after "Cover-letter vocabulary", before
+"Observability and persistence") would be read as an undocumented member of *that*
+vocabulary and fail `test_the_doc_documents_no_tool_that_does_not_exist`. Appending this
+section at the end of the file keeps both scans' boundaries untouched.
+
+The CV Editor AI chat (`jsa/pipeline/cv_chat.py::run_cv_chat`) is a separate, job-less,
+non-streaming-tool-loop model call — see the CV Editor AI Chat plan's "Why this does NOT
+port `run_tool_loop`" section for the three independent reasons a job-less chat cannot
+reuse rungs 1–2 above. It reuses only `CvWorkingCopy` as the op applier (same ids, same
+error codes, same `finalize()` content gate), addressed through one reply's `ops` array
+instead of a multi-turn tool loop.
+
+`CV_CHAT_OP_SPECS` (`jsa/agents/tool_spec.py`) is `CV_TOOL_SPECS` plus one additional op,
+`replace_contact` — deliberately **not** folded into `CV_TOOL_SPECS` itself, so
+`tools_for(Stage.revising_cv)` (the live job-revision vocabulary) never gains it. Nothing
+on the job revision path calls `replace_contact`.
+
+| Op | Required | What it does |
+|---|---|---|
+| `replace_contact` | `contact` | Set one or more identity fields (`name`, `email`, `phone`, `location`, `links`). Only the keys present in `contact` are written — an omitted key leaves the existing value alone. `name`, the one required `Contact` field, is rejected as `bad_argument` on a blank/whitespace value; every other field may be cleared to `null`. |
+
+Every other member of `CV_CHAT_OP_SPECS` (`replace_summary`, `replace_section`,
+`replace_entry`, `edit_entry_bullets`, `add_entry`, `remove_entry`, `reorder_entries`) is
+the same tool documented in "CV vocabulary" above, unchanged.
+
+**Scope narrows which ops a turn's schema allows** — the model addressing an out-of-scope
+op is a schema violation on structured backends, and a hard `ChatError` either way once
+`run_cv_chat`'s server-side structural diff catches it (the authoritative gate; the
+schema narrowing is a provider-enforced nicety on top of it, not the mechanism):
+
+| Scope | Allowed ops |
+|---|---|
+| `contact` | `replace_contact` |
+| `entry` | `replace_entry`, `edit_entry_bullets` |
+| `section` | `replace_section`, `replace_summary`, `replace_entry`, `edit_entry_bullets`, `add_entry`, `remove_entry`, `reorder_entries` |
+| `cv` | all eight |
+
+Every scope — including `contact` and a single `entry` — still sees the **whole** CV in
+its user message; only what may *change* is restricted, never what the model may *see*
+(the CV Editor AI Chat plan's D5). `get_cv`/`finalize`/`ask_user` are not part of this
+vocabulary: `get_cv`'s dump is built server-side to seed the turn's ids, and there is no
+multi-turn loop for a terminal tool to end.

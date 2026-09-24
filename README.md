@@ -21,6 +21,7 @@ Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vi
 - Live agent stream: a REASONING card shows the model's thinking as discrete steps while it works, with executed tool calls inline
 - Browser UI with live pipeline progress, PDF document preview, and PDF/DOCX export
 - Standalone CV Structure Editor: infer a structured JSON representation of your base CV from a PDF/DOCX, open a `CVDocument` JSON you already have, or start from a blank structure — and edit it directly. This JSON is what `cv_adjust` tailors per job
+- CV-editor AI chat: click the corner `EDIT` pill on the identity card, a section, an entry or a skills group (or open the chat on the whole CV), ask for a rewrite in plain words or pick a quick action, and review the model's proposed field-level diff before applying it to the editor, where one ⌘Z undoes it. The model can read the whole CV but may only change the part you picked — see [CV-editor AI chat](#cv-editor-ai-chat)
 - Multiple base CVs ("decks"): keep one deck per profile (backend, data, management…), switch between them in the editor's deck rail, and assign a specific deck to an individual job before launch — that deck is what `fit_assessment` and `cv_adjust` actually read
 - Multi-language output and UI: one global preference drives the pipeline's output language (CV/cover-letter JSON, clarifying questions, change-log, fit-assessment reasons) *and* the frontend's own chrome, picked from a 20-language catalog
 - Eight AI backends: Claude CLI, Google `agy` CLI, Anthropic REST API, OpenCode Zen, Mistral, OpenRouter, Google Gemini REST API, OpenCode-GO — configurable as an ordered fallback chain, each with a runtime-selectable model (no restart) via the header's backend dropdown. A timeout or an unavailable model first tries the next model on the same backend before burning a backend hop
@@ -39,6 +40,7 @@ Everything runs locally — a FastAPI backend, a SQLite database, and a React/Vi
 - [Backends](#backends)
 - [Workflow](#workflow)
 - [CV Structure Editor](#cv-structure-editor)
+- [CV-editor AI chat](#cv-editor-ai-chat)
 - [Prompt injection (per job)](#prompt-injection-per-job)
 - [Language preference](#language-preference)
 - [Prompt customisation](#prompt-customisation)
@@ -166,11 +168,12 @@ and a chain-exhaustion message names how many models were tried.
 | Files | `GET /api/files/{relpath}` — serves rendered PDF/DOCX with `Content-Disposition: inline` |
 | CV Structure Editor | `GET /api/cv-structure`, `PUT /api/cv-structure` (both aliases for the default deck), `POST /api/cv-structure/infer` |
 | Base CVs (decks) | `GET /api/cv-decks`, `POST /api/cv-decks`, `GET /api/cv-decks/{id}`, `PUT /api/cv-decks/{id}`, `PATCH /api/cv-decks/{id}` (rename / set default), `POST /api/cv-decks/{id}/duplicate`, `DELETE /api/cv-decks/{id}`, `PUT /api/jobs/{id}/base-cv` (assign a deck to a job; pre-launch only) |
+| CV-editor AI chat | `GET /api/cv-decks/{id}/chat` (the deck's saved thread), `POST /api/cv-decks/{id}/chat` (one turn: multipart, a JSON `payload` field carrying the scope, instruction or `quick_action`, the editor's current CV and its hash, plus optional file attachments; `422` on an unusable reply or out-of-scope edit), `DELETE /api/cv-decks/{id}/chat` (clear the thread) |
 | Prompt injection | `PUT /api/jobs/{id}/injection` (pre-launch only — `400` once the job leaves `queued`), `GET /api/injection-presets`, `PUT /api/injection-presets` (the saved-dose library, whole-list replace) |
 | Model selection | `GET /api/backend-models` (current selections, no network), `GET /api/backend-models/{backend}` (live listing, catalog fallback — a provider fetch failure is a `200`, never a `500`), `PUT /api/backend-models` |
 | Preferences | `GET /api/preferences`, `PUT /api/preferences` — global output/UI language, `{"language": "es"}` |
 | Meta | `GET /api/health`, `GET /api/config` |
-| Realtime | `WS /ws` — pushes `status_changed`, `stage_complete`, `follow_up_needed`, `approved`, `job_removed`, `log`, `error`, `backend_switched`, `model_switched`, `transcript_changed`, `infer_progress`, and the live agent stream (`agent_chunk` for content/reasoning tokens, `agent_tool` per executed tool call, `agent_turn_end`) to the React store |
+| Realtime | `WS /ws` — pushes `status_changed`, `stage_complete`, `follow_up_needed`, `approved`, `job_removed`, `log`, `error`, `backend_switched`, `model_switched`, `transcript_changed`, `infer_progress`, the live agent stream (`agent_chunk` for content/reasoning tokens, `agent_tool` per executed tool call, `agent_turn_end`), and the CV-editor chat's stream (`chat_chunk`, `chat_turn_end`, tagged with the chat request's `task_id` rather than a job id) to the React store |
 
 ---
 
@@ -250,6 +253,8 @@ Multi-line job descriptions must be wrapped in double quotes (standard CSV quoti
 | `--fit-model` | none | `JSA_FIT_MODEL` | Model for the fit-assessment stage only (e.g. a cheaper/faster one). Defaults to the same model as every other stage. No effect on `google-cli`, which has no model flag |
 | `--fit-timeout` | none | `JSA_FIT_TIMEOUT` | Per-reply timeout in seconds for the fit-assessment stage only. Defaults to the backend's normal timeout |
 | `--prompt-caching` / `--no-prompt-caching` | on | `JSA_PROMPT_CACHING` | Send provider prompt-caching request fields (`anthropic`, `mistral`, `openrouter`, `gemini`, `opencode-go`). Off makes every payload byte-identical to the pre-caching shape — a kill switch, not a tuning knob |
+| `--chat-backend` | `claude-cli` | `JSA_CHAT_BACKEND` | Backend for the [CV-editor AI chat](#cv-editor-ai-chat), separate from `--backends`. Read once at launch, so changing it needs a restart |
+| `--auto-mode` / `--no-auto-mode` | off | `JSA_AUTO_MODE` | Start the CV-editor chat with its `AUTO` toggle on, so proposed diffs apply to the editor without a confirm click. You can still switch it off in the chat panel |
 | `--dev-tunnel` | false | — | Start a `cloudflared` quick tunnel for remote/phone access. **Exposes the unauthenticated API publicly — dev use only** |
 | `--dev-auto` | false | — | Dev-only: auto-answer `NEED_INPUT` gates from a `DEV_ANSWERS.json` pattern file instead of waiting for you |
 
@@ -459,6 +464,71 @@ Once a structure exists (inferred or hand-built), three synchronized views edit 
 
 ---
 
+## CV-editor AI chat
+
+The CV Structure Editor includes a chat for editing a base CV by describing the change instead of making it by hand: "tighten this and lead with the multiplayer work", "quantify these bullets", "make the whole CV fit on one page". You choose which part of the CV to work on, the model proposes a field-by-field diff, and you apply it or discard it. The chat only changes the editor's contents. It never touches a job, and nothing is saved to disk until you press **COMMIT**.
+
+**Pick a part of the CV.** Hover over any block in the Blocks view and an `EDIT` pill appears at its top-right corner:
+
+<p align="center">
+  <img src="assets/JSA_CV_AI_CHAT_CORNER_TRIGGER.png" alt="The Summary section in the Blocks view, hovered, with the red EDIT chat pill sitting on its top-right corner" width="620">
+</p>
+
+Every editable part of the CV has one: the identity card, each section, each entry (a role, a project, a degree), and each skills group. In the Document and Split views, the paper preview has a smaller trigger on each section and entry, and the outline list in Split view has one on each section row. To work on the whole CV, use the `ASK DAEMON · ENTIRE CV` pill in the bottom-right corner, or **WIDEN → CV** inside the chat panel.
+
+A trigger opens the chat panel next to its block, joined to it by a dashed line. That block gets an accent outline and the rest of the CV fades, so you can see what is being edited. If there isn't room to the right of the block, the panel opens on its left instead of covering it:
+
+<p align="center">
+  <img src="assets/JSA_CV_AI_CHAT_PROPOSED_DIFF.png" alt="CV editor with the chat panel open beside the Summary section: the other sections are faded, a dashed line joins the panel to the Summary card, and the panel shows a PROPOSED DIFF with the old summary struck through above the rewrite, plus APPLY and DISCARD buttons" width="820">
+</p>
+
+**The model reads the whole CV but can only change the part you picked.** A good rewrite of one bullet draws on the rest of the document, such as numbers mentioned elsewhere or related work, so the model is always given the full CV. Three checks keep it to your selection. The list of edits it is allowed to make is narrowed to that part of the CV. The prompt tells it the same thing. And the server compares the result with what you sent: if anything outside your selection changed, the whole reply is rejected with an error, so an out-of-bounds edit is never partly applied.
+
+| Selection | Opened from | What the model may change | Quick actions |
+|---|---|---|---|
+| Identity | the identity card | name, email, phone, location, links | FIX FORMAT · GRAMMAR |
+| Section | a section | that section's text and entries (it can also add, remove, or reorder entries) | COMPACT · REORDER · QUANTIFY · EXPAND · GRAMMAR |
+| Entry | a role, project, degree, or skills group | that one entry | COMPACT · QUANTIFY · EXPAND · GRAMMAR |
+| Entire CV | the corner pill, or **WIDEN → CV** | anything | ONE PAGE · COMPACT · TONE · GRAMMAR |
+
+A quick action is a preset instruction, stored on the server and sent to the model just as if you had typed it. The model still does the rewriting; the action doesn't edit the text itself. QUANTIFY and EXPAND tell the model to use only facts already in your CV and never to invent numbers.
+
+**Watch the model work, then review the diff.** While the model is working, the REASONING card from the job pipeline shows its thinking step by step. When the reply arrives, a **PROPOSED DIFF** card replaces it. The card opens with one line summarizing the change. Below that, each changed field shows its old text crossed out, with the new text underneath.
+
+<table>
+<tr>
+<td width="30%"><img src="assets/JSA_CV_AI_CHAT_REASONING.png" alt="The chat panel mid-turn: a REASONING card showing the model's steps as separate rows, with earlier steps collapsed behind a '+3 earlier steps' toggle" width="100%"><p align="center"><sub>Reasoning, live</sub></p></td>
+<td width="70%"><img src="assets/JSA_CV_AI_CHAT_APPLIED.png" alt="After APPLY: the Summary section now shows the rewritten text, and the chat card beside it is marked APPLIED" width="100%"><p align="center"><sub>After APPLY</sub></p></td>
+</tr>
+</table>
+
+**APPLY changes the editor, not the file.** **APPLY** puts the whole diff into the editor as a single undo step, so one ⌘Z reverses all of it. The deck file on disk only changes when you **COMMIT**, the same as with edits you type yourself. **DISCARD** leaves the CV unchanged.
+
+More details:
+
+- **Outdated diffs can't be applied.** If you edit the CV while the model is still replying, its diff arrives marked **STALE**, with a **RE-RUN** button in place of APPLY, because applying it could overwrite your newer edits. A reply written for a different deck than the one now open is blocked too.
+- **AUTO mode applies diffs as they arrive.** Turn it on with the `AUTO` toggle in the panel header, or launch with `--auto-mode` to have it on from the start. Each diff is then applied as soon as it arrives and marked **AUTO-APPLIED**, and one ⌘Z still undoes it. A STALE diff is never applied automatically; it waits as a normal proposed diff.
+- **Attach files for background.** Use the paperclip, or drag files onto the panel, to give the model material to draw on, such as a job description, a project write-up, or an old CV. The model uses them for that one reply only: their contents are never copied into the CV or saved with the chat history. Accepted formats are PDF, DOCX, TXT, MD, JSON, RTF, and CSV; images are rejected. The limits are 6 files per message, 5 MB per file, and about 40,000 characters of text across all files (anything beyond that is cut off). A message also needs a typed instruction or a quick action, because a file on its own won't send.
+- **Each deck keeps its own saved chat history.** It lives in `~/.jsa/deck_chats/<deck-id>.json`, which keeps the latest 60 messages. The history comes back when you reopen the editor, and changes when you switch decks. The ↻ button in the panel header clears it.
+- **You're told when an edit was skipped.** If one change in a reply can't be made, for example because it points at an entry that doesn't exist, the rest of the diff still comes through and the panel lists what was skipped. It won't report success for an edit that didn't happen.
+
+**Which backend runs the chat.** The chat has its own backend setting, `--chat-backend` (`JSA_CHAT_BACKEND`, default `claude-cli`), separate from the pipeline's `--backends` chain. It is read once at launch, so changing it needs a restart. The chat uses the model currently selected for that backend, so a selection made while `jsa` is running takes effect on the next message. If the chat backend is in your `--backends` chain, choose its model from the header's backend dropdown. The dropdown only lists backends in that chain, so for any other backend, set the model with its `JSA_*_MODEL` environment variable at launch, or with `PUT /api/backend-models` while `jsa` is running. For an API backend, also export its key in the same shell that launches `jsa`:
+
+```bash
+export OPENROUTER_API_KEY=...
+JSA_OPENROUTER_MODEL=google/gemini-3.5-flash jsa --csv jobs.csv --chat-backend openrouter
+
+# or switch the model while jsa is running:
+curl -X PUT localhost:8765/api/backend-models -H 'Content-Type: application/json' \
+  -d '{"backend": "openrouter", "model": "google/gemini-3.5-flash"}'
+```
+
+The model matters more here than in the pipeline, because you are waiting on each reply. When the screenshots were taken, OpenRouter's default model (`nvidia/nemotron-3-nano-30b-a3b`) timed out after 300 seconds on a single Summary edit, while `google/gemini-3.5-flash` replied in about 15 seconds.
+
+Backends that support structured output are given a schema limited to your selection. `claude-cli` uses the same sentinel reply format as the job pipeline. The screenshots above use `--chat-backend openrouter` with `google/gemini-3.5-flash`. The set of edits the model can make is listed in [`docs/TOOLS.md`](docs/TOOLS.md#cv-editor-chat-vocabulary).
+
+---
+
 ## Prompt injection (per job)
 
 Sometimes one job needs something the shared prompt shouldn't carry — "this posting is in
@@ -565,6 +635,7 @@ The AI prompts live at:
 jsa/prompts/PROMPT_FIT_ASSESSMENT.md  # Fit-assessment gate system prompt
 jsa/prompts/PROMPT_CDADJUST.md        # CV adjustment system prompt
 jsa/prompts/CVL_PROMPT.md             # Cover letter system prompt
+jsa/prompts/PROMPT_CV_CHAT.md         # CV-editor AI chat system prompt
 ```
 
 Edit these files in any text editor. Changes take effect immediately on the next job run (prompts are read from disk on every invocation, never cached).
@@ -588,6 +659,8 @@ or
 **Do not remove or modify the sentinel instructions in the prompts.** The pipeline parser (`jsa/agents/protocol.py`) will raise a `ProtocolError` and mark the job `failed` if the sentinel is absent or malformed. The sentinel instructions are already present in the default prompt stubs.
 
 **Fit-assessment prompt is a special case.** It must always reply with `<<<FINAL>>>` (never `<<<NEED_INPUT>>>`), and the first line of the payload must be exactly `FIT` or `UNFIT` — anything else (including an unparseable verdict) is treated as `UNFIT` and parks the job behind the "not a fit" modal rather than silently continuing.
+
+**The CV-editor chat prompt is also a special case.** `PROMPT_CV_CHAT.md` follows the same sentinel rule, and with `claude-cli` (the default chat backend) that is the only way the model learns the reply format. The content inside its `<<<FINAL>>>` block must be a single JSON object: a short answer plus a list of edits. The JSON examples in the prompt are the only place a sentinel-mode model sees the correct field names, so a test checks them against the schema. If you edit an example, keep it valid, or `pytest tests/backend/test_cv_chat_ops.py` will fail.
 
 ---
 
@@ -692,22 +765,23 @@ jsa/                   Python package
   ingest/                CSV and CV loaders
   agents/                AgentBackend ABC, eight backends (claude_cli, google_cli, anthropic_api, opencode_zen, mistral, openrouter, gemini_api, opencode_go), registry, model_catalog, sentinel protocol parser
   prompts/               Prompt files (edit these) + loader (no caching)
-  pipeline/              Orchestrator, stage runners (stages.py), state machine, prompt assembly, revision tool loop, CV structure inference
+  pipeline/              Orchestrator, stage runners (stages.py), state machine, prompt assembly, revision tool loop, CV structure inference, CV-editor chat runner (cv_chat.py)
   render/                PDF (WeasyPrint) and DOCX (python-docx) renderers
   events/                In-process pub/sub bus + WS event schema
-  api/                   FastAPI route handlers (jobs, cv-structure, cv-decks, injection presets, backend models, preferences, meta, websocket, transcript)
-  schema/                Structured CV/cover-letter Pydantic schemas + per-job prompt injection
-  store/                 JSON-file stores: base-CV decks, injection presets, backend model selections, preferences
+  api/                   FastAPI route handlers (jobs, cv-structure, cv-decks, cv-editor chat, injection presets, backend models, preferences, meta, websocket, transcript)
+  schema/                Structured CV/cover-letter Pydantic schemas, per-job prompt injection, CV-editor chat turn schema (chat_turn.py)
+  store/                 JSON-file stores: base-CV decks, per-deck chat threads, injection presets, backend model selections, preferences
   i18n/                   Language catalog (languages.py) + translation helper (translate.py)
   dev/                   Dev-only helpers (auto-answer NEED_INPUT gates)
 frontend/               React + Vite + TypeScript UI
   src/components/        JobList, JobDetail, ReviewPane, ChatBox, FollowUpPane, UnfitModal, StageTimeline, StatusBadge, AgentThread, ReasoningCard, PromptInjector, BaseCvPicker, LaunchButton
-  src/components/cv-editor/  CvEditor (Blocks / Document / Split views), DeckRail, PaperSheet, JsonDrawer, LanguagePill
+  src/components/cv-editor/  CvEditor (Blocks / Document / Split views), DeckRail, PaperSheet, JsonDrawer, LanguagePill, CvChatPanel, CvDiffCard, ChatCorner
   src/i18n/                useT() hook + per-language strings.<code>.json catalogs
   src/store.ts            Zustand store for job list/detail state
   src/editorStore.ts       Zustand store for the CV Structure Editor
+  src/cvChatStore.ts       Zustand store for the CV-editor AI chat (thread, scope, live stream, apply/stale checks)
   src/ws.ts                WebSocket client wiring live events into the stores
-docs/TOOLS.md           Revision tool reference (schemas, error codes, rung matrix) — kept in sync by a test
+docs/TOOLS.md           Revision tool reference (schemas, error codes, rung matrix) — kept in sync by a test — plus the CV-editor chat's edit vocabulary
 tests/                  pytest (backend) + vitest (frontend)
 scripts/                translate-ui.sh — regenerates frontend i18n catalogs
 ```
