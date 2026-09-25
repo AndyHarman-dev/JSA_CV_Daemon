@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../store";
+import { api } from "../api";
 import { StatusBadge } from "./StatusBadge";
 import { LaunchButton } from "./LaunchButton";
 import { InjectTrigger } from "./PromptInjector";
@@ -8,6 +9,7 @@ import { useT } from "../i18n/useT";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase } from "../theme/chrome";
 import { Icon } from "../theme/Icon";
+import { toFileUrl, triggerDownload } from "../lib/downloadFile";
 
 const T = SHELL_THEME;
 
@@ -368,6 +370,51 @@ function CvGateBanner() {
   );
 }
 
+/** Filesystem-safe filename fragment from free-text job metadata (company/role). */
+function slugFragment(s: string): string {
+  return s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "job";
+}
+
+/** Bulk-download every ready CV/cover-letter PDF for jobs parked at `cv_review`/`review`
+ * ("Reap Material" — see JobList's review-group header). A `cv_review` job only ever has
+ * a CV to reap; a `review` job may have both, and either half is skipped if its Document
+ * has no `pdf_path` yet (mirrors export_job's own per-artifact skip-if-absent rule).
+ * Downloads are staggered — firing many `a.click()` calls in the same tick is what trips
+ * a browser's "this site is trying to download multiple files" block. */
+async function reapMaterial(
+  reviewJobs: JobDTO[]
+): Promise<{ failedCompanies: string[] }> {
+  const downloads: { url: string; filename: string }[] = [];
+  const failedCompanies: string[] = [];
+
+  await Promise.all(
+    reviewJobs.map(async (job) => {
+      try {
+        const full = await api.getJob(job.id);
+        const base = `${slugFragment(job.company)}-${slugFragment(job.role)}`;
+        const latestCv = full.documents
+          .filter((d) => d.stage === "cv_adjust")
+          .sort((a, b) => b.version - a.version)[0];
+        const latestCl = full.documents
+          .filter((d) => d.stage === "cover_letter")
+          .sort((a, b) => b.version - a.version)[0];
+        const cvUrl = toFileUrl(latestCv?.pdf_path);
+        if (cvUrl) downloads.push({ url: cvUrl, filename: `${base}-cv.pdf` });
+        const clUrl = toFileUrl(latestCl?.pdf_path);
+        if (clUrl) downloads.push({ url: clUrl, filename: `${base}-cover-letter.pdf` });
+      } catch {
+        failedCompanies.push(job.company);
+      }
+    })
+  );
+
+  downloads.forEach((d, i) => {
+    setTimeout(() => triggerDownload(d.url, d.filename), i * 400);
+  });
+
+  return { failedCompanies };
+}
+
 export function JobList() {
   const jobs = useStore((s) => Object.values(s.jobs));
   const selectedId = useStore((s) => s.selectedId);
@@ -377,6 +424,18 @@ export function JobList() {
   const t = useT();
   const [search, setSearch] = useState("");
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
+  const [reaping, setReaping] = useState(false);
+  const [reapError, setReapError] = useState<string | null>(null);
+
+  async function handleReapMaterial(reviewJobs: JobDTO[]) {
+    setReaping(true);
+    setReapError(null);
+    const { failedCompanies } = await reapMaterial(reviewJobs);
+    setReaping(false);
+    if (failedCompanies.length > 0) {
+      setReapError(t("jobList.reapMaterialError", { companies: failedCompanies.join(", ") }));
+    }
+  }
 
   const query = search.trim().toLowerCase();
   const bySearch = query
@@ -462,10 +521,43 @@ export function JobList() {
                   {t("launch.launchAll")}
                 </button>
               )}
+              {group.code === "review" && groupJobs.length > 1 && (
+                <button
+                  type="button"
+                  disabled={reaping}
+                  onClick={() => void handleReapMaterial(groupJobs)}
+                  style={{
+                    font: `600 9px ${T.mono}`,
+                    letterSpacing: ".06em",
+                    color: T.violet,
+                    background: "transparent",
+                    border: `1px solid color-mix(in srgb, ${T.violet} 55%, ${T.surface})`,
+                    borderRadius: T.btnRadius,
+                    padding: "2px 7px",
+                    cursor: reaping ? "default" : "pointer",
+                    opacity: reaping ? 0.6 : 1,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {reaping ? t("jobList.reapMaterialWorking") : t("jobList.reapMaterial")}
+                </button>
+              )}
               <span style={{ font: `400 9.5px ${T.mono}`, color: T.ink3, textTransform: "none" }}>
                 {groupJobs.length}
               </span>
             </h2>
+            {group.code === "review" && reapError && (
+              <p
+                role="alert"
+                style={{
+                  margin: "0 4px 8px",
+                  font: `400 10.5px ${T.ui}`,
+                  color: T.danger,
+                }}
+              >
+                {reapError}
+              </p>
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {groupJobs.map((job) => (
                 <JobRow
