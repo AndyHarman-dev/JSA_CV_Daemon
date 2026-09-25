@@ -1,9 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useStore } from "../store";
 import { JobList } from "../components/JobList";
-import type { JobDTO } from "../types";
+import { api } from "../api";
+import type { DocumentDTO, JobDTO, FullJobDTO } from "../types";
 import { SHELL_THEME } from "../theme/tokens";
+
+vi.mock("../api", () => ({
+  api: {
+    getJob: vi.fn(),
+  },
+}));
+
+// Only `triggerDownload` is mocked (assertable, no real anchor/click side effects); `toFileUrl`
+// stays the real implementation so JobList's own URL-building is exercised too.
+vi.mock("../lib/downloadFile", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/downloadFile")>();
+  return { ...actual, triggerDownload: vi.fn() };
+});
 
 const T = SHELL_THEME;
 
@@ -23,6 +37,23 @@ function makeJob(overrides: Partial<JobDTO> = {}): JobDTO {
     base_cv_id: null,
     ...overrides,
   };
+}
+
+function makeDoc(overrides: Partial<DocumentDTO> = {}): DocumentDTO {
+  return {
+    id: 1,
+    job_id: "job1",
+    stage: "cv_adjust",
+    version: 1,
+    markdown: "",
+    pdf_path: null,
+    docx_path: null,
+    ...overrides,
+  };
+}
+
+function makeFullJob(job: JobDTO, documents: DocumentDTO[] = []): FullJobDTO {
+  return { ...job, follow_ups: [], documents };
 }
 
 /** Group headers render their label text inside an h2 (the StatusBadge text — when it
@@ -50,6 +81,7 @@ function filterChip(label: string): HTMLElement {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   useStore.setState({
     jobs: {},
     selectedId: undefined,
@@ -578,5 +610,93 @@ describe("JobList — queued-row control cluster (cross-feature merge gate)", ()
     expect(screen.queryByTitle("Assign base CV")).toBeNull();
     expect(screen.queryByTitle("Inject a prompt for this job (pre-launch only)")).toBeNull();
     expect(screen.queryByText("LAUNCH")).toBeNull();
+  });
+});
+
+describe("JobList — Reap Material", () => {
+  it("hides the button when only one job is parked in review", () => {
+    const job = makeJob({ id: "j1", state: "cv_review" });
+    useStore.setState({ jobs: { j1: job } });
+
+    render(<JobList />);
+
+    expect(screen.queryByText("REAP MATERIAL")).toBeNull();
+  });
+
+  it("shows the button for 2+ jobs parked at cv_review/review and downloads each job's ready PDFs", async () => {
+    const { triggerDownload } = await import("../lib/downloadFile");
+    const cvReviewJob = makeJob({ id: "j1", state: "cv_review", company: "Acme Corp", role: "Backend Dev" });
+    const reviewJob = makeJob({ id: "j2", state: "review", company: "Globex", role: "Frontend Dev" });
+    useStore.setState({ jobs: { j1: cvReviewJob, j2: reviewJob } });
+
+    (api.getJob as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
+      if (id === "j1") {
+        return Promise.resolve(
+          makeFullJob(cvReviewJob, [
+            makeDoc({ job_id: "j1", stage: "cv_adjust", version: 1, pdf_path: "/out/acme_corp_backend/cv.pdf" }),
+          ])
+        );
+      }
+      return Promise.resolve(
+        makeFullJob(reviewJob, [
+          makeDoc({ job_id: "j2", stage: "cv_adjust", version: 1, pdf_path: "/out/globex_frontend/cv.pdf" }),
+          makeDoc({
+            job_id: "j2",
+            stage: "cover_letter",
+            version: 1,
+            pdf_path: "/out/globex_frontend/cover_letter.pdf",
+          }),
+        ])
+      );
+    });
+
+    render(<JobList />);
+
+    fireEvent.click(screen.getByText("REAP MATERIAL"));
+
+    await waitFor(() => expect(api.getJob).toHaveBeenCalledTimes(2));
+    expect(api.getJob).toHaveBeenCalledWith("j1");
+    expect(api.getJob).toHaveBeenCalledWith("j2");
+
+    // 3 files total: j1's CV, j2's CV, and j2's cover letter.
+    await waitFor(() => expect(triggerDownload).toHaveBeenCalledTimes(3), { timeout: 2000 });
+
+    const calls = (triggerDownload as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toContainEqual(["/api/files/acme_corp_backend/cv.pdf", "acme-corp-backend-dev-cv.pdf"]);
+    expect(calls).toContainEqual(["/api/files/globex_frontend/cv.pdf", "globex-frontend-dev-cv.pdf"]);
+    expect(calls).toContainEqual([
+      "/api/files/globex_frontend/cover_letter.pdf",
+      "globex-frontend-dev-cover-letter.pdf",
+    ]);
+  });
+
+  it("skips a job with no rendered PDF yet, and reports a fetch failure for another", async () => {
+    const { triggerDownload } = await import("../lib/downloadFile");
+    const okJob = makeJob({ id: "j1", state: "cv_review", company: "Acme" });
+    const noDocJob = makeJob({ id: "j2", state: "cv_review", company: "NoDoc Inc" });
+    const brokenJob = makeJob({ id: "j3", state: "review", company: "Broken Co" });
+    useStore.setState({ jobs: { j1: okJob, j2: noDocJob, j3: brokenJob } });
+
+    (api.getJob as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
+      if (id === "j1") {
+        return Promise.resolve(
+          makeFullJob(okJob, [makeDoc({ job_id: "j1", stage: "cv_adjust", pdf_path: "/out/acme/cv.pdf" })])
+        );
+      }
+      if (id === "j2") {
+        // Document exists but hasn't been rendered yet — no pdf_path.
+        return Promise.resolve(makeFullJob(noDocJob, [makeDoc({ job_id: "j2", stage: "cv_adjust" })]));
+      }
+      return Promise.reject(new Error("network error"));
+    });
+
+    render(<JobList />);
+
+    fireEvent.click(screen.getByText("REAP MATERIAL"));
+
+    await waitFor(() => expect(triggerDownload).toHaveBeenCalledTimes(1));
+    expect(triggerDownload).toHaveBeenCalledWith("/api/files/acme/cv.pdf", "acme-engineer-cv.pdf");
+
+    await screen.findByText("Couldn't fetch documents for: Broken Co");
   });
 });

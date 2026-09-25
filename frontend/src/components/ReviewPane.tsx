@@ -8,6 +8,7 @@ import { useOutsideClick } from "../hooks/useOutsideClick";
 import { SHELL_THEME } from "../theme/tokens";
 import { panelBase, cornerMarks } from "../theme/chrome";
 import { Icon } from "../theme/Icon";
+import { toFileUrl, triggerDownload } from "../lib/downloadFile";
 
 const T = SHELL_THEME;
 
@@ -39,14 +40,6 @@ function isSafeJobLink(link: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Convert an absolute filesystem path stored in the DB to a /api/files/<relpath> URL. */
-function toFileUrl(absPath: string | null | undefined): string | null {
-  if (!absPath) return null;
-  // Extract last two path segments: slug/filename
-  const rel = absPath.replace(/^.*?([^/\\]+[/\\][^/\\]+)$/, "$1").replace(/\\/g, "/");
-  return `/api/files/${rel}`;
 }
 
 export function ReviewPane({ jobId, mode = "final" }: Props) {
@@ -181,12 +174,7 @@ export function ReviewPane({ jobId, mode = "final" }: Props) {
   /** Programmatically download a rendered file, then close the menu. */
   function downloadFormat(url: string | null) {
     if (!url) return;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    triggerDownload(url);
     setShowDownloadMenu(false);
   }
 
